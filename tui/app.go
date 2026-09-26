@@ -91,8 +91,7 @@ type AppModel struct {
 	// Connection Setup
 	urlInput        textinput.Model
 	tokenInput      textinput.Model
-	thresholdInput  textinput.Model
-	setupFocus      int // 0: url, 1: token, 2: threshold, 3: submit button
+	setupFocus      int // 0: url, 1: token, 2: submit button
 	connectionError string
 
 	// Scan
@@ -108,10 +107,10 @@ type AppModel struct {
 	isSearching    bool
 
 	// Settings
-	settingCursor    int
-	resolutions      []string
-	presets          []string
-	thresholdOptions []string
+	settingCursor  int
+	resolutions    []string
+	presets        []string
+	thresholdInput textinput.Model // typeable threshold in Settings
 
 	// Dashboard
 	ctx                     context.Context
@@ -146,7 +145,7 @@ func NewAppModel(cfg *config.Config, pipeline *orchestrator.Pipeline) *AppModel 
 		initialState = ViewConnectionSetup
 	}
 
-	// Setup inputs
+	// Setup inputs (connection only)
 	ui := textinput.New()
 	ui.Placeholder = "http://192.168.1.100:2283"
 	ui.SetValue(cfg.URL)
@@ -161,18 +160,19 @@ func NewAppModel(cfg *config.Config, pipeline *orchestrator.Pipeline) *AppModel 
 	ti.CharLimit = 256
 	ti.Width = 50
 
-	thi := textinput.New()
-	thi.Placeholder = "500"
-	if cfg.SizeThreshold == "" {
-		cfg.SizeThreshold = "500"
-	}
-	thi.SetValue(cfg.SizeThreshold)
-	thi.CharLimit = 10
-	thi.Width = 15
-
 	if initialState == ViewConnectionSetup {
 		ui.Focus()
 	}
+
+	// Threshold input used in Settings
+	if cfg.SizeThreshold == "" {
+		cfg.SizeThreshold = "500"
+	}
+	thi := textinput.New()
+	thi.Placeholder = "e.g. 500"
+	thi.SetValue(cfg.SizeThreshold)
+	thi.CharLimit = 10
+	thi.Width = 15
 
 	// Search input
 	si := textinput.New()
@@ -201,22 +201,21 @@ func NewAppModel(cfg *config.Config, pipeline *orchestrator.Pipeline) *AppModel 
 	vp := progress.New(progress.WithDefaultGradient())
 
 	return &AppModel{
-		state:            initialState,
-		cfg:              cfg,
-		session:          sess,
-		pipeline:         pipeline,
-		urlInput:         ui,
-		tokenInput:       ti,
-		thresholdInput:   thi,
-		setupFocus:       0,
-		table:            t,
-		searchInput:      si,
-		selectedVideos:   make(map[string]bool),
-		resolutions:      []string{"Original", "4K", "1440p", "1080p", "720p"},
-		presets:          []string{"Ultrafast", "Fast", "Medium", "Slow"},
-		thresholdOptions: []string{"100", "200", "300", "500", "1000", "2000"},
-		overallProgress:  op,
-		videoProgress:    vp,
+		state:          initialState,
+		cfg:            cfg,
+		session:        sess,
+		pipeline:       pipeline,
+		urlInput:       ui,
+		tokenInput:     ti,
+		thresholdInput: thi,
+		setupFocus:     0,
+		table:          t,
+		searchInput:    si,
+		selectedVideos: make(map[string]bool),
+		resolutions:    []string{"Original", "4K", "1440p", "1080p", "720p"},
+		presets:        []string{"Ultrafast", "Fast", "Medium", "Slow"},
+		overallProgress: op,
+		videoProgress:  vp,
 	}
 }
 
@@ -390,12 +389,12 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *AppModel) updateConnectionSetup(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "tab", "down":
-		m.setupFocus = (m.setupFocus + 1) % 4
+		m.setupFocus = (m.setupFocus + 1) % 3
 		m.updateSetupFocus()
 		return m, nil
 
 	case "shift+tab", "up":
-		m.setupFocus = (m.setupFocus + 3) % 4
+		m.setupFocus = (m.setupFocus + 2) % 3
 		m.updateSetupFocus()
 		return m, nil
 
@@ -404,12 +403,8 @@ func (m *AppModel) updateConnectionSetup(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setupFocus = 1
 			m.updateSetupFocus()
 			return m, nil
-		} else if m.setupFocus == 1 {
-			m.setupFocus = 2
-			m.updateSetupFocus()
-			return m, nil
 		}
-		// On threshold (2) or button (3), submit!
+		// On token field (1) or button (2), submit
 		return m.submitConnectionSetup()
 
 	case "q", "esc":
@@ -425,8 +420,6 @@ func (m *AppModel) updateConnectionSetup(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.urlInput, cmd = m.urlInput.Update(msg)
 		} else if m.setupFocus == 1 {
 			m.tokenInput, cmd = m.tokenInput.Update(msg)
-		} else if m.setupFocus == 2 {
-			m.thresholdInput, cmd = m.thresholdInput.Update(msg)
 		}
 		return m, cmd
 	}
@@ -435,21 +428,17 @@ func (m *AppModel) updateConnectionSetup(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *AppModel) updateSetupFocus() {
 	m.urlInput.Blur()
 	m.tokenInput.Blur()
-	m.thresholdInput.Blur()
 	switch m.setupFocus {
 	case 0:
 		m.urlInput.Focus()
 	case 1:
 		m.tokenInput.Focus()
-	case 2:
-		m.thresholdInput.Focus()
 	}
 }
 
 func (m *AppModel) submitConnectionSetup() (tea.Model, tea.Cmd) {
 	url := strings.TrimSpace(m.urlInput.Value())
 	key := strings.TrimSpace(m.tokenInput.Value())
-	thresh := strings.TrimSpace(m.thresholdInput.Value())
 
 	if url == "" {
 		m.connectionError = "Immich Server URL cannot be empty."
@@ -469,13 +458,9 @@ func (m *AppModel) submitConnectionSetup() (tea.Model, tea.Cmd) {
 		m.updateSetupFocus()
 		return m, nil
 	}
-	if thresh == "" {
-		thresh = "500"
-	}
 
 	m.cfg.URL = url
 	m.cfg.APIKey = key
-	m.cfg.SizeThreshold = thresh
 	m.pipeline.UpdateConfig(m.cfg)
 
 	m.state = ViewTestingConnection
@@ -664,6 +649,52 @@ func (m *AppModel) updateBrowser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// When the threshold row is focused and user is typing into it,
+	// only allow Esc/Tab/Up/Down to leave — everything else feeds the input.
+	if m.settingCursor == 3 && m.thresholdInput.Focused() {
+		switch msg.String() {
+		case "esc":
+			// Save & return
+			m.thresholdInput.Blur()
+			thresh := strings.TrimSpace(m.thresholdInput.Value())
+			if thresh == "" {
+				thresh = "500"
+				m.thresholdInput.SetValue(thresh)
+			}
+			m.cfg.SizeThreshold = thresh
+			_ = config.SaveConfig(m.cfg)
+			if len(m.videos) > 0 {
+				m.state = ViewBrowser
+			} else {
+				m.state = ViewScanPrompt
+			}
+		case "tab", "down", "j":
+			m.thresholdInput.Blur()
+			thresh := strings.TrimSpace(m.thresholdInput.Value())
+			if thresh == "" {
+				thresh = "500"
+				m.thresholdInput.SetValue(thresh)
+			}
+			m.cfg.SizeThreshold = thresh
+		case "up", "k":
+			m.thresholdInput.Blur()
+			thresh := strings.TrimSpace(m.thresholdInput.Value())
+			if thresh == "" {
+				thresh = "500"
+				m.thresholdInput.SetValue(thresh)
+			}
+			m.cfg.SizeThreshold = thresh
+			if m.settingCursor > 0 {
+				m.settingCursor--
+			}
+		default:
+			var cmd tea.Cmd
+			m.thresholdInput, cmd = m.thresholdInput.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+	}
+
 	switch msg.String() {
 	case "q", "esc":
 		_ = config.SaveConfig(m.cfg)
@@ -679,7 +710,7 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "down", "j":
-		if m.settingCursor < 4 {
+		if m.settingCursor < 3 {
 			m.settingCursor++
 		}
 
@@ -695,13 +726,6 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			for i, p := range m.presets {
 				if p == m.cfg.Preset && i > 0 {
 					m.cfg.Preset = m.presets[i-1]
-					break
-				}
-			}
-		} else if m.settingCursor == 3 {
-			for i, t := range m.thresholdOptions {
-				if t == m.cfg.SizeThreshold && i > 0 {
-					m.cfg.SizeThreshold = m.thresholdOptions[i-1]
 					break
 				}
 			}
@@ -722,22 +746,14 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
-		} else if m.settingCursor == 3 {
-			for i, t := range m.thresholdOptions {
-				if t == m.cfg.SizeThreshold && i < len(m.thresholdOptions)-1 {
-					m.cfg.SizeThreshold = m.thresholdOptions[i+1]
-					break
-				}
-			}
 		}
 
 	case " ", "enter":
 		if m.settingCursor == 2 {
 			m.cfg.SizeGuard = !m.cfg.SizeGuard
-		} else if m.settingCursor == 4 {
-			m.state = ViewConnectionSetup
-			m.setupFocus = 0
-			m.updateSetupFocus()
+		} else if m.settingCursor == 3 {
+			// Activate the threshold text input
+			return m, m.thresholdInput.Focus()
 		}
 	}
 	return m, nil
@@ -845,10 +861,9 @@ func (m *AppModel) viewConnectionSetup() string {
 
 	b.WriteString(renderInput("Immich Server URL", m.urlInput, m.setupFocus == 0))
 	b.WriteString(renderInput("Immich API Key / Token", m.tokenInput, m.setupFocus == 1))
-	b.WriteString(renderInput("Size Threshold (MB)", m.thresholdInput, m.setupFocus == 2))
 
 	btn := "[ Connect & Test Server ]"
-	if m.setupFocus == 3 {
+	if m.setupFocus == 2 {
 		b.WriteString(styles.ActiveButton.Render(btn))
 	} else {
 		b.WriteString(styles.Button.Render(btn))
@@ -1007,9 +1022,19 @@ func (m *AppModel) viewSettings() string {
 	}
 	b.WriteString(cursor(2) + "Size Guard:          " + styles.Value.Render(sg) + "\n")
 
-	b.WriteString(cursor(3) + "Size Threshold (MB): " + styles.Value.Render(m.cfg.SizeThreshold+" MB") + "  " + styles.Subtext.Render("[100, 200, 300, 500, 1000, 2000]") + "\n")
-	b.WriteString(cursor(4) + "Server Credentials:  " + styles.Value.Render(m.cfg.URL) + "  " + styles.KeyBadge.Render("Press [Enter] to Edit") + "\n\n")
+	// Size Threshold — typeable input
+	threshLabel := cursor(3) + "Size Threshold (MB): "
+	if m.settingCursor == 3 && m.thresholdInput.Focused() {
+		b.WriteString(threshLabel + m.thresholdInput.View() + "  " + styles.Subtext.Render("[Type a number, then Tab/↓ or Esc]") + "\n")
+	} else {
+		hint := ""
+		if m.settingCursor == 3 {
+			hint = "  " + styles.Subtext.Render("[Press Enter to edit]")
+		}
+		b.WriteString(threshLabel + styles.Value.Render(m.cfg.SizeThreshold+" MB") + hint + "\n")
+	}
 
+	b.WriteString("\n")
 	b.WriteString(styles.Subtext.Render("[Esc] Save & Return"))
 	return b.String()
 }
