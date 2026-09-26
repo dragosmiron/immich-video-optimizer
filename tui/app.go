@@ -1006,32 +1006,82 @@ func (m *AppModel) viewSettings() string {
 	b.WriteString("\n\n")
 	b.WriteString("Use [↑/↓] to navigate, [←/→] to change options, [Enter/Space] to toggle/select.\n\n")
 
+	// descriptions shown under the focused row
+	descriptions := []string{
+		// 0 — Resolution
+		"Controls the maximum output resolution.\n" +
+			"  • Original — keeps the same dimensions as the source (recommended)\n" +
+			"  • 4K / 1440p / 1080p / 720p — downscales if the source is larger; never upscales",
+		// 1 — Preset
+		"Controls the trade-off between encoding speed and output file size.\n" +
+			"  • Ultrafast — finishes quickly; slightly larger files\n" +
+			"  • Fast      — good balance for most cases\n" +
+			"  • Medium    — default; solid compression\n" +
+			"  • Slow      — best compression; takes longer",
+		// 2 — Size Guard
+		func() string {
+			if m.cfg.SizeGuard {
+				return "ON  — If the transcoded file ends up larger than the original, the replacement\n" +
+					"       is skipped and the original is kept untouched. Prevents accidental bloat."
+			}
+			return "OFF — The transcoded file will always replace the original, even if it is larger.\n" +
+				"       Use this only if you need a specific codec regardless of file size."
+		}(),
+		// 3 — Size Threshold
+		"Minimum file size a video must exceed before it is included in the scan.\n" +
+			"  Videos smaller than this threshold are skipped entirely.\n" +
+			"  A good starting point is 500 MB. Raise it to skip already-small videos.",
+	}
+
+	isFocused := func(idx int) bool { return m.settingCursor == idx }
+
 	cursor := func(idx int) string {
-		if m.settingCursor == idx {
+		if isFocused(idx) {
 			return "> "
 		}
 		return "  "
 	}
 
-	b.WriteString(cursor(0) + "Target Resolution:   " + styles.Value.Render(m.cfg.Resolution) + "  " + styles.Subtext.Render("[Original, 4K, 1440p, 1080p, 720p]") + "\n")
-	b.WriteString(cursor(1) + "Transcoding Preset:  " + styles.Value.Render(m.cfg.Preset) + "  " + styles.Subtext.Render("[Ultrafast, Fast, Medium, Slow]") + "\n")
-
-	sg := "[x] Enabled (skips replacing original if transcoded is larger)"
-	if !m.cfg.SizeGuard {
-		sg = "[ ] Disabled"
-	}
-	b.WriteString(cursor(2) + "Size Guard:          " + styles.Value.Render(sg) + "\n")
-
-	// Size Threshold — typeable input
-	threshLabel := cursor(3) + "Size Threshold (MB): "
-	if m.settingCursor == 3 && m.thresholdInput.Focused() {
-		b.WriteString(threshLabel + m.thresholdInput.View() + "  " + styles.Subtext.Render("[Type a number, then Tab/↓ or Esc]") + "\n")
-	} else {
-		hint := ""
-		if m.settingCursor == 3 {
-			hint = "  " + styles.Subtext.Render("[Press Enter to edit]")
+	writeRow := func(idx int, label, valueStr string) {
+		b.WriteString(cursor(idx) + label + styles.Value.Render(valueStr) + "\n")
+		if isFocused(idx) {
+			b.WriteString(styles.Subtext.Render("    └ "+descriptions[idx]) + "\n")
 		}
-		b.WriteString(threshLabel + styles.Value.Render(m.cfg.SizeThreshold+" MB") + hint + "\n")
+		b.WriteString("\n")
+	}
+
+	// Row 0 — Resolution
+	writeRow(0,
+		"Target Resolution:   ",
+		m.cfg.Resolution+"  ← / → to change  [Original, 4K, 1440p, 1080p, 720p]",
+	)
+
+	// Row 1 — Preset
+	writeRow(1,
+		"Transcoding Preset:  ",
+		m.cfg.Preset+"  ← / → to change  [Ultrafast, Fast, Medium, Slow]",
+	)
+
+	// Row 2 — Size Guard
+	sgState := "[✓] ON"
+	if !m.cfg.SizeGuard {
+		sgState = "[ ] OFF"
+	}
+	writeRow(2,
+		"Size Guard:          ",
+		sgState+"  [Space / Enter] to toggle",
+	)
+
+	// Row 3 — Size Threshold (typeable)
+	b.WriteString(cursor(3) + "Size Threshold (MB): ")
+	if isFocused(3) && m.thresholdInput.Focused() {
+		b.WriteString(m.thresholdInput.View() + "  " + styles.Subtext.Render("[Type a number, then Tab/↓ or Esc to confirm]") + "\n")
+		b.WriteString(styles.Subtext.Render("    └ "+descriptions[3]) + "\n")
+	} else if isFocused(3) {
+		b.WriteString(styles.Value.Render(m.cfg.SizeThreshold+" MB") + "  " + styles.Subtext.Render("[Enter] to edit") + "\n")
+		b.WriteString(styles.Subtext.Render("    └ "+descriptions[3]) + "\n")
+	} else {
+		b.WriteString(styles.Value.Render(m.cfg.SizeThreshold+" MB") + "\n")
 	}
 
 	b.WriteString("\n")
