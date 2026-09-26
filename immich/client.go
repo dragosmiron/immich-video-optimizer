@@ -49,17 +49,26 @@ func (c *Client) SetTimeout(d time.Duration) {
 	c.httpClient.Timeout = d
 }
 
-// ValidateConnection checks if the server is reachable and API key is valid
+// ValidateConnection checks if the server is reachable and API key is valid.
+// Uses a short 8-second timeout so the user gets a quick error on bad URLs.
 func (c *Client) ValidateConnection() error {
 	req, err := http.NewRequest(http.MethodGet, c.baseURL+"/api/users/me", nil)
 	if err != nil {
 		return fmt.Errorf("invalid URL: %w", err)
 	}
-	resp, err := c.doRequest(req)
+	// Use a dedicated short-timeout client so the UI stays responsive.
+	probeClient := &http.Client{Timeout: 8 * time.Second}
+	req.Header.Set("x-api-key", c.apiKey)
+	req.Header.Set("Accept", "application/json")
+	resp, err := probeClient.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("could not reach server: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return &APIError{StatusCode: resp.StatusCode, Message: string(body)}
+	}
 	return nil
 }
 

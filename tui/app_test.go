@@ -32,6 +32,7 @@ func TestAppModel_InitialRouting(t *testing.T) {
 }
 
 func TestAppModel_ConnectionTested(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // ensure no real session.json is found
 	cfg := &config.Config{URL: "http://localhost:2283", APIKey: "test-key"}
 	pipeline, _ := orchestrator.NewPipeline(cfg)
 	m := NewAppModel(cfg, pipeline)
@@ -46,7 +47,7 @@ func TestAppModel_ConnectionTested(t *testing.T) {
 		t.Fatalf("expected error message to contain 401 Unauthorized, got %s", model.connectionError)
 	}
 
-	// Test connection success
+	// Test connection success — no session exists so should land on ViewScanPrompt
 	newM, _ = model.Update(ConnectionTestedMsg{Err: nil})
 	model = newM.(*AppModel)
 	if model.state != ViewScanPrompt {
