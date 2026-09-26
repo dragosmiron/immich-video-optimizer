@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 
@@ -11,11 +12,21 @@ import (
 )
 
 func main() {
+	configFlag := flag.Bool("config", false, "Open the interactive terminal configuration form")
+	flag.BoolVar(configFlag, "c", false, "Open the interactive terminal configuration form (shorthand)")
+	flag.Parse()
+
 	fmt.Println("🎬 Immich Video Optimizer CLI")
 
 	cfg, err := config.LoadConfig()
-	if err != nil || cfg.URL == "" || cfg.APIKey == "" {
-		fmt.Println("Configuration not found or incomplete. Starting setup...")
+	needsSetup := *configFlag || err != nil || cfg == nil || cfg.URL == "" || cfg.APIKey == ""
+
+	if needsSetup {
+		if *configFlag {
+			fmt.Println("Opening configuration setup...")
+		} else {
+			fmt.Println("Configuration not found or incomplete. Starting setup...")
+		}
 		if cfg == nil {
 			cfg = &config.Config{
 				SizeThreshold: "500",
