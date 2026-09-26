@@ -45,6 +45,17 @@ func TestBuildFFmpegArgs(t *testing.T) {
 			},
 			expected: []string{"-y", "-i", "in.mp4", "-c:v", "libx265", "-crf", "23", "-c:a", "copy", "out.mp4"},
 		},
+		{
+			name: "With 1080p Resolution limit",
+			opts: TranscodeOptions{
+				Input:      "in.mp4",
+				Output:     "out.mp4",
+				Encoder:    "hevc_videotoolbox",
+				AudioCopy:  true,
+				Resolution: "1080p",
+			},
+			expected: []string{"-y", "-i", "in.mp4", "-c:v", "hevc_videotoolbox", "-vf", "scale=-2:'min(ih,1080)'", "-c:a", "copy", "out.mp4"},
+		},
 	}
 
 	for _, tt := range tests {

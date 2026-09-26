@@ -1,13 +1,13 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
 
 	"immich-video-optimizer/config"
 	"immich-video-optimizer/orchestrator"
+	"immich-video-optimizer/tui"
 	"immich-video-optimizer/ui"
 )
 
@@ -49,8 +49,7 @@ func main() {
 		fmt.Printf("Loaded configuration.\nServer URL: %s\nThreshold: %s MB\n", cfg.URL, cfg.SizeThreshold)
 	}
 
-	// Ready for Phase 2
-	fmt.Println("Setup complete! Starting optimization pipeline...")
+	fmt.Println("Setup complete! Starting interactive TUI...")
 
 	pipeline, err := orchestrator.NewPipeline(cfg)
 	if err != nil {
@@ -58,9 +57,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx := context.Background()
-	if err := pipeline.Run(ctx); err != nil {
-		fmt.Printf("Pipeline failed: %v\n", err)
+	if err := tui.RunTUI(cfg, pipeline); err != nil {
+		fmt.Printf("TUI failed: %v\n", err)
 		os.Exit(1)
 	}
 }

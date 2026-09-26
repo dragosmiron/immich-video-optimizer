@@ -39,7 +39,7 @@ func TestQueryVideoAssets(t *testing.T) {
 		var assets []Asset
 		if reqBody["page"].(float64) == 1 {
 			assets = []Asset{
-				{ID: "1", Type: "VIDEO", Size: 0, ExifInfo: struct{ FileSizeInByte int64 `json:"fileSizeInByte"` }{FileSizeInByte: 1000}},
+				{ID: "1", Type: "VIDEO", Size: 0, ExifInfo: struct{ FileSizeInByte int64 `json:"fileSizeInByte"`; ExifImageWidth int `json:"exifImageWidth,omitempty"`; ExifImageHeight int `json:"exifImageHeight,omitempty"` }{FileSizeInByte: 1000}},
 				{ID: "2", Type: "IMAGE", Size: 2000},
 				{ID: "3", Type: "VIDEO", Size: 500},
 			}

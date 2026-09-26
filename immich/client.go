@@ -56,7 +56,9 @@ type Asset struct {
 	FileModifiedAt   string `json:"fileModifiedAt,omitempty"`
 	OriginalFileName string `json:"originalFileName,omitempty"`
 	ExifInfo         struct {
-		FileSizeInByte int64 `json:"fileSizeInByte"`
+		FileSizeInByte  int64 `json:"fileSizeInByte"`
+		ExifImageWidth  int   `json:"exifImageWidth,omitempty"`
+		ExifImageHeight int   `json:"exifImageHeight,omitempty"`
 	} `json:"exifInfo,omitempty"`
 }
 

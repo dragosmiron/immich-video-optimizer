@@ -8,16 +8,18 @@ import (
 	"os/exec"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // TranscodeOptions holds settings for transcoding
 type TranscodeOptions struct {
-	Input     string
-	Output    string
-	Encoder   string // hevc_videotoolbox, hevc_nvenc, hevc_vaapi, libx265
-	AudioCopy bool   // true for '-c:a copy', false for aac
-	CRF       int    // CRF or bitrate equiv
-	Preset    string // Preset string, e.g., "medium", "slow"
+	Input      string
+	Output     string
+	Encoder    string // hevc_videotoolbox, hevc_nvenc, hevc_vaapi, libx265
+	AudioCopy  bool   // true for '-c:a copy', false for aac
+	CRF        int    // CRF or bitrate equiv
+	Preset     string // Preset string, e.g., "medium", "slow"
+	Resolution string
 }
 
 // Progress represents the transcoding progress parsed from ffmpeg output
@@ -40,7 +42,7 @@ func BuildFFmpegArgs(opts TranscodeOptions) []string {
 	}
 
 	if opts.Preset != "" {
-		args = append(args, "-preset", opts.Preset)
+		args = append(args, "-preset", strings.ToLower(opts.Preset))
 	}
 
 	if opts.CRF > 0 {
@@ -48,6 +50,23 @@ func BuildFFmpegArgs(opts TranscodeOptions) []string {
 			args = append(args, "-q:v", strconv.Itoa(opts.CRF))
 		} else {
 			args = append(args, "-crf", strconv.Itoa(opts.CRF))
+		}
+	}
+
+	if opts.Resolution != "" && opts.Resolution != "Original" {
+		var scale string
+		switch opts.Resolution {
+		case "4K":
+			scale = "-2:'min(ih,2160)'"
+		case "1440p":
+			scale = "-2:'min(ih,1440)'"
+		case "1080p":
+			scale = "-2:'min(ih,1080)'"
+		case "720p":
+			scale = "-2:'min(ih,720)'"
+		}
+		if scale != "" {
+			args = append(args, "-vf", "scale="+scale)
 		}
 	}
 

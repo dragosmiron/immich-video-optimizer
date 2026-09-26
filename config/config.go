@@ -14,6 +14,9 @@ type Config struct {
 	URL           string `mapstructure:"url"`
 	APIKey        string `mapstructure:"api_key"`
 	SizeThreshold string `mapstructure:"size_threshold"`
+	Resolution    string `mapstructure:"resolution"`
+	Preset        string `mapstructure:"preset"`
+	SizeGuard     bool   `mapstructure:"size_guard"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -25,6 +28,10 @@ func LoadConfig() (*Config, error) {
 	if home, err := userHomeDir(); err == nil {
 		v.AddConfigPath(filepath.Join(home, ".config", "immich-video-optimizer"))
 	}
+
+	v.SetDefault("resolution", "Original")
+	v.SetDefault("preset", "Medium")
+	v.SetDefault("size_guard", true)
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, err
@@ -41,6 +48,12 @@ func SaveConfig(cfg *Config) error {
 	cfg.URL = strings.TrimSpace(cfg.URL)
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
 	cfg.SizeThreshold = strings.TrimSpace(cfg.SizeThreshold)
+	if cfg.Resolution == "" {
+		cfg.Resolution = "Original"
+	}
+	if cfg.Preset == "" {
+		cfg.Preset = "Medium"
+	}
 
 	v := viper.New()
 	v.SetConfigName("config")
@@ -48,6 +61,9 @@ func SaveConfig(cfg *Config) error {
 	v.Set("url", cfg.URL)
 	v.Set("api_key", cfg.APIKey)
 	v.Set("size_threshold", cfg.SizeThreshold)
+	v.Set("resolution", cfg.Resolution)
+	v.Set("preset", cfg.Preset)
+	v.Set("size_guard", cfg.SizeGuard)
 
 	home, err := userHomeDir()
 	if err != nil {
