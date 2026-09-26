@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -31,9 +32,12 @@ type Client struct {
 
 // NewClient creates a new Immich client
 func NewClient(baseURL, apiKey string) *Client {
+	baseURL = strings.TrimSpace(baseURL)
+	baseURL = strings.TrimRight(baseURL, "/")
+	baseURL = strings.TrimSuffix(baseURL, "/api")
 	return &Client{
 		baseURL: baseURL,
-		apiKey:  apiKey,
+		apiKey:  strings.TrimSpace(apiKey),
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second, // Default timeout for network calls
 		},
@@ -45,21 +49,45 @@ func (c *Client) SetTimeout(d time.Duration) {
 	c.httpClient.Timeout = d
 }
 
+// ValidateConnection checks if the server is reachable and API key is valid
+func (c *Client) ValidateConnection() error {
+	req, err := http.NewRequest(http.MethodGet, c.baseURL+"/api/users/me", nil)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+// QueryResult holds queried videos and statistics on skipped items
+type QueryResult struct {
+	Videos              []Asset
+	TotalAssetsScanned  int
+	SkippedNonVideo     int
+	SkippedBelowSize    int
+}
+
+type ExifInfo struct {
+	FileSizeInByte  int64 `json:"fileSizeInByte"`
+	ExifImageWidth  int   `json:"exifImageWidth,omitempty"`
+	ExifImageHeight int   `json:"exifImageHeight,omitempty"`
+}
+
 // Asset represents an Immich asset
 type Asset struct {
-	ID            string `json:"id"`
-	Type          string `json:"type"`
-	Size          int64  `json:"size"`
-	DeviceAssetID    string `json:"deviceAssetId,omitempty"`
-	DeviceID         string `json:"deviceId,omitempty"`
-	FileCreatedAt    string `json:"fileCreatedAt,omitempty"`
-	FileModifiedAt   string `json:"fileModifiedAt,omitempty"`
-	OriginalFileName string `json:"originalFileName,omitempty"`
-	ExifInfo         struct {
-		FileSizeInByte  int64 `json:"fileSizeInByte"`
-		ExifImageWidth  int   `json:"exifImageWidth,omitempty"`
-		ExifImageHeight int   `json:"exifImageHeight,omitempty"`
-	} `json:"exifInfo,omitempty"`
+	ID               string   `json:"id"`
+	Type             string   `json:"type"`
+	Size             int64    `json:"size"`
+	DeviceAssetID    string   `json:"deviceAssetId,omitempty"`
+	DeviceID         string   `json:"deviceId,omitempty"`
+	FileCreatedAt    string   `json:"fileCreatedAt,omitempty"`
+	FileModifiedAt   string   `json:"fileModifiedAt,omitempty"`
+	OriginalFileName string   `json:"originalFileName,omitempty"`
+	ExifInfo         ExifInfo `json:"exifInfo,omitempty"`
 }
 
 // GetSize returns the asset size, falling back to exifInfo.fileSizeInByte if Size is 0
@@ -99,9 +127,9 @@ func (c *Client) doRequest(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-// QueryVideoAssets returns video assets that exceed the given size threshold
-func (c *Client) QueryVideoAssets(sizeThreshold int64) ([]Asset, error) {
-	var largeVideos []Asset
+// ScanVideos returns videos exceeding sizeThreshold along with bulk stats on excluded assets
+func (c *Client) ScanVideos(sizeThreshold int64) (*QueryResult, error) {
+	res := &QueryResult{}
 	page := 1
 	size := 1000
 
@@ -140,9 +168,15 @@ func (c *Client) QueryVideoAssets(sizeThreshold int64) ([]Asset, error) {
 			break
 		}
 
+		res.TotalAssetsScanned += len(searchResp.Assets.Items)
+
 		for _, a := range searchResp.Assets.Items {
-			if a.Type == "VIDEO" && a.GetSize() > sizeThreshold {
-				largeVideos = append(largeVideos, a)
+			if a.Type != "VIDEO" {
+				res.SkippedNonVideo++
+			} else if a.GetSize() <= sizeThreshold {
+				res.SkippedBelowSize++
+			} else {
+				res.Videos = append(res.Videos, a)
 			}
 		}
 
@@ -152,7 +186,16 @@ func (c *Client) QueryVideoAssets(sizeThreshold int64) ([]Asset, error) {
 		page++
 	}
 
-	return largeVideos, nil
+	return res, nil
+}
+
+// QueryVideoAssets returns video assets that exceed the given size threshold
+func (c *Client) QueryVideoAssets(sizeThreshold int64) ([]Asset, error) {
+	res, err := c.ScanVideos(sizeThreshold)
+	if err != nil {
+		return nil, err
+	}
+	return res.Videos, nil
 }
 
 // CreateTrackingAlbum creates a new album for tracking progress

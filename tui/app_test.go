@@ -1,0 +1,236 @@
+package tui
+
+import (
+	"errors"
+	"strings"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"immich-video-optimizer/config"
+	"immich-video-optimizer/immich"
+	"immich-video-optimizer/orchestrator"
+	"immich-video-optimizer/state"
+)
+
+func TestAppModel_InitialRouting(t *testing.T) {
+	// 1. Missing credentials routes to ViewConnectionSetup
+	cfgEmpty := &config.Config{URL: "", APIKey: ""}
+	pipelineEmpty, _ := orchestrator.NewPipeline(cfgEmpty)
+	modelEmpty := NewAppModel(cfgEmpty, pipelineEmpty)
+	if modelEmpty.state != ViewConnectionSetup {
+		t.Fatalf("expected ViewConnectionSetup, got %v", modelEmpty.state)
+	}
+
+	// 2. Configured credentials routes to ViewTestingConnection
+	cfgValid := &config.Config{URL: "http://localhost:2283", APIKey: "test-key"}
+	pipelineValid, _ := orchestrator.NewPipeline(cfgValid)
+	modelValid := NewAppModel(cfgValid, pipelineValid)
+	if modelValid.state != ViewTestingConnection {
+		t.Fatalf("expected ViewTestingConnection, got %v", modelValid.state)
+	}
+}
+
+func TestAppModel_ConnectionTested(t *testing.T) {
+	cfg := &config.Config{URL: "http://localhost:2283", APIKey: "test-key"}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+
+	// Test connection failure
+	newM, _ := m.Update(ConnectionTestedMsg{Err: errors.New("401 Unauthorized")})
+	model := newM.(*AppModel)
+	if model.state != ViewConnectionSetup {
+		t.Fatalf("expected ViewConnectionSetup on error, got %v", model.state)
+	}
+	if !strings.Contains(model.connectionError, "401 Unauthorized") {
+		t.Fatalf("expected error message to contain 401 Unauthorized, got %s", model.connectionError)
+	}
+
+	// Test connection success
+	newM, _ = model.Update(ConnectionTestedMsg{Err: nil})
+	model = newM.(*AppModel)
+	if model.state != ViewScanPrompt {
+		t.Fatalf("expected ViewScanPrompt on success, got %v", model.state)
+	}
+}
+
+func TestAppModel_ScanTransitionAndBulkSummary(t *testing.T) {
+	cfg := &config.Config{URL: "http://localhost:2283", APIKey: "test-key", SizeThreshold: "500"}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.state = ViewScanPrompt
+
+	// Trigger Scan
+	newM, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	model := newM.(*AppModel)
+	if model.state != ViewScanning {
+		t.Fatalf("expected ViewScanning, got %v", model.state)
+	}
+	if cmd == nil {
+		t.Fatalf("expected non-nil scan command")
+	}
+
+	// Complete Scan with mock results
+	res := &immich.QueryResult{
+		TotalAssetsScanned: 50,
+		SkippedNonVideo:    25,
+		SkippedBelowSize:   23,
+		Videos: []immich.Asset{
+			{ID: "v1", OriginalFileName: "large1.mp4", ExifInfo: immich.ExifInfo{ExifImageWidth: 3840, ExifImageHeight: 2160, FileSizeInByte: 800 * 1024 * 1024}},
+			{ID: "v2", OriginalFileName: "large2.mp4", ExifInfo: immich.ExifInfo{ExifImageWidth: 1920, ExifImageHeight: 1080, FileSizeInByte: 600 * 1024 * 1024}},
+		},
+	}
+
+	newM, _ = model.Update(ScanCompleteMsg{Result: res, Err: nil})
+	model = newM.(*AppModel)
+	if model.state != ViewBrowser {
+		t.Fatalf("expected ViewBrowser, got %v", model.state)
+	}
+	if len(model.videos) != 2 {
+		t.Fatalf("expected 2 videos, got %d", len(model.videos))
+	}
+	if !model.selectedVideos["v1"] || !model.selectedVideos["v2"] {
+		t.Fatalf("expected all found videos to be selected by default")
+	}
+
+	// Check bulk exclusion summary rendering
+	rendered := model.View()
+	if !strings.Contains(rendered, "Total assets inspected in library: 50") {
+		t.Errorf("expected summary to contain total assets inspected, got %s", rendered)
+	}
+	if !strings.Contains(rendered, "25") || !strings.Contains(rendered, "photos") {
+		t.Errorf("expected summary to mention non-video skipped photos")
+	}
+	if !strings.Contains(rendered, "23") {
+		t.Errorf("expected summary to mention videos below threshold")
+	}
+}
+
+func TestAppModel_SelectionShortcuts(t *testing.T) {
+	cfg := &config.Config{URL: "http://localhost:2283", APIKey: "test-key"}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.state = ViewBrowser
+	m.videos = []immich.Asset{
+		{ID: "v1", OriginalFileName: "vid1.mp4"},
+		{ID: "v2", OriginalFileName: "vid2.mp4"},
+	}
+	m.selectedVideos["v1"] = true
+	m.selectedVideos["v2"] = true
+	m.updateTable()
+
+	// Press 'n' to select none
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	model := newM.(*AppModel)
+	if len(model.selectedVideos) != 0 {
+		t.Fatalf("expected 0 selected videos after 'n', got %d", len(model.selectedVideos))
+	}
+
+	// Press 'a' to select all
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	model = newM.(*AppModel)
+	if len(model.selectedVideos) != 2 {
+		t.Fatalf("expected 2 selected videos after 'a', got %d", len(model.selectedVideos))
+	}
+}
+
+func TestAppModel_DynamicDisplayInDashboard(t *testing.T) {
+	cfg := &config.Config{URL: "http://localhost:2283", APIKey: "test-key"}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.state = ViewDashboard
+	m.totalVideos = 3
+	m.processedVideos = 1
+	m.currentVideoName = "GOPR0001.MP4"
+	m.speed = "7.2x"
+	m.fps = 215.0
+	m.eta = "00:00:20"
+
+	view := m.View()
+
+	// Should show dashboard elements
+	if !strings.Contains(view, "Optimization Dashboard") {
+		t.Errorf("expected dashboard title in view")
+	}
+	if !strings.Contains(view, "GOPR0001.MP4") {
+		t.Errorf("expected current video name in view")
+	}
+	if !strings.Contains(view, "7.2x") {
+		t.Errorf("expected speed in view")
+	}
+
+	// Should NOT show table or browser instructions
+	if strings.Contains(view, "Select All") || strings.Contains(view, "Interactive Video Browser") {
+		t.Errorf("dashboard should NOT display video browser table or shortcuts")
+	}
+}
+
+func TestAppModel_SettingsNavigation(t *testing.T) {
+	cfg := &config.Config{
+		URL:           "http://localhost:2283",
+		APIKey:        "test-key",
+		Resolution:    "Original",
+		Preset:        "Medium",
+		SizeGuard:     true,
+		SizeThreshold: "500",
+	}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.state = ViewSettings
+
+	// Cycle Resolution
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	model := newM.(*AppModel)
+	if model.cfg.Resolution != "4K" {
+		t.Errorf("expected resolution to cycle to 4K, got %s", model.cfg.Resolution)
+	}
+
+	// Move cursor down to Preset
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = newM.(*AppModel)
+	if model.settingCursor != 1 {
+		t.Errorf("expected settingCursor 1, got %d", model.settingCursor)
+	}
+
+	// Move cursor down to SizeGuard and toggle
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = newM.(*AppModel)
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	model = newM.(*AppModel)
+	if model.cfg.SizeGuard != false {
+		t.Errorf("expected SizeGuard to be toggled to false")
+	}
+}
+
+func TestAppModel_ResumePromptOptions(t *testing.T) {
+	cfg := &config.Config{URL: "http://localhost:2283", APIKey: "test-key"}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.session = &state.Session{
+		SessionID: "sess-1",
+		Videos: map[string]*state.VideoState{
+			"v1": {ID: "v1", OriginalName: "vid1.mp4", Status: state.StatusCompleted, SavedBytes: 50000000},
+			"v2": {ID: "v2", OriginalName: "vid2.mp4", Status: state.StatusPending, OriginalSize: 100000000},
+		},
+		TotalSavedBytes: 50000000,
+	}
+	m.state = ViewResumePrompt
+
+	view := m.View()
+	if !strings.Contains(view, "Resume Previous Session") {
+		t.Errorf("expected resume prompt view")
+	}
+	if !strings.Contains(view, "Pending Videos") {
+		t.Errorf("expected view to show pending videos count")
+	}
+
+	// Test 's' to start new scan
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	model := newM.(*AppModel)
+	if model.state != ViewScanPrompt {
+		t.Errorf("expected ViewScanPrompt after starting new, got %v", model.state)
+	}
+	if model.session != nil {
+		t.Errorf("expected session to be cleared")
+	}
+}

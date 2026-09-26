@@ -10,6 +10,7 @@ import (
 	"immich-video-optimizer/config"
 	"immich-video-optimizer/engine"
 	"immich-video-optimizer/immich"
+	"immich-video-optimizer/state"
 )
 
 type Pipeline struct {
@@ -40,8 +41,25 @@ func NewPipeline(cfg *config.Config) (*Pipeline, error) {
 	}, nil
 }
 
+func (p *Pipeline) UpdateConfig(cfg *config.Config) {
+	p.cfg = cfg
+	p.client = immich.NewClient(cfg.URL, cfg.APIKey)
+}
+
 func (p *Pipeline) QueryVideos(thresholdBytes int64) ([]immich.Asset, error) {
 	return p.client.QueryVideoAssets(thresholdBytes)
+}
+
+func (p *Pipeline) ScanVideos(thresholdBytes int64) (*immich.QueryResult, error) {
+	return p.client.ScanVideos(thresholdBytes)
+}
+
+func (p *Pipeline) ValidateConnection() error {
+	return p.client.ValidateConnection()
+}
+
+func (p *Pipeline) Client() *immich.Client {
+	return p.client
 }
 
 func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- interface{}) {
@@ -56,31 +74,79 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 	timestamp := time.Now().Format("20060102-150405")
 	albumName := fmt.Sprintf("Immich-Optimizer-InProgress-%s", timestamp)
 	album, err := p.client.CreateTrackingAlbum(albumName)
-	if err != nil {
-		ch <- PipelineDoneMsg{0, fmt.Errorf("tracking album error: %w", err)}
-		return
+	var albumID string
+	if err == nil && album != nil {
+		albumID = album.ID
 	}
 
 	var videoIDs []string
 	for _, v := range videos {
 		videoIDs = append(videoIDs, v.ID)
 	}
-	_ = p.client.AddAssetsToAlbum(album.ID, videoIDs)
+	if albumID != "" {
+		_ = p.client.AddAssetsToAlbum(albumID, videoIDs)
+	}
 
-	var totalSavedBytes int64
+	sess, _ := state.LoadSession()
+	if sess == nil {
+		sess = &state.Session{
+			SessionID:       timestamp,
+			Date:            time.Now(),
+			TrackingAlbumID: albumID,
+			Videos:          make(map[string]*state.VideoState),
+			TotalVideos:     len(videos),
+		}
+	}
+	for _, v := range videos {
+		if _, exists := sess.Videos[v.ID]; !exists {
+			sess.Videos[v.ID] = &state.VideoState{
+				ID:           v.ID,
+				OriginalName: v.OriginalFileName,
+				OriginalSize: v.GetSize(),
+				Status:       state.StatusPending,
+			}
+		}
+	}
+	_ = state.SaveSession(sess)
+
+	var totalSavedBytes int64 = sess.TotalSavedBytes
 
 	for _, v := range videos {
+		if vState, ok := sess.Videos[v.ID]; ok && vState.Status == state.StatusCompleted {
+			continue
+		}
+
 		select {
 		case <-ctx.Done():
+			_ = state.SaveSession(sess)
 			ch <- PipelineDoneMsg{totalSavedBytes, ctx.Err()}
 			return
 		default:
 		}
 
 		ch <- PipelineVideoStartMsg{VideoID: v.ID, Size: v.GetSize()}
-		saved, skipped, err := p.processVideo(ctx, v, album.ID, ch)
+		saved, skipped, err := p.processVideo(ctx, v, albumID, ch)
+
+		if vState, ok := sess.Videos[v.ID]; ok {
+			if err != nil {
+				vState.Status = state.StatusFailed
+				vState.ErrorMessage = err.Error()
+			} else if skipped {
+				vState.Status = state.StatusSkipped
+			} else {
+				vState.Status = state.StatusCompleted
+				vState.SavedBytes = saved
+				sess.TotalSavedBytes += saved
+			}
+			_ = state.SaveSession(sess)
+		}
+
 		ch <- PipelineVideoCompleteMsg{VideoID: v.ID, SavedBytes: saved, Skipped: skipped, Err: err}
 		totalSavedBytes += saved
+	}
+
+	if sess.PendingCount() == 0 && sess.FailedCount() == 0 {
+		_ = state.ClearSession()
 	}
 
 	ch <- PipelineDoneMsg{TotalSavedBytes: totalSavedBytes, Err: nil}

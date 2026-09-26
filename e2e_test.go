@@ -57,6 +57,10 @@ func TestE2EWorkflow(t *testing.T) {
 				}
 			}`))
 
+		case r.Method == http.MethodGet && r.URL.Path == "/api/users/me":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "user-1", "email": "test@immich.app"}`))
+
 		case r.Method == http.MethodPost && r.URL.Path == "/api/albums":
 			// Create tracking album
 			w.Header().Set("Content-Type", "application/json")

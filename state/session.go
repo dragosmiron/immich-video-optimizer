@@ -93,3 +93,56 @@ func ClearSession() error {
 	}
 	return nil
 }
+
+func (s *Session) PendingCount() int {
+	if s == nil || s.Videos == nil {
+		return 0
+	}
+	count := 0
+	for _, v := range s.Videos {
+		if v.Status == StatusPending {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *Session) CompletedCount() int {
+	if s == nil || s.Videos == nil {
+		return 0
+	}
+	count := 0
+	for _, v := range s.Videos {
+		if v.Status == StatusCompleted {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *Session) FailedCount() int {
+	if s == nil || s.Videos == nil {
+		return 0
+	}
+	count := 0
+	for _, v := range s.Videos {
+		if v.Status == StatusFailed {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *Session) PendingVideos() []*VideoState {
+	if s == nil || s.Videos == nil {
+		return nil
+	}
+	var list []*VideoState
+	for _, v := range s.Videos {
+		if v.Status == StatusPending {
+			list = append(list, v)
+		}
+	}
+	return list
+}
+
