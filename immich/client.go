@@ -40,7 +40,8 @@ func NewClient(baseURL, apiKey string) *Client {
 		baseURL: baseURL,
 		apiKey:  strings.TrimSpace(apiKey),
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second, // Default timeout for network calls
+			// No global timeout so large multi-GB video downloads and uploads are not cut off.
+			// Individual API calls and transfers manage deadlines via Context.
 		},
 	}
 }
@@ -290,7 +291,7 @@ func (c *Client) DownloadAsset(assetID string, outPath string) error {
 	return c.DownloadAssetWithContext(context.Background(), assetID, outPath)
 }
 
-// UploadReplacementAssetWithContext uploads a replacement video asset via multipart form with context
+// UploadReplacementAssetWithContext uploads a replacement video asset via multipart form with context, streaming without buffering into RAM
 func (c *Client) UploadReplacementAssetWithContext(ctx context.Context, filePath string, orig Asset) (*Asset, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -298,8 +299,10 @@ func (c *Client) UploadReplacementAssetWithContext(ctx context.Context, filePath
 	}
 	defer file.Close()
 
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
+	fileStat, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
 
 	deviceAssetID := orig.DeviceAssetID
 	if deviceAssetID == "" {
@@ -318,34 +321,32 @@ func (c *Client) UploadReplacementAssetWithContext(ctx context.Context, filePath
 		fileModifiedAt = fileCreatedAt
 	}
 
-	_ = writer.WriteField("deviceAssetId", deviceAssetID)
-	_ = writer.WriteField("deviceId", deviceID)
-	_ = writer.WriteField("fileCreatedAt", fileCreatedAt)
-	_ = writer.WriteField("fileModifiedAt", fileModifiedAt)
-
 	uploadFileName := orig.OriginalFileName
 	if uploadFileName == "" {
 		uploadFileName = filepath.Base(filePath)
 	}
 
-	part, err := writer.CreateFormFile("assetData", uploadFileName)
+	headerBuf := &bytes.Buffer{}
+	writer := multipart.NewWriter(headerBuf)
+
+	_ = writer.WriteField("deviceAssetId", deviceAssetID)
+	_ = writer.WriteField("deviceId", deviceID)
+	_ = writer.WriteField("fileCreatedAt", fileCreatedAt)
+	_ = writer.WriteField("fileModifiedAt", fileModifiedAt)
+
+	_, err = writer.CreateFormFile("assetData", uploadFileName)
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = io.Copy(part, file)
-	if err != nil {
-		return nil, err
-	}
-	err = writer.Close()
-	if err != nil {
-		return nil, err
-	}
+	trailerBuf := bytes.NewBufferString(fmt.Sprintf("\r\n--%s--\r\n", writer.Boundary()))
+	bodyReader := io.MultiReader(headerBuf, file, trailerBuf)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/assets", body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/assets", bodyReader)
 	if err != nil {
 		return nil, err
 	}
+	req.ContentLength = int64(headerBuf.Len()) + fileStat.Size() + int64(trailerBuf.Len())
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
 	resp, err := c.doRequest(req)

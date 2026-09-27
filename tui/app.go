@@ -80,6 +80,13 @@ func logFailure(msg string) {
 	}
 }
 
+func (m *AppModel) addLog(msg string) {
+	m.logMessages = append(m.logMessages, msg)
+	if len(m.logMessages) > 200 {
+		m.logMessages = m.logMessages[len(m.logMessages)-200:]
+	}
+}
+
 type AppModel struct {
 	state    ViewState
 	cfg      *config.Config
@@ -309,7 +316,7 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		m.logMessages = append(m.logMessages, fmt.Sprintf("%s - Transcoding %s", time.Now().Format("15:04:05"), m.currentVideoName))
+		m.addLog(fmt.Sprintf("%s - Transcoding %s", time.Now().Format("15:04:05"), m.currentVideoName))
 		return m, waitForPipeline(m.pipelineChan)
 
 	case orchestrator.PipelineStageMsg:
@@ -317,7 +324,7 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "probing":
 			m.probingStatus = msg.VideoName
 			if msg.VideoName != "" {
-				m.logMessages = append(m.logMessages, fmt.Sprintf("%s - %s", time.Now().Format("15:04:05"), msg.VideoName))
+				m.addLog(fmt.Sprintf("%s - %s", time.Now().Format("15:04:05"), msg.VideoName))
 			}
 		case "downloading":
 			m.probingStatus = ""
@@ -367,7 +374,7 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.failedCount++
 			m.failedVideos = append(m.failedVideos, completedName)
 			msgStr := fmt.Sprintf("%s - Failed %s: %v", timeStr, completedName, msg.Err)
-			m.logMessages = append(m.logMessages, msgStr)
+			m.addLog(msgStr)
 			logFailure(msgStr)
 		} else if msg.Skipped {
 			m.skippedCount++
@@ -375,9 +382,9 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.SkipReason != "" {
 				reason = msg.SkipReason
 			}
-			m.logMessages = append(m.logMessages, fmt.Sprintf("%s - Skipped %s (%s)", timeStr, completedName, reason))
+			m.addLog(fmt.Sprintf("%s - Skipped %s (%s)", timeStr, completedName, reason))
 		} else {
-			m.logMessages = append(m.logMessages, fmt.Sprintf("%s - Completed %s (Saved %.2f MB)", timeStr, completedName, float64(msg.SavedBytes)/1024/1024))
+			m.addLog(fmt.Sprintf("%s - Completed %s (Saved %.2f MB)", timeStr, completedName, float64(msg.SavedBytes)/1024/1024))
 		}
 
 		percent := 0.0
@@ -573,7 +580,7 @@ func (m *AppModel) updateResumePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.failedCount = 0
 			m.totalSavedBytes = m.session.TotalSavedBytes
 			m.ctx, m.cancelCtx = context.WithCancel(context.Background())
-			m.pipelineChan = make(chan interface{}, 50)
+			m.pipelineChan = make(chan interface{}, 200)
 			go m.pipeline.Run(m.ctx, toProcess, m.pipelineChan)
 			return m, waitForPipeline(m.pipelineChan)
 		}
@@ -735,7 +742,7 @@ func (m *AppModel) updateBrowser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.totalSavedBytes = 0
 			m.failedVideos = nil
 			m.ctx, m.cancelCtx = context.WithCancel(context.Background())
-			m.pipelineChan = make(chan interface{}, 50)
+			m.pipelineChan = make(chan interface{}, 200)
 			go m.pipeline.Run(m.ctx, toProcess, m.pipelineChan)
 			return m, waitForPipeline(m.pipelineChan)
 		}
@@ -894,7 +901,7 @@ func (m *AppModel) updateSummary(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.failedCount = 0
 				m.failedVideos = nil
 				m.ctx, m.cancelCtx = context.WithCancel(context.Background())
-				m.pipelineChan = make(chan interface{}, 50)
+				m.pipelineChan = make(chan interface{}, 200)
 				go m.pipeline.Run(m.ctx, toRetry, m.pipelineChan)
 				return m, waitForPipeline(m.pipelineChan)
 			}

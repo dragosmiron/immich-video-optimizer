@@ -309,7 +309,10 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 				}
 
 				onProgress := func(prog engine.Progress) {
-					ch <- PipelineProgressMsg{VideoID: item.asset.ID, EngineProgress: prog}
+					select {
+					case ch <- PipelineProgressMsg{VideoID: item.asset.ID, EngineProgress: prog}:
+					default:
+					}
 				}
 
 				if err := engine.Transcode(ctx, p.binaries.FFmpegPath, opts, onProgress); err != nil {
