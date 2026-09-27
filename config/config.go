@@ -22,6 +22,7 @@ type Config struct {
 	ConcurrentEncoders int    `mapstructure:"concurrent_encoders"`
 	EnablePrefetch     bool   `mapstructure:"enable_prefetch"`
 	LogLevel           string `mapstructure:"log_level"`
+	MaxRetries         int    `mapstructure:"max_retries"`
 }
 
 // IsDebug returns true if the log level is set to debug.
@@ -54,6 +55,7 @@ func DefaultConfig() *Config {
 		ConcurrentEncoders: 1,
 		EnablePrefetch:     true,
 		LogLevel:           "info",
+		MaxRetries:         3,
 	}
 }
 
@@ -75,6 +77,7 @@ func LoadConfig() (*Config, error) {
 	v.SetDefault("concurrent_encoders", 1)
 	v.SetDefault("enable_prefetch", true)
 	v.SetDefault("log_level", "info")
+	v.SetDefault("max_retries", 3)
 
 	if err := v.ReadInConfig(); err != nil {
 		return DefaultConfig(), err
@@ -92,6 +95,9 @@ func LoadConfig() (*Config, error) {
 	}
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"
+	}
+	if cfg.MaxRetries < 0 {
+		cfg.MaxRetries = 0
 	}
 	return &cfg, nil
 }
@@ -112,6 +118,9 @@ func SaveConfig(cfg *Config) error {
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"
 	}
+	if cfg.MaxRetries < 0 {
+		cfg.MaxRetries = 0
+	}
 
 	v := viper.New()
 	v.SetConfigName("config")
@@ -126,6 +135,7 @@ func SaveConfig(cfg *Config) error {
 	v.Set("concurrent_encoders", cfg.ConcurrentEncoders)
 	v.Set("enable_prefetch", cfg.EnablePrefetch)
 	v.Set("log_level", strings.ToLower(cfg.LogLevel))
+	v.Set("max_retries", cfg.MaxRetries)
 
 	home, err := userHomeDir()
 	if err != nil {

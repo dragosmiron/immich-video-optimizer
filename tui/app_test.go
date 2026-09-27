@@ -406,6 +406,7 @@ func TestAppModel_PipelineSettings(t *testing.T) {
 		EnablePrefetch:     true,
 		ConcurrentEncoders: 1,
 		SizeThreshold:      "500",
+		MaxRetries:         3,
 	}
 	pipeline, _ := orchestrator.NewPipeline(cfg)
 	m := NewAppModel(cfg, pipeline)
@@ -471,6 +472,36 @@ func TestAppModel_PipelineSettings(t *testing.T) {
 	model = newM.(*AppModel)
 	if model.cfg.LogLevel != "debug" {
 		t.Errorf("expected LogLevel debug, got %s", model.cfg.LogLevel)
+	}
+
+	// Move down to index 8 (Network Retries)
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = newM.(*AppModel)
+	if model.settingCursor != 8 {
+		t.Fatalf("expected settingCursor 8, got %d", model.settingCursor)
+	}
+
+	// Default is 3, cycling with Right should change to 5
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	model = newM.(*AppModel)
+	if model.cfg.MaxRetries != 5 {
+		t.Errorf("expected MaxRetries 5, got %d", model.cfg.MaxRetries)
+	}
+
+	// Left twice should change to 2
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	model = newM.(*AppModel)
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	model = newM.(*AppModel)
+	if model.cfg.MaxRetries != 2 {
+		t.Errorf("expected MaxRetries 2, got %d", model.cfg.MaxRetries)
+	}
+
+	// Space should cycle to 3
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	model = newM.(*AppModel)
+	if model.cfg.MaxRetries != 3 {
+		t.Errorf("expected MaxRetries 3 after space toggle, got %d", model.cfg.MaxRetries)
 	}
 }
 

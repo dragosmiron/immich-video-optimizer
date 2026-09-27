@@ -24,6 +24,7 @@ func TestSaveAndLoadConfig(t *testing.T) {
 		ConcurrentEncoders: 2,
 		EnablePrefetch:     true,
 		LogLevel:           "debug",
+		MaxRetries:         5,
 	}
 
 	// Test SaveConfig
@@ -44,11 +45,14 @@ func TestSaveAndLoadConfig(t *testing.T) {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
 
-	if loaded.URL != cfg.URL || loaded.APIKey != cfg.APIKey || loaded.SizeThreshold != cfg.SizeThreshold || loaded.SkipHEVC != cfg.SkipHEVC || loaded.ConcurrentEncoders != cfg.ConcurrentEncoders || loaded.EnablePrefetch != cfg.EnablePrefetch || loaded.LogLevel != cfg.LogLevel {
+	if loaded.URL != cfg.URL || loaded.APIKey != cfg.APIKey || loaded.SizeThreshold != cfg.SizeThreshold || loaded.SkipHEVC != cfg.SkipHEVC || loaded.ConcurrentEncoders != cfg.ConcurrentEncoders || loaded.EnablePrefetch != cfg.EnablePrefetch || loaded.LogLevel != cfg.LogLevel || loaded.MaxRetries != cfg.MaxRetries {
 		t.Errorf("Loaded config mismatch: got %v, expected %v", loaded, cfg)
 	}
 	if !loaded.IsDebug() {
 		t.Errorf("expected IsDebug() true for debug level")
+	}
+	if loaded.MaxRetries != 5 {
+		t.Errorf("expected MaxRetries 5, got %d", loaded.MaxRetries)
 	}
 }
 

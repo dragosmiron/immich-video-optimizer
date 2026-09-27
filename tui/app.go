@@ -790,11 +790,12 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "down", "j":
-		if m.settingCursor < 7 {
+		if m.settingCursor < 8 {
 			m.settingCursor++
 		}
 
 	case "left", "h":
+		retryOptions := []int{0, 1, 2, 3, 5}
 		if m.settingCursor == 0 {
 			for i, r := range m.resolutions {
 				if r == m.cfg.Resolution && i > 0 {
@@ -822,9 +823,18 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else if m.settingCursor == 7 {
 			m.cfg.LogLevel = "info"
 			logger.SetLevelString(m.cfg.LogLevel)
+		} else if m.settingCursor == 8 {
+			for i, val := range retryOptions {
+				if val == m.cfg.MaxRetries && i > 0 {
+					m.cfg.MaxRetries = retryOptions[i-1]
+					m.pipeline.Client().SetMaxRetries(m.cfg.MaxRetries)
+					break
+				}
+			}
 		}
 
 	case "right", "l":
+		retryOptions := []int{0, 1, 2, 3, 5}
 		if m.settingCursor == 0 {
 			for i, r := range m.resolutions {
 				if r == m.cfg.Resolution && i < len(m.resolutions)-1 {
@@ -852,6 +862,14 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else if m.settingCursor == 7 {
 			m.cfg.LogLevel = "debug"
 			logger.SetLevelString(m.cfg.LogLevel)
+		} else if m.settingCursor == 8 {
+			for i, val := range retryOptions {
+				if val == m.cfg.MaxRetries && i < len(retryOptions)-1 {
+					m.cfg.MaxRetries = retryOptions[i+1]
+					m.pipeline.Client().SetMaxRetries(m.cfg.MaxRetries)
+					break
+				}
+			}
 		}
 
 	case " ", "enter":
@@ -877,6 +895,17 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.cfg.LogLevel = "debug"
 			}
 			logger.SetLevelString(m.cfg.LogLevel)
+		} else if m.settingCursor == 8 {
+			retryOptions := []int{0, 1, 2, 3, 5}
+			currIdx := 0
+			for i, val := range retryOptions {
+				if val == m.cfg.MaxRetries {
+					currIdx = i
+					break
+				}
+			}
+			m.cfg.MaxRetries = retryOptions[(currIdx+1)%len(retryOptions)]
+			m.pipeline.Client().SetMaxRetries(m.cfg.MaxRetries)
 		}
 	}
 	return m, nil

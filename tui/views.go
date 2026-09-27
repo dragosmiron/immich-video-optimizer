@@ -289,6 +289,10 @@ func (m *AppModel) viewSettings() string {
 		"Controls detail of output logs. Set to Debug for full FFmpeg & ExifTool command lines,\n" +
 			"  stderr outputs, and diagnostic traces to identify error root causes.\n" +
 			"  Logs written to: ~/.config/immich-video-optimizer/optimizer.log",
+		// 8 — Network Retries
+		"Number of automatic retry attempts with backoff for failed downloads and uploads.\n" +
+			"  • 0 — Disabled. Fails immediately on first error\n" +
+			"  • 1 to 5 — Retries automatically with exponential backoff on transient network drops",
 	}
 
 	isFocused := func(idx int) bool { return m.settingCursor == idx }
@@ -381,6 +385,16 @@ func (m *AppModel) viewSettings() string {
 	writeRow(7,
 		"Logging Level:       ",
 		logLevelStr+"  ← / → / [Space / Enter] to toggle  [Info, Debug]",
+	)
+
+	// Row 8 — Network Retries
+	retryStr := fmt.Sprintf("%d", m.cfg.MaxRetries)
+	if m.cfg.MaxRetries == 0 {
+		retryStr = "0 (Disabled)"
+	}
+	writeRow(8,
+		"Network Retries:     ",
+		retryStr+"  ← / → / [Space / Enter] to change  [0, 1, 2, 3, 5]",
 	)
 
 	b.WriteString("\n")

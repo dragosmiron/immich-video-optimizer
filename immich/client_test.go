@@ -302,3 +302,103 @@ func TestErrors(t *testing.T) {
 		t.Errorf("Expected Error() to return '%s', got '%s'", expectedStr, apiErr.Error())
 	}
 }
+
+func TestDownloadAsset_RetrySuccess(t *testing.T) {
+	origBackoff := retryBackoff
+	retryBackoff = func(attempt int) time.Duration { return 5 * time.Millisecond }
+	defer func() { retryBackoff = origBackoff }()
+
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts < 3 {
+			w.WriteHeader(http.StatusBadGateway)
+			w.Write([]byte("gateway timeout"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("video stream data"))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+	client.SetMaxRetries(3)
+
+	tmpOut := filepath.Join(t.TempDir(), "downloaded.mp4")
+	err := client.DownloadAsset("asset-123", tmpOut)
+	if err != nil {
+		t.Fatalf("expected download to succeed after retries, got %v", err)
+	}
+	if attempts != 3 {
+		t.Errorf("expected 3 attempts, got %d", attempts)
+	}
+
+	data, err := os.ReadFile(tmpOut)
+	if err != nil || string(data) != "video stream data" {
+		t.Errorf("unexpected downloaded content: %s (err: %v)", string(data), err)
+	}
+}
+
+func TestDownloadAsset_NoRetryOn404(t *testing.T) {
+	origBackoff := retryBackoff
+	retryBackoff = func(attempt int) time.Duration { return 5 * time.Millisecond }
+	defer func() { retryBackoff = origBackoff }()
+
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("not found"))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+	client.SetMaxRetries(3)
+
+	tmpOut := filepath.Join(t.TempDir(), "downloaded.mp4")
+	err := client.DownloadAsset("asset-missing", tmpOut)
+	if err == nil {
+		t.Fatal("expected error on 404, got nil")
+	}
+	// 404 should abort retries immediately (only 1 attempt)
+	if attempts != 1 {
+		t.Errorf("expected exactly 1 attempt for 404, got %d", attempts)
+	}
+}
+
+func TestUploadAsset_RetrySuccess(t *testing.T) {
+	origBackoff := retryBackoff
+	retryBackoff = func(attempt int) time.Duration { return 5 * time.Millisecond }
+	defer func() { retryBackoff = origBackoff }()
+
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("busy"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(Asset{ID: "new-uploaded-asset"})
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+	client.SetMaxRetries(2)
+
+	tmpFile := filepath.Join(t.TempDir(), "upload.mp4")
+	os.WriteFile(tmpFile, []byte("transcoded video content"), 0644)
+
+	orig := Asset{ID: "orig-123", OriginalFileName: "sample.mp4"}
+	asset, err := client.UploadReplacementAsset(tmpFile, orig)
+	if err != nil {
+		t.Fatalf("expected upload to succeed on retry, got: %v", err)
+	}
+	if asset.ID != "new-uploaded-asset" {
+		t.Errorf("expected ID 'new-uploaded-asset', got '%s'", asset.ID)
+	}
+	if attempts != 2 {
+		t.Errorf("expected 2 attempts, got %d", attempts)
+	}
+}

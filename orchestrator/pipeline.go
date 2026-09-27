@@ -33,6 +33,7 @@ func NewPipeline(cfg *config.Config) (*Pipeline, error) {
 // NewPipelineWithBinaries initializes Pipeline with custom BinaryManager (useful for testing or overrides).
 func NewPipelineWithBinaries(cfg *config.Config, binaries *engine.BinaryManager) (*Pipeline, error) {
 	client := immich.NewClient(cfg.URL, cfg.APIKey)
+	client.SetMaxRetries(cfg.MaxRetries)
 	if binaries == nil {
 		var err error
 		binaries, err = engine.NewBinaryManager()
@@ -63,6 +64,7 @@ func (p *Pipeline) SetClient(client *immich.Client) {
 func (p *Pipeline) UpdateConfig(cfg *config.Config) {
 	p.cfg = cfg
 	p.client = immich.NewClient(cfg.URL, cfg.APIKey)
+	p.client.SetMaxRetries(cfg.MaxRetries)
 }
 
 func (p *Pipeline) QueryVideos(thresholdBytes int64) ([]immich.Asset, error) {

@@ -116,6 +116,7 @@ Customize processing options:
 - **Concurrent Encoders:** 1 (default, ideal for hardware encoders) or 2 (multi-GPU or high-core CPUs).
 - **Size Threshold (MB):** Type any custom file size filter (e.g. `500` MB).
 - **Logging Level:** `Info` (default) or `Debug`. Debug mode logs full FFmpeg and ExifTool command lines, stderr output, Immich API error bodies, and diagnostic traces to help troubleshoot transcoding failures.
+- **Network Retries:** `0` (disabled), `1`, `2`, `3` (default), or `5`. Automatically retries transient download and upload failures (packet drops, connection resets, or reverse-proxy `502`/`503` responses) with exponential backoff before marking an item failed.
 
 ### 4. Live Dashboard
 Watch real-time multi-stage progress:
@@ -147,8 +148,8 @@ Watch real-time multi-stage progress:
 | | `s` | Rescan library |
 | | `q` / `Esc` | Exit application |
 | **Settings** | `↑` / `↓` (`k` / `j`) | Navigate setting rows |
-| | `←` / `→` (`h` / `l`) | Change resolution, preset, or encoder count |
-| | `Space` / `Enter` | Toggle option (Size Guard, Skip HEVC, Prefetch, Edit Threshold, Log Level) |
+| | `←` / `→` (`h` / `l`) | Change resolution, preset, encoder count, or network retries |
+| | `Space` / `Enter` | Toggle option (Size Guard, Skip HEVC, Prefetch, Edit Threshold, Log Level, Retries) |
 | | `Esc` / `q` | Save preferences & return to browser |
 | **Live Dashboard** | `q` / `Esc` | **Pause optimization** (saves session state for later resume) |
 | **Resume Prompt** | `r` | Resume previous paused session |
