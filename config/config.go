@@ -22,6 +22,18 @@ type Config struct {
 	EnablePrefetch     bool   `mapstructure:"enable_prefetch"`
 }
 
+func DefaultConfig() *Config {
+	return &Config{
+		SizeThreshold:      "500",
+		Resolution:         "Original",
+		Preset:             "Medium",
+		SizeGuard:          true,
+		SkipHEVC:           true,
+		ConcurrentEncoders: 1,
+		EnablePrefetch:     true,
+	}
+}
+
 func LoadConfig() (*Config, error) {
 	v := viper.New()
 	v.SetConfigName("config")
@@ -32,6 +44,7 @@ func LoadConfig() (*Config, error) {
 		v.AddConfigPath(filepath.Join(home, ".config", "immich-video-optimizer"))
 	}
 
+	v.SetDefault("size_threshold", "500")
 	v.SetDefault("resolution", "Original")
 	v.SetDefault("preset", "Medium")
 	v.SetDefault("size_guard", true)
@@ -40,15 +53,18 @@ func LoadConfig() (*Config, error) {
 	v.SetDefault("enable_prefetch", true)
 
 	if err := v.ReadInConfig(); err != nil {
-		return nil, err
+		return DefaultConfig(), err
 	}
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
-		return nil, err
+		return DefaultConfig(), err
 	}
 	if cfg.ConcurrentEncoders <= 0 {
 		cfg.ConcurrentEncoders = 1
+	}
+	if cfg.SizeThreshold == "" {
+		cfg.SizeThreshold = "500"
 	}
 	return &cfg, nil
 }

@@ -63,7 +63,7 @@ tar -xzf immich-video-optimizer_darwin_arm64.tar.gz
 
 ### Option 2: Build From Source
 
-Requirements: Go 1.22+ and Git.
+Requirements: Go 1.22+ and Git. System `ffmpeg` and `exiftool` are recommended in your `PATH` (e.g. `brew install ffmpeg exiftool` on macOS, or `sudo apt install ffmpeg libimage-exiftool-perl` on Linux).
 
 ```bash
 git clone https://github.com/dragos/immich-video-optimizer.git
@@ -71,6 +71,12 @@ cd immich-video-optimizer
 go build -o immich-video-optimizer .
 ./immich-video-optimizer
 ```
+
+### CLI Flags
+
+| Flag | Shorthand | Description |
+|---|---|---|
+| `--config` | `-c` | Open the interactive terminal configuration form to edit server URL and API key |
 
 ---
 
@@ -126,6 +132,10 @@ Watch real-time multi-stage progress:
 | **Global** | `Ctrl + C` | Force exit application |
 | **Connection Setup** | `Tab` / `↓` / `↑` | Move between URL, API key, and submit button |
 | | `Enter` | Test connection and continue |
+| **Scan Prompt** | `Enter` / `s` | Start scanning Immich library for large videos |
+| | `c` | Open Settings & Preferences |
+| | `e` | Edit server connection details |
+| | `q` / `Esc` | Exit application |
 | **Video Browser** | `↑` / `↓` | Navigate table rows |
 | | `Space` | Toggle selection for highlighted video |
 | | `a` | Select all filtered videos |

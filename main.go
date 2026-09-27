@@ -17,12 +17,7 @@ func main() {
 
 	cfg, err := config.LoadConfig()
 	if err != nil || cfg == nil {
-		cfg = &config.Config{
-			SizeThreshold: "500",
-			Resolution:    "Original",
-			Preset:        "Medium",
-			SizeGuard:     true,
-		}
+		cfg = config.DefaultConfig()
 	}
 
 	if *configFlag {
