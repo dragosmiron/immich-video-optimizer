@@ -83,6 +83,18 @@ type transcodedItem struct {
 
 func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- interface{}) {
 	defer close(ch)
+	defer func() {
+		// Clean up any remaining temporary files in tempDir on exit
+		entries, err := os.ReadDir(p.tempDir)
+		if err == nil {
+			for _, e := range entries {
+				if !e.IsDir() {
+					_ = os.Remove(filepath.Join(p.tempDir, e.Name()))
+				}
+			}
+		}
+	}()
+
 	if len(videos) == 0 {
 		ch <- PipelineDoneMsg{}
 		return
@@ -90,12 +102,17 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 
 	ch <- PipelineStartMsg{Total: len(videos)}
 
-	timestamp := time.Now().Format("20060102-150405")
-	albumName := fmt.Sprintf("Immich-Optimizer-InProgress-%s", timestamp)
-	album, err := p.client.CreateTrackingAlbum(albumName)
+	sess, _ := state.LoadSession()
 	var albumID string
-	if err == nil && album != nil {
-		albumID = album.ID
+	if sess != nil && sess.TrackingAlbumID != "" {
+		albumID = sess.TrackingAlbumID
+	} else {
+		timestamp := time.Now().Format("20060102-150405")
+		albumName := fmt.Sprintf("Immich-Optimizer-InProgress-%s", timestamp)
+		album, err := p.client.CreateTrackingAlbum(albumName)
+		if err == nil && album != nil {
+			albumID = album.ID
+		}
 	}
 
 	var videoIDs []string
@@ -106,8 +123,8 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		_ = p.client.AddAssetsToAlbum(albumID, videoIDs)
 	}
 
-	sess, _ := state.LoadSession()
 	if sess == nil {
+		timestamp := time.Now().Format("20060102-150405")
 		sess = &state.Session{
 			SessionID:       timestamp,
 			Date:            time.Now(),
@@ -115,23 +132,35 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 			Videos:          make(map[string]*state.VideoState),
 			TotalVideos:     len(videos),
 		}
+	} else if sess.TrackingAlbumID == "" && albumID != "" {
+		sess.TrackingAlbumID = albumID
 	}
+
 	for _, v := range videos {
-		if _, exists := sess.Videos[v.ID]; !exists {
+		if vState, exists := sess.Videos[v.ID]; !exists {
 			sess.Videos[v.ID] = &state.VideoState{
-				ID:           v.ID,
-				OriginalName: v.OriginalFileName,
-				OriginalSize: v.GetSize(),
-				Status:       state.StatusPending,
+				ID:            v.ID,
+				OriginalName:  v.OriginalFileName,
+				OriginalSize:  v.GetSize(),
+				Status:        state.StatusPending,
+				Width:         v.ExifInfo.ExifImageWidth,
+				Height:        v.ExifInfo.ExifImageHeight,
+				CreatedAt:     v.FileCreatedAt,
+				ModifiedAt:    v.FileModifiedAt,
+				DeviceAssetID: v.DeviceAssetID,
+				DeviceID:      v.DeviceID,
 			}
+		} else if vState.Status == state.StatusFailed {
+			vState.Status = state.StatusPending
+			vState.ErrorMessage = ""
 		}
 	}
 	_ = state.SaveSession(sess)
 
-	// Filter out already-completed videos from previous sessions
+	// Filter out already-completed or skipped videos from previous sessions
 	var pendingVideos []immich.Asset
 	for _, v := range videos {
-		if vState, ok := sess.Videos[v.ID]; ok && vState.Status == state.StatusCompleted {
+		if vState, ok := sess.Videos[v.ID]; ok && (vState.Status == state.StatusCompleted || vState.Status == state.StatusSkipped) {
 			continue
 		}
 		pendingVideos = append(pendingVideos, v)
@@ -186,7 +215,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 			ch <- PipelineStageMsg{Stage: "downloading", VideoName: v.OriginalFileName}
 			origPath := filepath.Join(p.tempDir, fmt.Sprintf("orig_%s.mp4", v.ID))
 
-			if err := p.client.DownloadAsset(v.ID, origPath); err != nil {
+			if err := p.client.DownloadAssetWithContext(ctx, v.ID, origPath); err != nil {
 				if ctx.Err() != nil {
 					_ = os.Remove(origPath)
 					return
@@ -253,7 +282,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 						err:        item.err,
 					}:
 					case <-ctx.Done():
-						return
+						continue
 					}
 					continue
 				}
@@ -287,12 +316,12 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 					_ = os.Remove(item.origPath)
 					_ = os.Remove(transcodedPath)
 					if ctx.Err() != nil {
-						return
+						continue
 					}
 					select {
 					case uploadQueue <- transcodedItem{asset: item.asset, err: fmt.Errorf("transcode failed: %w", err)}:
 					case <-ctx.Done():
-						return
+						continue
 					}
 					continue
 				}
@@ -301,12 +330,12 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 					_ = os.Remove(item.origPath)
 					_ = os.Remove(transcodedPath)
 					if ctx.Err() != nil {
-						return
+						continue
 					}
 					select {
 					case uploadQueue <- transcodedItem{asset: item.asset, err: fmt.Errorf("metadata copy failed: %w", err)}:
 					case <-ctx.Done():
-						return
+						continue
 					}
 					continue
 				}
@@ -318,7 +347,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 					select {
 					case uploadQueue <- transcodedItem{asset: item.asset, err: fmt.Errorf("failed to stat transcoded file: %w", err)}:
 					case <-ctx.Done():
-						return
+						continue
 					}
 					continue
 				}
@@ -329,7 +358,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 					select {
 					case uploadQueue <- transcodedItem{asset: item.asset, skipped: true, skipReason: "transcoded file larger"}:
 					case <-ctx.Done():
-						return
+						continue
 					}
 					continue
 				}
@@ -345,7 +374,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 				case <-ctx.Done():
 					_ = os.Remove(item.origPath)
 					_ = os.Remove(transcodedPath)
-					return
+					continue
 				}
 			}
 		}()
@@ -391,10 +420,14 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 
 		ch <- PipelineStageMsg{Stage: "uploading", VideoName: item.asset.OriginalFileName}
 
-		newAsset, err := p.client.UploadReplacementAsset(item.transcodedPath, item.asset)
+		newAsset, err := p.client.UploadReplacementAssetWithContext(ctx, item.transcodedPath, item.asset)
 		if err != nil {
 			_ = os.Remove(item.origPath)
 			_ = os.Remove(item.transcodedPath)
+			if ctx.Err() != nil {
+				// Paused mid-upload; leave as StatusPending for clean resume
+				continue
+			}
 			if vState, ok := sess.Videos[item.asset.ID]; ok {
 				vState.Status = state.StatusFailed
 				vState.ErrorMessage = fmt.Sprintf("upload failed: %v", err)

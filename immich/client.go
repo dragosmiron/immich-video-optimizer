@@ -2,6 +2,7 @@ package immich
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -259,14 +260,13 @@ func (c *Client) AddAssetsToAlbum(albumID string, assetIDs []string) error {
 	return nil
 }
 
-// DownloadAsset downloads the original video stream of an asset to the specified path
-func (c *Client) DownloadAsset(assetID string, outPath string) error {
+// DownloadAssetWithContext downloads the original video stream of an asset with context cancellation
+func (c *Client) DownloadAssetWithContext(ctx context.Context, assetID string, outPath string) error {
 	url := fmt.Sprintf("%s/api/assets/%s/original", c.baseURL, assetID)
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-	// Downloading might take a while, avoid standard accept header if we want raw stream
 	req.Header.Set("Accept", "*/*")
 
 	resp, err := c.doRequest(req)
@@ -285,8 +285,13 @@ func (c *Client) DownloadAsset(assetID string, outPath string) error {
 	return err
 }
 
-// UploadReplacementAsset uploads a replacement video asset via multipart form, preserving metadata
-func (c *Client) UploadReplacementAsset(filePath string, orig Asset) (*Asset, error) {
+// DownloadAsset downloads the original video stream of an asset to the specified path
+func (c *Client) DownloadAsset(assetID string, outPath string) error {
+	return c.DownloadAssetWithContext(context.Background(), assetID, outPath)
+}
+
+// UploadReplacementAssetWithContext uploads a replacement video asset via multipart form with context
+func (c *Client) UploadReplacementAssetWithContext(ctx context.Context, filePath string, orig Asset) (*Asset, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
@@ -337,7 +342,7 @@ func (c *Client) UploadReplacementAsset(filePath string, orig Asset) (*Asset, er
 		return nil, err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/assets", body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/assets", body)
 	if err != nil {
 		return nil, err
 	}
@@ -354,6 +359,11 @@ func (c *Client) UploadReplacementAsset(filePath string, orig Asset) (*Asset, er
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 	return &newAsset, nil
+}
+
+// UploadReplacementAsset uploads a replacement video asset via multipart form, preserving metadata
+func (c *Client) UploadReplacementAsset(filePath string, orig Asset) (*Asset, error) {
+	return c.UploadReplacementAssetWithContext(context.Background(), filePath, orig)
 }
 
 // DeleteAsset deletes the specified asset

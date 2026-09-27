@@ -556,6 +556,12 @@ func (m *AppModel) updateResumePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				a.ID = vs.ID
 				a.OriginalFileName = vs.OriginalName
 				a.ExifInfo.FileSizeInByte = vs.OriginalSize
+				a.ExifInfo.ExifImageWidth = vs.Width
+				a.ExifInfo.ExifImageHeight = vs.Height
+				a.FileCreatedAt = vs.CreatedAt
+				a.FileModifiedAt = vs.ModifiedAt
+				a.DeviceAssetID = vs.DeviceAssetID
+				a.DeviceID = vs.DeviceID
 				toProcess = append(toProcess, a)
 			}
 		}

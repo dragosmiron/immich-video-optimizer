@@ -17,13 +17,19 @@ const (
 )
 
 type VideoState struct {
-	ID           string      `json:"id"`
-	OriginalName string      `json:"original_name"`
-	OriginalSize int64       `json:"original_size"`
-	Duration     string      `json:"duration"`
-	Status       VideoStatus `json:"status"`
-	SavedBytes   int64       `json:"saved_bytes,omitempty"`
-	ErrorMessage string      `json:"error_message,omitempty"`
+	ID            string      `json:"id"`
+	OriginalName  string      `json:"original_name"`
+	OriginalSize  int64       `json:"original_size"`
+	Duration      string      `json:"duration"`
+	Status        VideoStatus `json:"status"`
+	SavedBytes    int64       `json:"saved_bytes,omitempty"`
+	ErrorMessage  string      `json:"error_message,omitempty"`
+	Width         int         `json:"width,omitempty"`
+	Height        int         `json:"height,omitempty"`
+	CreatedAt     string      `json:"created_at,omitempty"`
+	ModifiedAt    string      `json:"modified_at,omitempty"`
+	DeviceAssetID string      `json:"device_asset_id,omitempty"`
+	DeviceID      string      `json:"device_id,omitempty"`
 }
 
 type Session struct {

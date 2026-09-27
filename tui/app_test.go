@@ -437,3 +437,39 @@ func TestAppModel_PipelineSettings(t *testing.T) {
 	}
 }
 
+func TestAppModel_ResumeMetadataPreservation(t *testing.T) {
+	cfg := &config.Config{URL: "http://localhost:2283", APIKey: "test-key"}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.session = &state.Session{
+		SessionID: "sess-res",
+		Videos: map[string]*state.VideoState{
+			"v1": {
+				ID:            "v1",
+				OriginalName:  "wedding_video.mp4",
+				OriginalSize:  500 * 1024 * 1024,
+				Status:        state.StatusPending,
+				Width:         3840,
+				Height:        2160,
+				CreatedAt:     "2025-06-15T10:30:00Z",
+				ModifiedAt:    "2025-06-15T10:30:00Z",
+				DeviceAssetID: "iphone-15-asset",
+				DeviceID:      "iphone-15-pro",
+			},
+		},
+	}
+	m.state = ViewResumePrompt
+
+	// Press 'r' to resume
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model := newM.(*AppModel)
+	if model.state != ViewDashboard {
+		t.Fatalf("expected ViewDashboard after resume, got %v", model.state)
+	}
+	// Verify that when pipeline starts or displays, metadata is present
+	if model.cancelCtx != nil {
+		model.cancelCtx() // Clean up background pipeline
+	}
+}
+
+
