@@ -132,7 +132,20 @@ type AppModel struct {
 	probingStatus           string
 	fps                     float64
 	speed                   string
-	failedVideos            []string
+	failedVideos            []failureEntry // tracks each failed video with its error message
+	skippedVideos           []skippedVideo // tracks each skipped video with its reason
+}
+
+// skippedVideo holds the name and reason for a skipped video.
+type skippedVideo struct {
+	Name   string
+	Reason string
+}
+
+// failureEntry holds the name and error message for a failed video.
+type failureEntry struct {
+	Name string
+	Err  string
 }
 
 func NewAppModel(cfg *config.Config, pipeline *orchestrator.Pipeline, opts ...Option) *AppModel {
@@ -330,6 +343,10 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentDownloadName = msg.VideoName
 		case "transcoding":
 			m.currentTranscodeName = msg.VideoName
+			// Download is done for this item — clear the prefetch lane
+			if m.currentDownloadName == msg.VideoName {
+				m.currentDownloadName = ""
+			}
 		case "uploading":
 			m.currentUploadName = msg.VideoName
 		case "idle":
@@ -374,7 +391,7 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if msg.Err != nil {
 			m.failedCount++
-			m.failedVideos = append(m.failedVideos, completedName)
+			m.failedVideos = append(m.failedVideos, failureEntry{Name: completedName, Err: msg.Err.Error()})
 			msgStr := fmt.Sprintf("%s - Failed %s: %v", timeStr, completedName, msg.Err)
 			m.addLog(msgStr)
 			logFailure(msgStr)
@@ -384,6 +401,7 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.SkipReason != "" {
 				reason = msg.SkipReason
 			}
+			m.skippedVideos = append(m.skippedVideos, skippedVideo{Name: completedName, Reason: reason})
 			m.addLog(fmt.Sprintf("%s - Skipped %s (%s)", timeStr, completedName, reason))
 		} else {
 			m.addLog(fmt.Sprintf("%s - Completed %s (Saved %.2f MB)", timeStr, completedName, float64(msg.SavedBytes)/1024/1024))
@@ -741,6 +759,7 @@ func (m *AppModel) updateBrowser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.failedCount = 0
 			m.totalSavedBytes = 0
 			m.failedVideos = nil
+			m.skippedVideos = nil
 			m.ctx, m.cancelCtx = context.WithCancel(context.Background())
 			m.pipelineChan = make(chan interface{}, 200)
 			go m.pipeline.Run(m.ctx, toProcess, m.pipelineChan)
@@ -931,7 +950,7 @@ func (m *AppModel) updateSummary(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			var toRetry []immich.Asset
 			for _, v := range m.videos {
 				for _, f := range m.failedVideos {
-					if v.OriginalFileName == f {
+					if v.OriginalFileName == f.Name {
 						toRetry = append(toRetry, v)
 					}
 				}
