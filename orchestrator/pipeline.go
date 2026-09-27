@@ -65,7 +65,7 @@ func (p *Pipeline) Client() *immich.Client {
 func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- interface{}) {
 	defer close(ch)
 	if len(videos) == 0 {
-		ch <- PipelineDoneMsg{0, nil}
+		ch <- PipelineDoneMsg{}
 		return
 	}
 
@@ -116,16 +116,30 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 			continue
 		}
 
+		// Check for user cancellation before starting a new video.
 		select {
 		case <-ctx.Done():
 			_ = state.SaveSession(sess)
-			ch <- PipelineDoneMsg{totalSavedBytes, ctx.Err()}
+			ch <- PipelineDoneMsg{TotalSavedBytes: totalSavedBytes, Paused: true}
 			return
 		default:
 		}
 
 		ch <- PipelineVideoStartMsg{VideoID: v.ID, Size: v.GetSize()}
 		saved, skipped, err := p.processVideo(ctx, v, albumID, ch)
+
+		// If the context was cancelled, the current video is interrupted mid-flight.
+		// Treat it as still-pending (not failed) so it will be retried on resume.
+		if ctx.Err() != nil {
+			if vState, ok := sess.Videos[v.ID]; ok {
+				vState.Status = state.StatusPending
+				vState.ErrorMessage = ""
+			}
+			_ = state.SaveSession(sess)
+			// Do NOT emit a VideoCompleteMsg with an error – just pause silently.
+			ch <- PipelineDoneMsg{TotalSavedBytes: totalSavedBytes, Paused: true}
+			return
+		}
 
 		if vState, ok := sess.Videos[v.ID]; ok {
 			if err != nil {
@@ -145,12 +159,14 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		totalSavedBytes += saved
 	}
 
+	// All videos done cleanly – clear session only if nothing is pending/failed.
 	if sess.PendingCount() == 0 && sess.FailedCount() == 0 {
 		_ = state.ClearSession()
 	}
 
-	ch <- PipelineDoneMsg{TotalSavedBytes: totalSavedBytes, Err: nil}
+	ch <- PipelineDoneMsg{TotalSavedBytes: totalSavedBytes}
 }
+
 
 func (p *Pipeline) processVideo(ctx context.Context, v immich.Asset, albumID string, ch chan<- interface{}) (int64, bool, error) {
 	origPath := filepath.Join(p.tempDir, fmt.Sprintf("orig_%s.mp4", v.ID))

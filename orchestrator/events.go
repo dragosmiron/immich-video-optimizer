@@ -12,7 +12,7 @@ type PipelineVideoStartMsg struct {
 }
 
 type PipelineProgressMsg struct {
-	VideoID string
+	VideoID        string
 	EngineProgress engine.Progress
 }
 
@@ -26,4 +26,5 @@ type PipelineVideoCompleteMsg struct {
 type PipelineDoneMsg struct {
 	TotalSavedBytes int64
 	Err             error
+	Paused          bool // true when the user cancelled via Q; session is preserved for resume
 }

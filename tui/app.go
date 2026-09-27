@@ -117,7 +117,6 @@ type AppModel struct {
 	cancelCtx               context.CancelFunc
 	pipelineChan            chan interface{}
 	overallProgress         progress.Model
-	videoProgress           progress.Model
 	logMessages             []string
 	totalVideos             int
 	processedVideos         int
@@ -130,7 +129,6 @@ type AppModel struct {
 	currentVideoResolution  string
 	fps                     float64
 	speed                   string
-	eta                     string
 	failedVideos            []string
 }
 
@@ -198,7 +196,6 @@ func NewAppModel(cfg *config.Config, pipeline *orchestrator.Pipeline) *AppModel 
 	t.SetStyles(ts)
 
 	op := progress.New(progress.WithDefaultGradient())
-	vp := progress.New(progress.WithDefaultGradient())
 
 	return &AppModel{
 		state:          initialState,
@@ -215,7 +212,6 @@ func NewAppModel(cfg *config.Config, pipeline *orchestrator.Pipeline) *AppModel 
 		resolutions:    []string{"Original", "4K", "1440p", "1080p", "720p"},
 		presets:        []string{"Ultrafast", "Fast", "Medium", "Slow"},
 		overallProgress: op,
-		videoProgress:  vp,
 	}
 }
 
@@ -233,7 +229,6 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.overallProgress.Width = msg.Width - 6
-		m.videoProgress.Width = msg.Width - 6
 
 		availFilenameWidth := msg.Width - 4 - 12 - 14 - 8
 		if availFilenameWidth > 20 {
@@ -301,24 +296,18 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 		}
-		cmd := m.videoProgress.SetPercent(0)
 		m.logMessages = append(m.logMessages, fmt.Sprintf("%s - Started processing %s", time.Now().Format("15:04:05"), m.currentVideoName))
-		return m, tea.Batch(cmd, waitForPipeline(m.pipelineChan))
+		return m, waitForPipeline(m.pipelineChan)
 
 	case orchestrator.PipelineProgressMsg:
 		m.fps = msg.EngineProgress.FPS
 		m.speed = msg.EngineProgress.Speed
-		m.eta = msg.EngineProgress.Time
-		cmd := m.videoProgress.SetPercent(0.5)
-		return m, tea.Batch(cmd, waitForPipeline(m.pipelineChan))
+		return m, waitForPipeline(m.pipelineChan)
 
 	case progress.FrameMsg:
-		progressModel, cmd := m.videoProgress.Update(msg)
-		m.videoProgress = progressModel.(progress.Model)
-
 		progressModel2, cmd2 := m.overallProgress.Update(msg)
 		m.overallProgress = progressModel2.(progress.Model)
-		return m, tea.Batch(cmd, cmd2)
+		return m, cmd2
 
 	case orchestrator.PipelineVideoCompleteMsg:
 		m.processedVideos++
@@ -346,7 +335,14 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, waitForPipeline(m.pipelineChan))
 
 	case orchestrator.PipelineDoneMsg:
-		m.state = ViewSummary
+		if msg.Paused {
+			// User pressed Q — reload fresh session state from disk so counts are accurate
+			sess, _ := state.LoadSession()
+			m.session = sess
+			m.state = ViewResumePrompt
+		} else {
+			m.state = ViewSummary
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -650,11 +646,9 @@ func (m *AppModel) updateBrowser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// When the threshold row is focused and user is typing into it,
-	// only allow Esc/Tab/Up/Down to leave — everything else feeds the input.
+	// Enter confirms the value; everything else feeds the input.
 	if m.settingCursor == 3 && m.thresholdInput.Focused() {
-		switch msg.String() {
-		case "esc":
-			// Save & return
+		if msg.String() == "enter" {
 			m.thresholdInput.Blur()
 			thresh := strings.TrimSpace(m.thresholdInput.Value())
 			if thresh == "" {
@@ -662,32 +656,7 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.thresholdInput.SetValue(thresh)
 			}
 			m.cfg.SizeThreshold = thresh
-			_ = config.SaveConfig(m.cfg)
-			if len(m.videos) > 0 {
-				m.state = ViewBrowser
-			} else {
-				m.state = ViewScanPrompt
-			}
-		case "tab", "down", "j":
-			m.thresholdInput.Blur()
-			thresh := strings.TrimSpace(m.thresholdInput.Value())
-			if thresh == "" {
-				thresh = "500"
-				m.thresholdInput.SetValue(thresh)
-			}
-			m.cfg.SizeThreshold = thresh
-		case "up", "k":
-			m.thresholdInput.Blur()
-			thresh := strings.TrimSpace(m.thresholdInput.Value())
-			if thresh == "" {
-				thresh = "500"
-				m.thresholdInput.SetValue(thresh)
-			}
-			m.cfg.SizeThreshold = thresh
-			if m.settingCursor > 0 {
-				m.settingCursor--
-			}
-		default:
+		} else {
 			var cmd tea.Cmd
 			m.thresholdInput, cmd = m.thresholdInput.Update(msg)
 			return m, cmd
@@ -765,8 +734,8 @@ func (m *AppModel) updateDashboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cancelCtx != nil {
 			m.cancelCtx()
 		}
-		m.logMessages = append(m.logMessages, "Pausing pipeline safely...")
-		return m, nil
+		// The pipeline will emit PipelineDoneMsg{Paused:true} shortly;
+		// that handler will transition to ViewResumePrompt.
 	}
 	return m, nil
 }
@@ -1075,7 +1044,7 @@ func (m *AppModel) viewSettings() string {
 	// Row 3 — Size Threshold (typeable)
 	b.WriteString(cursor(3) + "Size Threshold (MB): ")
 	if isFocused(3) && m.thresholdInput.Focused() {
-		b.WriteString(m.thresholdInput.View() + "  " + styles.Subtext.Render("[Type a number, then Tab/↓ or Esc to confirm]") + "\n")
+		b.WriteString(m.thresholdInput.View() + "  " + styles.Subtext.Render("[Enter] to confirm") + "\n")
 		b.WriteString(styles.Subtext.Render("    └ "+descriptions[3]) + "\n")
 	} else if isFocused(3) {
 		b.WriteString(styles.Value.Render(m.cfg.SizeThreshold+" MB") + "  " + styles.Subtext.Render("[Enter] to edit") + "\n")
@@ -1108,23 +1077,23 @@ func (m *AppModel) viewDashboard() string {
 	b.WriteString(styles.SectionHeader.Render("Current Video:"))
 	b.WriteString("\n")
 	if m.currentVideoName != "" {
-		b.WriteString(fmt.Sprintf("  File:       %s\n", styles.Value.Render(m.currentVideoName)))
+		b.WriteString(fmt.Sprintf("  File:         %s\n", styles.Value.Render(m.currentVideoName)))
 		if m.currentVideoOriginalSize > 0 {
-			b.WriteString(fmt.Sprintf("  Size & Res: %.2f MB  |  %s\n",
+			b.WriteString(fmt.Sprintf("  Size & Res:   %.2f MB  |  %s\n",
 				float64(m.currentVideoOriginalSize)/(1024*1024),
 				m.currentVideoResolution,
+			))
+		}
+		if m.speed != "" {
+			b.WriteString(fmt.Sprintf("  Speed:        %s  |  FPS: %.1f\n",
+				styles.Value.Render(m.speed),
+				m.fps,
 			))
 		}
 	} else {
 		b.WriteString("  Preparing next video...\n")
 	}
-	b.WriteString(m.videoProgress.View())
 	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("  Speed: %s  |  FPS: %.1f  |  ETA: %s\n\n",
-		styles.Value.Render(m.speed),
-		m.fps,
-		styles.Value.Render(m.eta),
-	))
 
 	// Activity Log
 	b.WriteString(styles.SectionHeader.Render("Recent Activity:"))
@@ -1138,7 +1107,7 @@ func (m *AppModel) viewDashboard() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(styles.Subtext.Render("[q] Pause & Save Session (safely stops after current task)"))
+	b.WriteString(styles.Subtext.Render("[q] Pause — cancels current video and saves progress for resume"))
 	return b.String()
 }
 

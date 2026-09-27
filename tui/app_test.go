@@ -145,7 +145,6 @@ func TestAppModel_DynamicDisplayInDashboard(t *testing.T) {
 	m.currentVideoName = "GOPR0001.MP4"
 	m.speed = "7.2x"
 	m.fps = 215.0
-	m.eta = "00:00:20"
 
 	view := m.View()
 
