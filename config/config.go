@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -20,6 +21,18 @@ type Config struct {
 	SkipHEVC           bool   `mapstructure:"skip_hevc"`
 	ConcurrentEncoders int    `mapstructure:"concurrent_encoders"`
 	EnablePrefetch     bool   `mapstructure:"enable_prefetch"`
+}
+
+// SizeThresholdBytes returns the size threshold parsed as bytes.
+func (c *Config) SizeThresholdBytes() int64 {
+	if c == nil {
+		return 0
+	}
+	mb, err := strconv.ParseInt(strings.TrimSpace(c.SizeThreshold), 10, 64)
+	if err != nil || mb < 0 {
+		return 0
+	}
+	return mb * 1024 * 1024
 }
 
 func DefaultConfig() *Config {

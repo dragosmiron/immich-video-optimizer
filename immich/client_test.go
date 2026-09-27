@@ -12,6 +12,36 @@ import (
 	"time"
 )
 
+type testRoundTripper struct {
+	handler http.Handler
+}
+
+func (tr *testRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	ctx := req.Context()
+	done := make(chan struct{})
+	rec := httptest.NewRecorder()
+
+	go func() {
+		tr.handler.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-done:
+		return rec.Result(), nil
+	}
+}
+
+func newTestClient(server *httptest.Server, apiKey string) *Client {
+	c := NewClient(server.URL, apiKey)
+	c.SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: server.Config.Handler},
+	})
+	return c
+}
+
 func TestNewClient(t *testing.T) {
 	c := NewClient("http://localhost", "dummy-key")
 	if c.baseURL != "http://localhost" {
@@ -56,7 +86,7 @@ func TestQueryVideoAssets(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "secret")
+	client := newTestClient(server, "secret")
 
 	// Test success
 	videos, err := client.QueryVideoAssets(800)
@@ -68,7 +98,7 @@ func TestQueryVideoAssets(t *testing.T) {
 	}
 
 	// Test unauthorized
-	badClient := NewClient(server.URL, "wrong")
+	badClient := newTestClient(server, "wrong")
 	_, err = badClient.QueryVideoAssets(800)
 	if err == nil {
 		t.Fatal("Expected error, got nil")
@@ -95,7 +125,7 @@ func TestCreateTrackingAlbum(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "secret")
+	client := newTestClient(server, "secret")
 	album, err := client.CreateTrackingAlbum("Test Album")
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -122,7 +152,7 @@ func TestAddAssetsToAlbum(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "secret")
+	client := newTestClient(server, "secret")
 	err := client.AddAssetsToAlbum("album-1", []string{"1", "2"})
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -141,7 +171,7 @@ func TestDownloadAsset(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "secret")
+	client := newTestClient(server, "secret")
 
 	tmpFile := filepath.Join(t.TempDir(), "out.mp4")
 	err := client.DownloadAsset("asset-1", tmpFile)
@@ -189,7 +219,7 @@ func TestUploadReplacementAsset(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "secret")
+	client := newTestClient(server, "secret")
 
 	tmpFile := filepath.Join(t.TempDir(), "dummy.mp4")
 	os.WriteFile(tmpFile, []byte("dummy file"), 0644)
@@ -218,7 +248,7 @@ func TestDeleteAsset(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "secret")
+	client := newTestClient(server, "secret")
 	err := client.DeleteAsset("asset-1")
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -232,7 +262,7 @@ func TestTimeout(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "secret")
+	client := newTestClient(server, "secret")
 	client.SetTimeout(10 * time.Millisecond)
 
 	_, err := client.QueryVideoAssets(100)
@@ -251,7 +281,7 @@ func TestErrors(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "secret")
+	client := newTestClient(server, "secret")
 	err := client.DeleteAsset("asset-1")
 	if err == nil {
 		t.Fatal("Expected error, got nil")

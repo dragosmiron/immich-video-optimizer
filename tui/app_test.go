@@ -30,6 +30,15 @@ func TestAppModel_InitialRouting(t *testing.T) {
 	if modelValid.state != ViewTestingConnection {
 		t.Fatalf("expected ViewTestingConnection, got %v", modelValid.state)
 	}
+
+	// 3. WithInitialView option overrides default routing
+	modelOverridden := NewAppModel(cfgValid, pipelineValid, WithInitialView(ViewConnectionSetup))
+	if modelOverridden.state != ViewConnectionSetup {
+		t.Fatalf("expected ViewConnectionSetup via WithInitialView, got %v", modelOverridden.state)
+	}
+	if modelOverridden.cfg.URL != "http://localhost:2283" {
+		t.Fatalf("expected URL to be preserved, got %s", modelOverridden.cfg.URL)
+	}
 }
 
 func TestAppModel_ConnectionTested(t *testing.T) {

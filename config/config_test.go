@@ -86,3 +86,30 @@ func TestSaveConfig_MkdirError(t *testing.T) {
 		t.Errorf("Expected error when MkdirAll fails")
 	}
 }
+
+func TestConfig_SizeThresholdBytes(t *testing.T) {
+	tests := []struct {
+		threshold string
+		expected  int64
+	}{
+		{"500", 500 * 1024 * 1024},
+		{"1024", 1024 * 1024 * 1024},
+		{"0", 0},
+		{"", 0},
+		{"invalid", 0},
+		{"-10", 0},
+	}
+
+	for _, tt := range tests {
+		cfg := &Config{SizeThreshold: tt.threshold}
+		if got := cfg.SizeThresholdBytes(); got != tt.expected {
+			t.Errorf("SizeThresholdBytes() for %q = %d, expected %d", tt.threshold, got, tt.expected)
+		}
+	}
+
+	var nilCfg *Config
+	if got := nilCfg.SizeThresholdBytes(); got != 0 {
+		t.Errorf("nil Config SizeThresholdBytes() = %d, expected 0", got)
+	}
+}
+

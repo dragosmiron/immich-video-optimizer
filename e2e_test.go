@@ -14,6 +14,28 @@ import (
 	"immich-video-optimizer/immich"
 )
 
+type testRoundTripper struct {
+	handler http.Handler
+}
+
+func (tr *testRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	ctx := req.Context()
+	done := make(chan struct{})
+	rec := httptest.NewRecorder()
+
+	go func() {
+		tr.handler.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-done:
+		return rec.Result(), nil
+	}
+}
+
 // TestE2EWorkflow tests the full end-to-end integration between configuration,
 // Immich mock API server, asset discovery, album creation, download, upload, and deletion.
 func TestE2EWorkflow(t *testing.T) {
@@ -129,6 +151,9 @@ func TestE2EWorkflow(t *testing.T) {
 
 	// 3. Immich Client Integration Workflow
 	client := immich.NewClient(loadedCfg.URL, loadedCfg.APIKey)
+	client.SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: server.Config.Handler},
+	})
 	client.SetTimeout(5 * time.Second)
 
 	// Step A: Query large videos exceeding 500 MB (500 * 1024 * 1024 bytes)

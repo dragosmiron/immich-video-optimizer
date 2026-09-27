@@ -20,18 +20,18 @@ func main() {
 		cfg = config.DefaultConfig()
 	}
 
-	if *configFlag {
-		// If user explicitly ran with -config, clear URL to trigger setup view immediately
-		cfg.URL = ""
-	}
-
 	pipeline, err := orchestrator.NewPipeline(cfg)
 	if err != nil {
 		fmt.Printf("Failed to initialize pipeline: %v\n", err)
 		os.Exit(1)
 	}
 
-	if err := tui.RunTUI(cfg, pipeline); err != nil {
+	var opts []tui.Option
+	if *configFlag {
+		opts = append(opts, tui.WithInitialView(tui.ViewConnectionSetup))
+	}
+
+	if err := tui.RunTUI(cfg, pipeline, opts...); err != nil {
 		fmt.Printf("TUI failed: %v\n", err)
 		os.Exit(1)
 	}

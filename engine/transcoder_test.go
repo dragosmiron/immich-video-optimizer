@@ -106,3 +106,25 @@ func TestScanFFmpegOutput(t *testing.T) {
 		t.Errorf("expected frames %v, got %v", expected, frames)
 	}
 }
+
+func TestScanFFmpegOutput_KeyValueProgress(t *testing.T) {
+	output := "frame=150\nfps=45.5\nout_time=00:00:05.000\nbitrate=2500kbits/s\nspeed=2.5x\nprogress=continue\n" +
+		"frame=300\nfps=46.0\nout_time=00:00:10.000\nbitrate=2400kbits/s\nspeed=2.6x\nprogress=end\n"
+	reader := strings.NewReader(output)
+
+	var reports []Progress
+	ScanFFmpegOutput(reader, func(p Progress) {
+		reports = append(reports, p)
+	})
+
+	if len(reports) != 2 {
+		t.Fatalf("expected 2 progress reports, got %d", len(reports))
+	}
+	if reports[0].Frame != 150 || reports[0].FPS != 45.5 || reports[0].Time != "00:00:05.000" || reports[0].Bitrate != "2500kbits/s" || reports[0].Speed != "2.5" {
+		t.Errorf("unexpected first report: %+v", reports[0])
+	}
+	if reports[1].Frame != 300 || reports[1].FPS != 46.0 || reports[1].Time != "00:00:10.000" || reports[1].Bitrate != "2400kbits/s" || reports[1].Speed != "2.6" {
+		t.Errorf("unexpected second report: %+v", reports[1])
+	}
+}
+

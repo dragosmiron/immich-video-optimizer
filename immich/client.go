@@ -51,6 +51,18 @@ func (c *Client) SetTimeout(d time.Duration) {
 	c.httpClient.Timeout = d
 }
 
+// SetHTTPClient sets the underlying HTTP client (e.g. for custom transports or testing).
+func (c *Client) SetHTTPClient(client *http.Client) {
+	if client != nil {
+		c.httpClient = client
+	}
+}
+
+// HTTPClient returns the underlying HTTP client.
+func (c *Client) HTTPClient() *http.Client {
+	return c.httpClient
+}
+
 // BaseURL returns the configured base URL of the Immich server
 func (c *Client) BaseURL() string {
 	return c.baseURL

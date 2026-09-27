@@ -18,21 +18,11 @@ var (
 		MarginTop(1).
 		MarginBottom(1)
 
-	Text = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
 	Subtext = lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8"))
 
-	SelectedRow = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E"))
-	NormalRow = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
-	
 	ErrorText = lipgloss.NewStyle().Foreground(lipgloss.Color("#EF4444")).Bold(true)
 	SuccessText = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Bold(true)
 	WarningText = lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")).Bold(true)
-
-	Box = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#3B82F6")).
-		Padding(1, 2).
-		MarginBottom(1)
 
 	SummaryBox = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -53,12 +43,5 @@ var (
 		Bold(true).
 		MarginTop(1)
 
-	KeyBadge = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#E2E8F0")).
-		Background(lipgloss.Color("#1E293B")).
-		Padding(0, 1).
-		Bold(true)
-
-	Label = lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8")).Width(20)
 	Value = lipgloss.NewStyle().Foreground(lipgloss.Color("#F8FAFC")).Bold(true)
 )
