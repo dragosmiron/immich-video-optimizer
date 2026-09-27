@@ -201,6 +201,19 @@ func TestAppModel_SettingsNavigation(t *testing.T) {
 	if model.cfg.SizeGuard != false {
 		t.Errorf("expected SizeGuard to be toggled to false")
 	}
+
+	// Move cursor down to SkipHEVC and toggle
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = newM.(*AppModel)
+	if model.settingCursor != 3 {
+		t.Errorf("expected settingCursor 3 for SkipHEVC, got %d", model.settingCursor)
+	}
+	initialSkip := model.cfg.SkipHEVC
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	model = newM.(*AppModel)
+	if model.cfg.SkipHEVC != !initialSkip {
+		t.Errorf("expected SkipHEVC to toggle from %v to %v", initialSkip, !initialSkip)
+	}
 }
 
 func TestAppModel_ResumePromptOptions(t *testing.T) {

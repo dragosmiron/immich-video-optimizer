@@ -20,6 +20,7 @@ type PipelineVideoCompleteMsg struct {
 	VideoID    string
 	SavedBytes int64
 	Skipped    bool
+	SkipReason string
 	Err        error
 }
 

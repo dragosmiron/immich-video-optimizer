@@ -49,6 +49,16 @@ func (c *Client) SetTimeout(d time.Duration) {
 	c.httpClient.Timeout = d
 }
 
+// BaseURL returns the configured base URL of the Immich server
+func (c *Client) BaseURL() string {
+	return c.baseURL
+}
+
+// APIKey returns the configured API key for authentication
+func (c *Client) APIKey() string {
+	return c.apiKey
+}
+
 // ValidateConnection checks if the server is reachable and API key is valid.
 // Uses a short 8-second timeout so the user gets a quick error on bad URLs.
 func (c *Client) ValidateConnection() error {

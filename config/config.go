@@ -17,6 +17,7 @@ type Config struct {
 	Resolution    string `mapstructure:"resolution"`
 	Preset        string `mapstructure:"preset"`
 	SizeGuard     bool   `mapstructure:"size_guard"`
+	SkipHEVC      bool   `mapstructure:"skip_hevc"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -32,6 +33,7 @@ func LoadConfig() (*Config, error) {
 	v.SetDefault("resolution", "Original")
 	v.SetDefault("preset", "Medium")
 	v.SetDefault("size_guard", true)
+	v.SetDefault("skip_hevc", true)
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, err
@@ -64,6 +66,7 @@ func SaveConfig(cfg *Config) error {
 	v.Set("resolution", cfg.Resolution)
 	v.Set("preset", cfg.Preset)
 	v.Set("size_guard", cfg.SizeGuard)
+	v.Set("skip_hevc", cfg.SkipHEVC)
 
 	home, err := userHomeDir()
 	if err != nil {

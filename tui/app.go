@@ -321,7 +321,11 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			logFailure(msgStr)
 		} else if msg.Skipped {
 			m.skippedCount++
-			m.logMessages = append(m.logMessages, fmt.Sprintf("%s - Skipped %s (Size Guard: transcoded was larger)", timeStr, m.currentVideoName))
+			reason := "already HEVC"
+			if msg.SkipReason != "" {
+				reason = msg.SkipReason
+			}
+			m.logMessages = append(m.logMessages, fmt.Sprintf("%s - Skipped %s (%s)", timeStr, m.currentVideoName, reason))
 		} else {
 			m.logMessages = append(m.logMessages, fmt.Sprintf("%s - Completed %s (Saved %.2f MB)", timeStr, m.currentVideoName, float64(msg.SavedBytes)/1024/1024))
 		}
@@ -691,7 +695,7 @@ func (m *AppModel) updateBrowser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// When the threshold row is focused and user is typing into it,
 	// Enter confirms the value; everything else feeds the input.
-	if m.settingCursor == 3 && m.thresholdInput.Focused() {
+	if m.settingCursor == 4 && m.thresholdInput.Focused() {
 		if msg.String() == "enter" {
 			m.thresholdInput.Blur()
 			thresh := strings.TrimSpace(m.thresholdInput.Value())
@@ -723,7 +727,7 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "down", "j":
-		if m.settingCursor < 3 {
+		if m.settingCursor < 4 {
 			m.settingCursor++
 		}
 
@@ -742,6 +746,10 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
+		} else if m.settingCursor == 2 {
+			m.cfg.SizeGuard = !m.cfg.SizeGuard
+		} else if m.settingCursor == 3 {
+			m.cfg.SkipHEVC = !m.cfg.SkipHEVC
 		}
 
 	case "right", "l":
@@ -759,12 +767,18 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
+		} else if m.settingCursor == 2 {
+			m.cfg.SizeGuard = !m.cfg.SizeGuard
+		} else if m.settingCursor == 3 {
+			m.cfg.SkipHEVC = !m.cfg.SkipHEVC
 		}
 
 	case " ", "enter":
 		if m.settingCursor == 2 {
 			m.cfg.SizeGuard = !m.cfg.SizeGuard
 		} else if m.settingCursor == 3 {
+			m.cfg.SkipHEVC = !m.cfg.SkipHEVC
+		} else if m.settingCursor == 4 {
 			// Activate the threshold text input
 			return m, m.thresholdInput.Focus()
 		}
@@ -921,7 +935,12 @@ func (m *AppModel) viewScanPrompt() string {
 	if !m.cfg.SizeGuard {
 		sgText = "Disabled"
 	}
-	b.WriteString(fmt.Sprintf("  • Size Guard:     %s\n\n", styles.Value.Render(sgText)))
+	b.WriteString(fmt.Sprintf("  • Size Guard:     %s\n", styles.Value.Render(sgText)))
+	hevcText := "Enabled (skips videos already in HEVC format)"
+	if !m.cfg.SkipHEVC {
+		hevcText = "Disabled"
+	}
+	b.WriteString(fmt.Sprintf("  • Skip HEVC:      %s\n\n", styles.Value.Render(hevcText)))
 
 	b.WriteString(styles.SectionHeader.Render("Ready to Scan:"))
 	b.WriteString("\nNo videos loaded yet. Start a scan to discover large videos on your server.\n\n")
@@ -1055,7 +1074,15 @@ func (m *AppModel) viewSettings() string {
 			return "OFF — The transcoded file will always replace the original, even if it is larger.\n" +
 				"       Use this only if you need a specific codec regardless of file size."
 		}(),
-		// 3 — Size Threshold
+		// 3 — Skip HEVC
+		func() string {
+			if m.cfg.SkipHEVC {
+				return "ON  — Videos already encoded in HEVC/H.265 format are skipped to avoid\n" +
+					"       unnecessary re-encoding."
+			}
+			return "OFF — All eligible videos will be processed and re-encoded, even if already HEVC."
+		}(),
+		// 4 — Size Threshold
 		"Minimum file size a video must exceed before it is included in the scan.\n" +
 			"  Videos smaller than this threshold are skipped entirely.\n" +
 			"  A good starting point is 500 MB. Raise it to skip already-small videos.",
@@ -1100,14 +1127,24 @@ func (m *AppModel) viewSettings() string {
 		sgState+"  [Space / Enter] to toggle",
 	)
 
-	// Row 3 — Size Threshold (typeable)
-	b.WriteString(cursor(3) + "Size Threshold (MB): ")
-	if isFocused(3) && m.thresholdInput.Focused() {
+	// Row 3 — Skip HEVC
+	hevcState := "[✓] ON"
+	if !m.cfg.SkipHEVC {
+		hevcState = "[ ] OFF"
+	}
+	writeRow(3,
+		"Skip HEVC Videos:    ",
+		hevcState+"  [Space / Enter] to toggle",
+	)
+
+	// Row 4 — Size Threshold (typeable)
+	b.WriteString(cursor(4) + "Size Threshold (MB): ")
+	if isFocused(4) && m.thresholdInput.Focused() {
 		b.WriteString(m.thresholdInput.View() + "  " + styles.Subtext.Render("[Enter] to confirm") + "\n")
-		b.WriteString(styles.Subtext.Render("    └ "+descriptions[3]) + "\n")
-	} else if isFocused(3) {
+		b.WriteString(styles.Subtext.Render("    └ "+descriptions[4]) + "\n")
+	} else if isFocused(4) {
 		b.WriteString(styles.Value.Render(m.cfg.SizeThreshold+" MB") + "  " + styles.Subtext.Render("[Enter] to edit") + "\n")
-		b.WriteString(styles.Subtext.Render("    └ "+descriptions[3]) + "\n")
+		b.WriteString(styles.Subtext.Render("    └ "+descriptions[4]) + "\n")
 	} else {
 		b.WriteString(styles.Value.Render(m.cfg.SizeThreshold+" MB") + "\n")
 	}

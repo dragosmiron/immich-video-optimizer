@@ -126,7 +126,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		}
 
 		ch <- PipelineVideoStartMsg{VideoID: v.ID, Size: v.GetSize()}
-		saved, skipped, err := p.processVideo(ctx, v, albumID, ch)
+		saved, skipped, skipReason, err := p.processVideo(ctx, v, albumID, ch)
 
 		// If the context was cancelled, the current video is interrupted mid-flight.
 		// Treat it as still-pending (not failed) so it will be retried on resume.
@@ -155,7 +155,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 			_ = state.SaveSession(sess)
 		}
 
-		ch <- PipelineVideoCompleteMsg{VideoID: v.ID, SavedBytes: saved, Skipped: skipped, Err: err}
+		ch <- PipelineVideoCompleteMsg{VideoID: v.ID, SavedBytes: saved, Skipped: skipped, SkipReason: skipReason, Err: err}
 		totalSavedBytes += saved
 	}
 
@@ -167,15 +167,33 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 	ch <- PipelineDoneMsg{TotalSavedBytes: totalSavedBytes}
 }
 
+func (p *Pipeline) processVideo(ctx context.Context, v immich.Asset, albumID string, ch chan<- interface{}) (int64, bool, string, error) {
+	if p.cfg.SkipHEVC {
+		// 1. Fast remote probe first to save bandwidth and disk I/O
+		remoteURL := fmt.Sprintf("%s/api/assets/%s/original", p.client.BaseURL(), v.ID)
+		probeCtx, probeCancel := context.WithTimeout(ctx, 4*time.Second)
+		isHEVC, err := engine.ProbeRemoteHEVC(probeCtx, p.binaries.FFmpegPath, remoteURL, p.client.APIKey())
+		probeCancel()
+		if err == nil && isHEVC {
+			return 0, true, "already HEVC", nil
+		}
+	}
 
-func (p *Pipeline) processVideo(ctx context.Context, v immich.Asset, albumID string, ch chan<- interface{}) (int64, bool, error) {
 	origPath := filepath.Join(p.tempDir, fmt.Sprintf("orig_%s.mp4", v.ID))
 	transcodedPath := filepath.Join(p.tempDir, fmt.Sprintf("opt_%s.mp4", v.ID))
 	defer os.Remove(origPath)
 	defer os.Remove(transcodedPath)
 
 	if err := p.client.DownloadAsset(v.ID, origPath); err != nil {
-		return 0, false, fmt.Errorf("download failed: %w", err)
+		return 0, false, "", fmt.Errorf("download failed: %w", err)
+	}
+
+	if p.cfg.SkipHEVC {
+		// 2. Local probe on downloaded file in case remote probe failed or was inconclusive
+		isHEVC, err := engine.IsHEVC(ctx, p.binaries.FFmpegPath, origPath)
+		if err == nil && isHEVC {
+			return 0, true, "already HEVC", nil
+		}
 	}
 
 	opts := engine.TranscodeOptions{
@@ -193,25 +211,25 @@ func (p *Pipeline) processVideo(ctx context.Context, v immich.Asset, albumID str
 	}
 
 	if err := engine.Transcode(ctx, p.binaries.FFmpegPath, opts, onProgress); err != nil {
-		return 0, false, fmt.Errorf("transcode failed: %w", err)
+		return 0, false, "", fmt.Errorf("transcode failed: %w", err)
 	}
 
 	if err := engine.CopyMetadata(ctx, p.binaries.ExifToolPath, origPath, transcodedPath); err != nil {
-		return 0, false, fmt.Errorf("metadata copy failed: %w", err)
+		return 0, false, "", fmt.Errorf("metadata copy failed: %w", err)
 	}
 
 	optStat, err := os.Stat(transcodedPath)
 	if err != nil {
-		return 0, false, fmt.Errorf("failed to stat transcoded file: %w", err)
+		return 0, false, "", fmt.Errorf("failed to stat transcoded file: %w", err)
 	}
 
 	if p.cfg.SizeGuard && optStat.Size() >= v.GetSize() {
-		return 0, true, nil
+		return 0, true, "transcoded file larger", nil
 	}
 
 	newAsset, err := p.client.UploadReplacementAsset(transcodedPath, v)
 	if err != nil {
-		return 0, false, fmt.Errorf("upload failed: %w", err)
+		return 0, false, "", fmt.Errorf("upload failed: %w", err)
 	}
 
 	if newAsset != nil && newAsset.ID != "" && albumID != "" {
@@ -219,9 +237,9 @@ func (p *Pipeline) processVideo(ctx context.Context, v immich.Asset, albumID str
 	}
 
 	if err := p.client.DeleteAsset(v.ID); err != nil {
-		return 0, false, fmt.Errorf("delete original failed: %w", err)
+		return 0, false, "", fmt.Errorf("delete original failed: %w", err)
 	}
 
 	savedBytes := v.GetSize() - optStat.Size()
-	return savedBytes, false, nil
+	return savedBytes, false, "", nil
 }

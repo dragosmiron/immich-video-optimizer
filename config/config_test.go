@@ -20,6 +20,7 @@ func TestSaveAndLoadConfig(t *testing.T) {
 		URL:           "http://localhost:8080",
 		APIKey:        "secret-key",
 		SizeThreshold: "1024",
+		SkipHEVC:      true,
 	}
 
 	// Test SaveConfig
@@ -40,7 +41,7 @@ func TestSaveAndLoadConfig(t *testing.T) {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
 
-	if loaded.URL != cfg.URL || loaded.APIKey != cfg.APIKey || loaded.SizeThreshold != cfg.SizeThreshold {
+	if loaded.URL != cfg.URL || loaded.APIKey != cfg.APIKey || loaded.SizeThreshold != cfg.SizeThreshold || loaded.SkipHEVC != cfg.SkipHEVC {
 		t.Errorf("Loaded config mismatch: got %v, expected %v", loaded, cfg)
 	}
 }
