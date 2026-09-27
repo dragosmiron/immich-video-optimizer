@@ -364,11 +364,14 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		timeStr := time.Now().Format("15:04:05")
-		completedName := m.currentVideoName
-		for _, v := range m.videos {
-			if v.ID == msg.VideoID {
-				completedName = v.OriginalFileName
-				break
+		completedName := msg.VideoName
+		if completedName == "" {
+			completedName = m.currentVideoName
+			for _, v := range m.videos {
+				if v.ID == msg.VideoID {
+					completedName = v.OriginalFileName
+					break
+				}
 			}
 		}
 		if completedName == "" {

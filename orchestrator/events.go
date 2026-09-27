@@ -25,6 +25,7 @@ type PipelineProgressMsg struct {
 
 type PipelineVideoCompleteMsg struct {
 	VideoID    string
+	VideoName  string
 	SavedBytes int64
 	Skipped    bool
 	SkipReason string

@@ -32,7 +32,7 @@ func TestBuildFFmpegArgs(t *testing.T) {
 				CRF:       28,
 				Preset:    "medium",
 			},
-			expected: []string{"-y", "-i", "in.mp4", "-c:v", "hevc_videotoolbox", "-preset", "medium", "-q:v", "28", "-c:a", "copy", "out.mp4"},
+			expected: []string{"-y", "-i", "in.mp4", "-c:v", "hevc_videotoolbox", "-tag:v", "hvc1", "-allow_sw", "1", "-preset", "medium", "-q:v", "28", "-c:a", "copy", "out.mp4"},
 		},
 		{
 			name: "libx265 with CRF",
@@ -54,7 +54,7 @@ func TestBuildFFmpegArgs(t *testing.T) {
 				AudioCopy:  true,
 				Resolution: "1080p",
 			},
-			expected: []string{"-y", "-i", "in.mp4", "-c:v", "hevc_videotoolbox", "-vf", "scale=-2:'min(ih,1080)'", "-c:a", "copy", "out.mp4"},
+			expected: []string{"-y", "-i", "in.mp4", "-c:v", "hevc_videotoolbox", "-tag:v", "hvc1", "-allow_sw", "1", "-vf", "scale=-2:'min(ih,1080)'", "-c:a", "copy", "out.mp4"},
 		},
 	}
 

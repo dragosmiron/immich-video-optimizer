@@ -42,6 +42,10 @@ func BuildFFmpegArgs(opts TranscodeOptions) []string {
 		"-c:v", opts.Encoder,
 	}
 
+	if opts.Encoder == "hevc_videotoolbox" {
+		args = append(args, "-tag:v", "hvc1", "-allow_sw", "1")
+	}
+
 	if opts.Preset != "" {
 		args = append(args, "-preset", strings.ToLower(opts.Preset))
 	}
