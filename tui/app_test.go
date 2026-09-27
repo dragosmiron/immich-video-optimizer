@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"immich-video-optimizer/config"
 	"immich-video-optimizer/immich"
@@ -272,10 +273,23 @@ func TestAppModel_WindowResizeTable(t *testing.T) {
 	if filenameWidth80 >= filenameWidth120 {
 		t.Errorf("expected Filename column width to shrink from %d in 80-width terminal, got %d", filenameWidth120, filenameWidth80)
 	}
-	view80 := model80.View()
-	if !strings.Contains(view80, "Shortcuts: [Space] Toggle") {
-		t.Errorf("expected shortcuts in view80")
+	rawBrowser := model80.viewBrowser()
+	var headerLine, sepLine string
+	for _, l := range strings.Split(rawBrowser, "\n") {
+		if strings.Contains(l, "Filename") && strings.Contains(l, "Size") && strings.Contains(l, "Resolution") {
+			headerLine = l
+		}
+		if strings.Contains(l, "───") {
+			sepLine = l
+		}
 	}
+	if headerLine == "" {
+		t.Fatalf("expected header line containing Filename, Size, and Resolution")
+	}
+	if lipgloss.Width(headerLine) != lipgloss.Width(sepLine) {
+		t.Errorf("header width (%d) does not match separator width (%d)", lipgloss.Width(headerLine), lipgloss.Width(sepLine))
+	}
+	view80 := model80.View()
 	if !strings.Contains(view80, "[q] Quit") {
 		t.Errorf("expected [q] Quit in view80")
 	}

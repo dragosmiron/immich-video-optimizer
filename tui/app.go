@@ -981,7 +981,7 @@ func (m *AppModel) viewBrowser() string {
 	if m.isSearching {
 		b.WriteString(fmt.Sprintf("Filter: %s  (Press [Enter] or [Esc] to exit search)\n\n", m.searchInput.View()))
 	} else {
-		b.WriteString(styles.Subtext.Render("Press [/] to filter filename  |  [Space] to toggle selection\n\n"))
+		b.WriteString(styles.Subtext.Render("Press [/] to filter filename  |  [Space] to toggle selection") + "\n\n")
 	}
 
 	b.WriteString(m.table.View() + "\n\n")
@@ -1190,7 +1190,7 @@ func (m *AppModel) viewSummary() string {
 		for _, f := range m.failedVideos {
 			b.WriteString("  • " + f + "\n")
 		}
-		b.WriteString(styles.Subtext.Render("Check ~/.config/immich-video-optimizer/failures.log for details.\n\n"))
+		b.WriteString(styles.Subtext.Render("Check ~/.config/immich-video-optimizer/failures.log for details.") + "\n\n")
 		b.WriteString("[ R ] Retry Failed Videos  |  [ Enter / Q ] Exit")
 	} else {
 		b.WriteString(styles.SuccessText.Render("✓ All items optimized successfully without errors!"))
