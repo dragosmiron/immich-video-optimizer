@@ -183,11 +183,12 @@ func NewAppModel(cfg *config.Config, pipeline *orchestrator.Pipeline) *AppModel 
 		table.WithColumns([]table.Column{
 			{Title: "[ ]", Width: 4},
 			{Title: "Filename", Width: 40},
-			{Title: "Size", Width: 12},
-			{Title: "Resolution", Width: 14},
+			{Title: "Size", Width: 11},
+			{Title: "Resolution", Width: 12},
 		}),
 		table.WithFocused(true),
 		table.WithHeight(10),
+		table.WithWidth(75),
 	)
 
 	ts := table.DefaultStyles()
@@ -228,17 +229,15 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.overallProgress.Width = msg.Width - 6
-
-		availFilenameWidth := msg.Width - 4 - 12 - 14 - 8
-		if availFilenameWidth > 20 {
-			m.table.SetColumns([]table.Column{
-				{Title: "[ ]", Width: 4},
-				{Title: "Filename", Width: availFilenameWidth},
-				{Title: "Size", Width: 12},
-				{Title: "Resolution", Width: 14},
-			})
+		progWidth := msg.Width - 10
+		if progWidth > 70 {
+			progWidth = 70
+		} else if progWidth < 20 {
+			progWidth = 20
 		}
+		m.overallProgress.Width = progWidth
+
+		m.resizeTable(msg.Width, msg.Height)
 		return m, nil
 
 	case ConnectionTestedMsg:
@@ -538,6 +537,51 @@ func (m *AppModel) updateResumePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *AppModel) resizeTable(width, height int) {
+	// Base style has Padding(1, 2) which uses 2 spaces left and 2 spaces right (total 4 chars).
+	// Leave an extra 2 chars margin so text never wraps against terminal edges.
+	availWidth := width - 6
+	if availWidth < 36 {
+		availWidth = 36
+	}
+
+	selectColWidth := 4
+	sizeColWidth := 11
+	resColWidth := 12
+
+	if availWidth < 55 {
+		sizeColWidth = 9
+		resColWidth = 10
+	}
+
+	// bubbles/table adds default cell padding of 1 on each side (2 per column = 8 total for 4 columns)
+	tablePadding := 8
+	availFilenameWidth := availWidth - selectColWidth - sizeColWidth - resColWidth - tablePadding
+	if availFilenameWidth < 12 {
+		availFilenameWidth = 12
+	}
+
+	m.table.SetColumns([]table.Column{
+		{Title: "[ ]", Width: selectColWidth},
+		{Title: "Filename", Width: availFilenameWidth},
+		{Title: "Size", Width: sizeColWidth},
+		{Title: "Resolution", Width: resColWidth},
+	})
+
+	totalTableWidth := selectColWidth + availFilenameWidth + sizeColWidth + resColWidth + tablePadding
+	m.table.SetWidth(totalTableWidth)
+
+	if height > 0 {
+		availHeight := height - 16
+		if availHeight < 5 {
+			availHeight = 5
+		} else if availHeight > 25 {
+			availHeight = 25
+		}
+		m.table.SetHeight(availHeight)
+	}
+}
+
 func (m *AppModel) updateTable() {
 	m.filteredVideos = nil
 	q := strings.ToLower(m.searchInput.Value())
@@ -793,7 +837,22 @@ func (m *AppModel) View() string {
 	case ViewSummary:
 		s = m.viewSummary()
 	}
-	return styles.Base.Render(s)
+
+	content := styles.Base.Render(s)
+	if m.width > 0 && m.height > 0 {
+		cw := lipgloss.Width(content)
+		ch := lipgloss.Height(content)
+		targetW := m.width
+		targetH := m.height
+		if cw > targetW {
+			targetW = cw
+		}
+		if ch > targetH {
+			targetH = ch
+		}
+		return lipgloss.Place(targetW, targetH, lipgloss.Center, lipgloss.Center, content)
+	}
+	return content
 }
 
 func (m *AppModel) viewTestingConnection() string {
@@ -894,7 +953,7 @@ func (m *AppModel) renderScanSummary() string {
 	b.WriteString(styles.SectionHeader.Render("📊 Scan Results:"))
 	b.WriteString("\n")
 	b.WriteString(fmt.Sprintf("  • Total assets inspected in library: %d\n", r.TotalAssetsScanned))
-	b.WriteString(fmt.Sprintf("  • Non-video assets skipped:          %d (photos, live photos, RAW images)\n", r.SkippedNonVideo))
+	b.WriteString(fmt.Sprintf("  • Non-video assets skipped:          %d (photos, RAW, etc.)\n", r.SkippedNonVideo))
 	b.WriteString(fmt.Sprintf("  • Videos skipped (below %s MB):      %d\n", m.cfg.SizeThreshold, r.SkippedBelowSize))
 	b.WriteString(fmt.Sprintf("  • Eligible videos found:             %s\n", styles.SuccessText.Render(fmt.Sprintf("%d", len(m.videos)))))
 	return styles.SummaryBox.Render(b.String())
@@ -942,7 +1001,7 @@ func (m *AppModel) viewBrowser() string {
 		float64(selectedBytes)/(1024*1024*1024),
 	))
 
-	b.WriteString(styles.Subtext.Render("Shortcuts: [Space] Toggle | [a] Select All | [n] Select None | [/] Search | [c] Settings | [s] Rescan | [Enter] Start | [q] Quit"))
+	b.WriteString(styles.Subtext.Render("Shortcuts: [Space] Toggle | [a] All | [n] None | [/] Search\n           [c] Settings   | [s] Rescan | [Enter] Start | [q] Quit"))
 	return b.String()
 }
 

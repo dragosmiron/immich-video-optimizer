@@ -234,3 +234,67 @@ func TestAppModel_ResumePromptOptions(t *testing.T) {
 		t.Errorf("expected session to be cleared")
 	}
 }
+
+func TestAppModel_WindowResizeTable(t *testing.T) {
+	cfg := &config.Config{URL: "http://localhost:2283", APIKey: "test-key"}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.state = ViewBrowser
+	m.videos = []immich.Asset{
+		{ID: "v1", OriginalFileName: "super_long_vacation_video_from_summer_trip_in_greece_2024.mp4", ExifInfo: immich.ExifInfo{ExifImageWidth: 3840, ExifImageHeight: 2160, FileSizeInByte: 800 * 1024 * 1024}},
+	}
+	m.updateTable()
+
+	// 1. Wide terminal: 120 width
+	newM, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	model120 := newM.(*AppModel)
+	cols120 := model120.table.Columns()
+	var filenameWidth120 int
+	for _, c := range cols120 {
+		if c.Title == "Filename" {
+			filenameWidth120 = c.Width
+		}
+	}
+	if filenameWidth120 < 70 {
+		t.Errorf("expected Filename column width to expand in wide terminal, got %d", filenameWidth120)
+	}
+
+	// 2. Standard terminal: 80 width
+	newM80, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	model80 := newM80.(*AppModel)
+	cols80 := model80.table.Columns()
+	var filenameWidth80 int
+	for _, c := range cols80 {
+		if c.Title == "Filename" {
+			filenameWidth80 = c.Width
+		}
+	}
+	if filenameWidth80 >= filenameWidth120 {
+		t.Errorf("expected Filename column width to shrink from %d in 80-width terminal, got %d", filenameWidth120, filenameWidth80)
+	}
+	view80 := model80.View()
+	if !strings.Contains(view80, "Shortcuts: [Space] Toggle") {
+		t.Errorf("expected shortcuts in view80")
+	}
+	if !strings.Contains(view80, "[q] Quit") {
+		t.Errorf("expected [q] Quit in view80")
+	}
+
+	// 3. Narrow terminal: 60 width
+	newM60, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 24})
+	model60 := newM60.(*AppModel)
+	cols60 := model60.table.Columns()
+	var filenameWidth60 int
+	for _, c := range cols60 {
+		if c.Title == "Filename" {
+			filenameWidth60 = c.Width
+		}
+	}
+	if filenameWidth60 >= filenameWidth80 {
+		t.Errorf("expected Filename column width to shrink further in 60-width terminal, got %d", filenameWidth60)
+	}
+	view60 := model60.View()
+	if !strings.Contains(view60, "[q] Quit") {
+		t.Errorf("expected [q] Quit in view60")
+	}
+}
