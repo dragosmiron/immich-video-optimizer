@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"immich-video-optimizer/logger"
 )
 
 // CheckHEVCOutput scans ffmpeg -i output for HEVC/H.265 video stream signatures.
@@ -32,9 +34,12 @@ func IsHEVC(ctx context.Context, ffmpegPath string, inputPath string) (bool, err
 	// ffmpeg returns exit status 1 when -i is run with no output file.
 	// We only treat it as an error if the process could not be launched.
 	if err != nil && len(out) == 0 {
+		logger.Error("Local probe failed to execute for %s: %v", inputPath, err)
 		return false, fmt.Errorf("failed to run ffmpeg probe: %w", err)
 	}
-	return CheckHEVCOutput(string(out)), nil
+	isHEVC := CheckHEVCOutput(string(out))
+	logger.Debug("Local probe on %s: isHEVC=%v", inputPath, isHEVC)
+	return isHEVC, nil
 }
 
 // ProbeRemoteHEVC attempts a fast probe of a remote video via HTTP range request
@@ -48,15 +53,19 @@ func ProbeRemoteHEVC(ctx context.Context, ffmpegPath string, assetURL string, ap
 	out, err := cmd.CombinedOutput()
 	outStr := string(out)
 	if CheckHEVCOutput(outStr) {
+		logger.Debug("Remote probe on %s: isHEVC=true", assetURL)
 		return true, nil
 	}
 	// If output contains a Video: stream but it's not HEVC (e.g. h264), it's definitely not HEVC.
 	if strings.Contains(strings.ToLower(outStr), "video:") {
+		logger.Debug("Remote probe on %s: isHEVC=false (non-HEVC video track detected)", assetURL)
 		return false, nil
 	}
 	// If no video stream was detected (network error, auth error, timeout), return error so caller can fallback
 	if err != nil {
+		logger.Debug("Remote probe on %s: failed (%v), falling back to download", assetURL, err)
 		return false, fmt.Errorf("remote probe failed: %w", err)
 	}
+	logger.Debug("Remote probe on %s: isHEVC=false", assetURL)
 	return false, nil
 }

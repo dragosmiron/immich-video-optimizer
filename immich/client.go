@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"immich-video-optimizer/logger"
 )
 
 // APIError represents an error returned by the Immich API
@@ -151,6 +153,7 @@ func (c *Client) doRequest(req *http.Request) (*http.Response, error) {
 	if resp.StatusCode >= 400 {
 		defer resp.Body.Close()
 		body, _ := io.ReadAll(resp.Body)
+		logger.Error("Immich API %s %s returned status %d: %s", req.Method, req.URL.String(), resp.StatusCode, string(body))
 		return nil, &APIError{
 			StatusCode: resp.StatusCode,
 			Message:    string(body),
@@ -276,6 +279,7 @@ func (c *Client) AddAssetsToAlbum(albumID string, assetIDs []string) error {
 // DownloadAssetWithContext downloads the original video stream of an asset with context cancellation
 func (c *Client) DownloadAssetWithContext(ctx context.Context, assetID string, outPath string) error {
 	url := fmt.Sprintf("%s/api/assets/%s/original", c.baseURL, assetID)
+	logger.Debug("Downloading asset %s from %s -> %s", assetID, url, outPath)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -284,18 +288,25 @@ func (c *Client) DownloadAssetWithContext(ctx context.Context, assetID string, o
 
 	resp, err := c.doRequest(req)
 	if err != nil {
+		logger.Error("Download request failed for asset %s: %v", assetID, err)
 		return err
 	}
 	defer resp.Body.Close()
 
 	out, err := os.Create(outPath)
 	if err != nil {
+		logger.Error("Failed to create download target file %s: %v", outPath, err)
 		return err
 	}
 	defer out.Close()
 
-	_, err = io.Copy(out, resp.Body)
-	return err
+	n, err := io.Copy(out, resp.Body)
+	if err != nil {
+		logger.Error("Download stream failed for asset %s after %d bytes: %v", assetID, n, err)
+		return err
+	}
+	logger.Debug("Finished download for asset %s (%d bytes written)", assetID, n)
+	return nil
 }
 
 // DownloadAsset downloads the original video stream of an asset to the specified path
@@ -354,8 +365,10 @@ func (c *Client) UploadReplacementAssetWithContext(ctx context.Context, filePath
 	trailerBuf := bytes.NewBufferString(fmt.Sprintf("\r\n--%s--\r\n", writer.Boundary()))
 	bodyReader := io.MultiReader(headerBuf, file, trailerBuf)
 
+	logger.Debug("Uploading replacement asset for %s (%s, size %d bytes)", orig.OriginalFileName, orig.ID, fileStat.Size())
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/assets", bodyReader)
 	if err != nil {
+		logger.Error("Failed to create upload request for %s: %v", orig.OriginalFileName, err)
 		return nil, err
 	}
 	req.ContentLength = int64(headerBuf.Len()) + fileStat.Size() + int64(trailerBuf.Len())
@@ -363,14 +376,17 @@ func (c *Client) UploadReplacementAssetWithContext(ctx context.Context, filePath
 
 	resp, err := c.doRequest(req)
 	if err != nil {
+		logger.Error("Upload failed for %s: %v", orig.OriginalFileName, err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	var newAsset Asset
 	if err := json.NewDecoder(resp.Body).Decode(&newAsset); err != nil {
+		logger.Error("Failed to decode upload response for %s: %v", orig.OriginalFileName, err)
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
+	logger.Debug("Successfully uploaded replacement asset %s (new ID: %s)", orig.OriginalFileName, newAsset.ID)
 	return &newAsset, nil
 }
 

@@ -444,6 +444,34 @@ func TestAppModel_PipelineSettings(t *testing.T) {
 	if model.settingCursor != 6 {
 		t.Fatalf("expected settingCursor 6, got %d", model.settingCursor)
 	}
+
+	// Move down to index 7 (Logging Level)
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = newM.(*AppModel)
+	if model.settingCursor != 7 {
+		t.Fatalf("expected settingCursor 7, got %d", model.settingCursor)
+	}
+
+	// Initial is "info" (or empty default), toggle with Space to "debug"
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	model = newM.(*AppModel)
+	if model.cfg.LogLevel != "debug" {
+		t.Errorf("expected LogLevel debug, got %s", model.cfg.LogLevel)
+	}
+
+	// Toggle with Left arrow to "info"
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	model = newM.(*AppModel)
+	if model.cfg.LogLevel != "info" {
+		t.Errorf("expected LogLevel info, got %s", model.cfg.LogLevel)
+	}
+
+	// Toggle with Right arrow to "debug"
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	model = newM.(*AppModel)
+	if model.cfg.LogLevel != "debug" {
+		t.Errorf("expected LogLevel debug, got %s", model.cfg.LogLevel)
+	}
 }
 
 func TestAppModel_ResumeMetadataPreservation(t *testing.T) {

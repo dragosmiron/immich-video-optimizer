@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"immich-video-optimizer/logger"
 )
 
 // TranscodeOptions holds settings for transcoding
@@ -196,6 +198,7 @@ func ScanFFmpegOutput(reader io.Reader, cb ProgressCallback) {
 func Transcode(ctx context.Context, ffmpegPath string, opts TranscodeOptions, onProgress ProgressCallback) error {
 	args := []string{"-nostats", "-progress", "pipe:1"}
 	args = append(args, BuildFFmpegArgs(opts)...)
+	logger.Debug("FFmpeg executing: %s %s", ffmpegPath, strings.Join(args, " "))
 	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
 
 	stdout, err := cmd.StdoutPipe()
@@ -207,6 +210,7 @@ func Transcode(ctx context.Context, ffmpegPath string, opts TranscodeOptions, on
 	cmd.Stderr = ringBuf
 
 	if err := cmd.Start(); err != nil {
+		logger.Error("FFmpeg failed to start for %s: %v", opts.Input, err)
 		return err
 	}
 
@@ -219,8 +223,10 @@ func Transcode(ctx context.Context, ffmpegPath string, opts TranscodeOptions, on
 	if err := cmd.Wait(); err != nil {
 		stderrOutput := strings.TrimSpace(ringBuf.String())
 		if stderrOutput != "" {
+			logger.Error("FFmpeg transcode failed for %s (%v)\n[Command]: %s %s\n[Stderr]:\n%s", opts.Input, err, ffmpegPath, strings.Join(args, " "), stderrOutput)
 			return fmt.Errorf("transcode failed (%w): %s", err, stderrOutput)
 		}
+		logger.Error("FFmpeg transcode failed for %s (%v)\n[Command]: %s %s", opts.Input, err, ffmpegPath, strings.Join(args, " "))
 		return err
 	}
 

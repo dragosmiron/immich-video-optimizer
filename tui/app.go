@@ -3,8 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +15,7 @@ import (
 
 	"immich-video-optimizer/config"
 	"immich-video-optimizer/immich"
+	"immich-video-optimizer/logger"
 	"immich-video-optimizer/orchestrator"
 	"immich-video-optimizer/state"
 )
@@ -70,13 +69,7 @@ func waitForPipeline(ch chan interface{}) tea.Cmd {
 }
 
 func logFailure(msg string) {
-	home, _ := os.UserHomeDir()
-	path := filepath.Join(home, ".config", "immich-video-optimizer", "failures.log")
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err == nil {
-		f.WriteString(time.Now().Format(time.RFC3339) + " - " + msg + "\n")
-		f.Close()
-	}
+	logger.Error("%s", msg)
 }
 
 func (m *AppModel) addLog(msg string) {
@@ -143,6 +136,7 @@ type AppModel struct {
 }
 
 func NewAppModel(cfg *config.Config, pipeline *orchestrator.Pipeline, opts ...Option) *AppModel {
+	logger.SetLevelString(cfg.LogLevel)
 	sess, _ := state.LoadSession()
 
 	// Initial State:
@@ -796,7 +790,7 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "down", "j":
-		if m.settingCursor < 6 {
+		if m.settingCursor < 7 {
 			m.settingCursor++
 		}
 
@@ -825,6 +819,9 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.cfg.ConcurrentEncoders > 1 {
 				m.cfg.ConcurrentEncoders = 1
 			}
+		} else if m.settingCursor == 7 {
+			m.cfg.LogLevel = "info"
+			logger.SetLevelString(m.cfg.LogLevel)
 		}
 
 	case "right", "l":
@@ -852,6 +849,9 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.cfg.ConcurrentEncoders < 2 {
 				m.cfg.ConcurrentEncoders = 2
 			}
+		} else if m.settingCursor == 7 {
+			m.cfg.LogLevel = "debug"
+			logger.SetLevelString(m.cfg.LogLevel)
 		}
 
 	case " ", "enter":
@@ -870,6 +870,13 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else if m.settingCursor == 6 {
 			// Activate the threshold text input
 			return m, m.thresholdInput.Focus()
+		} else if m.settingCursor == 7 {
+			if m.cfg.IsDebug() {
+				m.cfg.LogLevel = "info"
+			} else {
+				m.cfg.LogLevel = "debug"
+			}
+			logger.SetLevelString(m.cfg.LogLevel)
 		}
 	}
 	return m, nil

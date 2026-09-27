@@ -11,6 +11,7 @@ import (
 	"immich-video-optimizer/config"
 	"immich-video-optimizer/engine"
 	"immich-video-optimizer/immich"
+	"immich-video-optimizer/logger"
 	"immich-video-optimizer/state"
 )
 
@@ -300,8 +301,10 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 				if err := engine.Transcode(ctx, p.binaries.FFmpegPath, opts, onProgress); err != nil {
 					item.Cleanup()
 					if ctx.Err() != nil {
+						logger.Debug("Transcode aborted for %s due to cancellation", item.Asset.OriginalFileName)
 						continue
 					}
+					logger.Error("Transcode failed for %s: %v", item.Asset.OriginalFileName, err)
 					sess.MarkFailed(item.Asset.ID, err.Error())
 					_ = state.SaveSession(sess)
 					ch <- PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: fmt.Errorf("transcode failed: %w", err)}
@@ -311,8 +314,10 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 				if err := engine.CopyMetadata(ctx, p.binaries.ExifToolPath, item.OrigPath, transcodedPath); err != nil {
 					item.Cleanup()
 					if ctx.Err() != nil {
+						logger.Debug("Metadata copy aborted for %s due to cancellation", item.Asset.OriginalFileName)
 						continue
 					}
+					logger.Error("Metadata copy failed for %s: %v", item.Asset.OriginalFileName, err)
 					sess.MarkFailed(item.Asset.ID, err.Error())
 					_ = state.SaveSession(sess)
 					ch <- PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: fmt.Errorf("metadata copy failed: %w", err)}
@@ -322,6 +327,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 				optStat, err := os.Stat(transcodedPath)
 				if err != nil {
 					item.Cleanup()
+					logger.Error("Failed to stat transcoded file for %s: %v", item.Asset.OriginalFileName, err)
 					sess.MarkFailed(item.Asset.ID, err.Error())
 					_ = state.SaveSession(sess)
 					ch <- PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: fmt.Errorf("failed to stat transcoded file: %w", err)}
@@ -330,6 +336,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 
 				if p.cfg.SizeGuard && optStat.Size() >= item.Asset.GetSize() {
 					item.Cleanup()
+					logger.Info("Size guard: skipped %s (transcoded %d >= original %d bytes)", item.Asset.OriginalFileName, optStat.Size(), item.Asset.GetSize())
 					sess.MarkSkipped(item.Asset.ID, "transcoded file larger")
 					_ = state.SaveSession(sess)
 					ch <- PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Skipped: true, SkipReason: "transcoded file larger"}
@@ -337,6 +344,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 				}
 
 				item.SavedBytes = item.Asset.GetSize() - optStat.Size()
+				logger.Debug("Transcode success for %s: saved %d bytes", item.Asset.OriginalFileName, item.SavedBytes)
 
 				select {
 				case uploadQueue <- item:
@@ -369,6 +377,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 				// Paused mid-upload; leave as StatusPending for clean resume
 				continue
 			}
+			logger.Error("Upload failed for %s: %v", item.Asset.OriginalFileName, err)
 			sess.MarkFailed(item.Asset.ID, fmt.Sprintf("upload failed: %v", err))
 			_ = state.SaveSession(sess)
 			ch <- PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: fmt.Errorf("upload failed: %w", err)}
@@ -386,6 +395,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		sess.MarkCompleted(item.Asset.ID, item.SavedBytes)
 		_ = state.SaveSession(sess)
 
+		logger.Info("Completed %s (Saved %.2f MB)", item.Asset.OriginalFileName, float64(item.SavedBytes)/1024/1024)
 		ch <- PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, SavedBytes: item.SavedBytes}
 	}
 

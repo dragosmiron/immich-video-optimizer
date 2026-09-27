@@ -115,6 +115,7 @@ Customize processing options:
 - **Pipeline Prefetch:** Downloads the next candidate video in background while current video is transcoding.
 - **Concurrent Encoders:** 1 (default, ideal for hardware encoders) or 2 (multi-GPU or high-core CPUs).
 - **Size Threshold (MB):** Type any custom file size filter (e.g. `500` MB).
+- **Logging Level:** `Info` (default) or `Debug`. Debug mode logs full FFmpeg and ExifTool command lines, stderr output, Immich API error bodies, and diagnostic traces to help troubleshoot transcoding failures.
 
 ### 4. Live Dashboard
 Watch real-time multi-stage progress:
@@ -147,7 +148,7 @@ Watch real-time multi-stage progress:
 | | `q` / `Esc` | Exit application |
 | **Settings** | `↑` / `↓` (`k` / `j`) | Navigate setting rows |
 | | `←` / `→` (`h` / `l`) | Change resolution, preset, or encoder count |
-| | `Space` / `Enter` | Toggle option (Size Guard, Skip HEVC, Prefetch, Edit Threshold) |
+| | `Space` / `Enter` | Toggle option (Size Guard, Skip HEVC, Prefetch, Edit Threshold, Log Level) |
 | | `Esc` / `q` | Save preferences & return to browser |
 | **Live Dashboard** | `q` / `Esc` | **Pause optimization** (saves session state for later resume) |
 | **Resume Prompt** | `r` | Resume previous paused session |
@@ -163,7 +164,7 @@ Watch real-time multi-stage progress:
 - **Non-Destructive Replacement:** The original video is deleted from Immich **only after** the replacement video has finished uploading and the server returns a valid asset ID.
 - **Tracking Album:** Automatically tags processed assets in a dedicated in-progress album (`Immich-Optimizer-InProgress-<timestamp>`), allowing you to review uploads in Immich's web UI.
 - **Crash-Resilient State:** Session states are written via write-and-rename (`session.json.tmp` $\to$ `session.json`). If power fails or the terminal is killed, session data cannot be corrupted.
-- **Failure Logging:** Any network or transcoding failures are logged to `~/.config/immich-video-optimizer/failures.log`.
+- **Detailed Logging:** Diagnostic logs are stored in `~/.config/immich-video-optimizer/optimizer.log` (operational traces, FFmpeg and ExifTool commands and errors) and `failures.log` (dedicated failure ledger).
 
 ---
 

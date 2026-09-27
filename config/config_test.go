@@ -23,6 +23,7 @@ func TestSaveAndLoadConfig(t *testing.T) {
 		SkipHEVC:           true,
 		ConcurrentEncoders: 2,
 		EnablePrefetch:     true,
+		LogLevel:           "debug",
 	}
 
 	// Test SaveConfig
@@ -43,8 +44,11 @@ func TestSaveAndLoadConfig(t *testing.T) {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
 
-	if loaded.URL != cfg.URL || loaded.APIKey != cfg.APIKey || loaded.SizeThreshold != cfg.SizeThreshold || loaded.SkipHEVC != cfg.SkipHEVC || loaded.ConcurrentEncoders != cfg.ConcurrentEncoders || loaded.EnablePrefetch != cfg.EnablePrefetch {
+	if loaded.URL != cfg.URL || loaded.APIKey != cfg.APIKey || loaded.SizeThreshold != cfg.SizeThreshold || loaded.SkipHEVC != cfg.SkipHEVC || loaded.ConcurrentEncoders != cfg.ConcurrentEncoders || loaded.EnablePrefetch != cfg.EnablePrefetch || loaded.LogLevel != cfg.LogLevel {
 		t.Errorf("Loaded config mismatch: got %v, expected %v", loaded, cfg)
+	}
+	if !loaded.IsDebug() {
+		t.Errorf("expected IsDebug() true for debug level")
 	}
 }
 

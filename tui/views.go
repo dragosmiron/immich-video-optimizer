@@ -285,6 +285,10 @@ func (m *AppModel) viewSettings() string {
 		"Minimum file size a video must exceed before it is included in the scan.\n" +
 			"  Videos smaller than this threshold are skipped entirely.\n" +
 			"  A good starting point is 500 MB. Raise it to skip already-small videos.",
+		// 7 — Log Level
+		"Controls detail of output logs. Set to Debug for full FFmpeg & ExifTool command lines,\n" +
+			"  stderr outputs, and diagnostic traces to identify error root causes.\n" +
+			"  Logs written to: ~/.config/immich-video-optimizer/optimizer.log",
 	}
 
 	isFocused := func(idx int) bool { return m.settingCursor == idx }
@@ -367,6 +371,17 @@ func (m *AppModel) viewSettings() string {
 	} else {
 		b.WriteString(styles.Value.Render(m.cfg.SizeThreshold+" MB") + "\n")
 	}
+	b.WriteString("\n")
+
+	// Row 7 — Log Level
+	logLevelStr := "INFO"
+	if m.cfg.IsDebug() {
+		logLevelStr = "DEBUG"
+	}
+	writeRow(7,
+		"Logging Level:       ",
+		logLevelStr+"  ← / → / [Space / Enter] to toggle  [Info, Debug]",
+	)
 
 	b.WriteString("\n")
 	b.WriteString(styles.Subtext.Render("[Esc] Save & Return"))

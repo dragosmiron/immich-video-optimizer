@@ -21,6 +21,15 @@ type Config struct {
 	SkipHEVC           bool   `mapstructure:"skip_hevc"`
 	ConcurrentEncoders int    `mapstructure:"concurrent_encoders"`
 	EnablePrefetch     bool   `mapstructure:"enable_prefetch"`
+	LogLevel           string `mapstructure:"log_level"`
+}
+
+// IsDebug returns true if the log level is set to debug.
+func (c *Config) IsDebug() bool {
+	if c == nil {
+		return false
+	}
+	return strings.ToLower(strings.TrimSpace(c.LogLevel)) == "debug"
 }
 
 // SizeThresholdBytes returns the size threshold parsed as bytes.
@@ -44,6 +53,7 @@ func DefaultConfig() *Config {
 		SkipHEVC:           true,
 		ConcurrentEncoders: 1,
 		EnablePrefetch:     true,
+		LogLevel:           "info",
 	}
 }
 
@@ -64,6 +74,7 @@ func LoadConfig() (*Config, error) {
 	v.SetDefault("skip_hevc", true)
 	v.SetDefault("concurrent_encoders", 1)
 	v.SetDefault("enable_prefetch", true)
+	v.SetDefault("log_level", "info")
 
 	if err := v.ReadInConfig(); err != nil {
 		return DefaultConfig(), err
@@ -78,6 +89,9 @@ func LoadConfig() (*Config, error) {
 	}
 	if cfg.SizeThreshold == "" {
 		cfg.SizeThreshold = "500"
+	}
+	if cfg.LogLevel == "" {
+		cfg.LogLevel = "info"
 	}
 	return &cfg, nil
 }
@@ -95,6 +109,9 @@ func SaveConfig(cfg *Config) error {
 	if cfg.ConcurrentEncoders <= 0 {
 		cfg.ConcurrentEncoders = 1
 	}
+	if cfg.LogLevel == "" {
+		cfg.LogLevel = "info"
+	}
 
 	v := viper.New()
 	v.SetConfigName("config")
@@ -108,6 +125,7 @@ func SaveConfig(cfg *Config) error {
 	v.Set("skip_hevc", cfg.SkipHEVC)
 	v.Set("concurrent_encoders", cfg.ConcurrentEncoders)
 	v.Set("enable_prefetch", cfg.EnablePrefetch)
+	v.Set("log_level", strings.ToLower(cfg.LogLevel))
 
 	home, err := userHomeDir()
 	if err != nil {
