@@ -17,10 +17,12 @@ func TestSaveAndLoadConfig(t *testing.T) {
 	}
 
 	cfg := &Config{
-		URL:           "http://localhost:8080",
-		APIKey:        "secret-key",
-		SizeThreshold: "1024",
-		SkipHEVC:      true,
+		URL:                "http://localhost:8080",
+		APIKey:             "secret-key",
+		SizeThreshold:      "1024",
+		SkipHEVC:           true,
+		ConcurrentEncoders: 2,
+		EnablePrefetch:     true,
 	}
 
 	// Test SaveConfig
@@ -41,7 +43,7 @@ func TestSaveAndLoadConfig(t *testing.T) {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
 
-	if loaded.URL != cfg.URL || loaded.APIKey != cfg.APIKey || loaded.SizeThreshold != cfg.SizeThreshold || loaded.SkipHEVC != cfg.SkipHEVC {
+	if loaded.URL != cfg.URL || loaded.APIKey != cfg.APIKey || loaded.SizeThreshold != cfg.SizeThreshold || loaded.SkipHEVC != cfg.SkipHEVC || loaded.ConcurrentEncoders != cfg.ConcurrentEncoders || loaded.EnablePrefetch != cfg.EnablePrefetch {
 		t.Errorf("Loaded config mismatch: got %v, expected %v", loaded, cfg)
 	}
 }

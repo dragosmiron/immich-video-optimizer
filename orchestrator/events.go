@@ -7,8 +7,15 @@ type PipelineStartMsg struct {
 }
 
 type PipelineVideoStartMsg struct {
-	VideoID string
-	Size    int64
+	VideoID    string
+	VideoName  string
+	Size       int64
+	Resolution string
+}
+
+type PipelineStageMsg struct {
+	Stage     string // "downloading", "transcoding", "uploading", "probing", "idle"
+	VideoName string
 }
 
 type PipelineProgressMsg struct {

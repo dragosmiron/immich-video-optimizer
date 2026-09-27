@@ -325,3 +325,115 @@ func TestAppModel_WindowResizeTable(t *testing.T) {
 		t.Errorf("expected [q] Quit in view60")
 	}
 }
+
+func TestAppModel_PipelineStages(t *testing.T) {
+	cfg := &config.Config{
+		URL:            "http://localhost:2283",
+		APIKey:         "test-key",
+		EnablePrefetch: true,
+	}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.state = ViewDashboard
+	m.pipelineChan = make(chan interface{}, 50)
+
+	// 1. Probing stage
+	newM, _ := m.Update(orchestrator.PipelineStageMsg{Stage: "probing", VideoName: "Scanning 10 videos..."})
+	model := newM.(*AppModel)
+	if model.probingStatus != "Scanning 10 videos..." {
+		t.Fatalf("expected probingStatus to be set, got %s", model.probingStatus)
+	}
+	v := model.View()
+	if !strings.Contains(v, "Probing") || !strings.Contains(v, "Scanning 10 videos...") {
+		t.Errorf("expected view to display probing message, got %s", v)
+	}
+
+	// 2. Prefetch stage
+	newM, _ = model.Update(orchestrator.PipelineStageMsg{Stage: "downloading", VideoName: "prefetch_vid.mp4"})
+	model = newM.(*AppModel)
+	if model.currentDownloadName != "prefetch_vid.mp4" {
+		t.Fatalf("expected currentDownloadName prefetch_vid.mp4, got %s", model.currentDownloadName)
+	}
+	v = model.View()
+	if !strings.Contains(v, "Prefetching: prefetch_vid.mp4") {
+		t.Errorf("expected view to show Prefetching stage, got %s", v)
+	}
+
+	// 3. Transcoding stage & Video start
+	newM, _ = model.Update(orchestrator.PipelineVideoStartMsg{
+		VideoID:    "v123",
+		VideoName:  "active_transcode.mp4",
+		Size:       200 * 1024 * 1024,
+		Resolution: "3840x2160",
+	})
+	model = newM.(*AppModel)
+	newM, _ = model.Update(orchestrator.PipelineStageMsg{Stage: "transcoding", VideoName: "active_transcode.mp4"})
+	model = newM.(*AppModel)
+	v = model.View()
+	if !strings.Contains(v, "Transcoding: active_transcode.mp4") || !strings.Contains(v, "3840x2160") {
+		t.Errorf("expected view to show Transcoding stage with resolution, got %s", v)
+	}
+
+	// 4. Uploading stage
+	newM, _ = model.Update(orchestrator.PipelineStageMsg{Stage: "uploading", VideoName: "uploaded_vid.mp4"})
+	model = newM.(*AppModel)
+	v = model.View()
+	if !strings.Contains(v, "Uploading:   uploaded_vid.mp4") {
+		t.Errorf("expected view to show Uploading stage, got %s", v)
+	}
+
+	// 5. Idle stage
+	newM, _ = model.Update(orchestrator.PipelineStageMsg{Stage: "idle"})
+	model = newM.(*AppModel)
+	if model.currentDownloadName != "" || model.currentTranscodeName != "" || model.currentUploadName != "" {
+		t.Errorf("expected all stage names to be reset on idle")
+	}
+}
+
+func TestAppModel_PipelineSettings(t *testing.T) {
+	cfg := &config.Config{
+		URL:                "http://localhost:2283",
+		APIKey:             "test-key",
+		EnablePrefetch:     true,
+		ConcurrentEncoders: 1,
+		SizeThreshold:      "500",
+	}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.state = ViewSettings
+
+	// Move cursor down to index 4 (Pipeline Prefetch)
+	m.settingCursor = 4
+	if m.cfg.EnablePrefetch != true {
+		t.Fatalf("expected initial EnablePrefetch true")
+	}
+
+	// Toggle prefetch with Space
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	model := newM.(*AppModel)
+	if model.cfg.EnablePrefetch != false {
+		t.Errorf("expected EnablePrefetch to toggle to false")
+	}
+
+	// Move down to index 5 (Concurrent Encoders)
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = newM.(*AppModel)
+	if model.settingCursor != 5 {
+		t.Fatalf("expected settingCursor 5, got %d", model.settingCursor)
+	}
+
+	// Toggle encoders with Space (1 -> 2)
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	model = newM.(*AppModel)
+	if model.cfg.ConcurrentEncoders != 2 {
+		t.Errorf("expected ConcurrentEncoders 2, got %d", model.cfg.ConcurrentEncoders)
+	}
+
+	// Move down to index 6 (Size Threshold)
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = newM.(*AppModel)
+	if model.settingCursor != 6 {
+		t.Fatalf("expected settingCursor 6, got %d", model.settingCursor)
+	}
+}
+

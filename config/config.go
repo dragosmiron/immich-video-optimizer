@@ -11,13 +11,15 @@ import (
 var userHomeDir = os.UserHomeDir
 
 type Config struct {
-	URL           string `mapstructure:"url"`
-	APIKey        string `mapstructure:"api_key"`
-	SizeThreshold string `mapstructure:"size_threshold"`
-	Resolution    string `mapstructure:"resolution"`
-	Preset        string `mapstructure:"preset"`
-	SizeGuard     bool   `mapstructure:"size_guard"`
-	SkipHEVC      bool   `mapstructure:"skip_hevc"`
+	URL                string `mapstructure:"url"`
+	APIKey             string `mapstructure:"api_key"`
+	SizeThreshold      string `mapstructure:"size_threshold"`
+	Resolution         string `mapstructure:"resolution"`
+	Preset             string `mapstructure:"preset"`
+	SizeGuard          bool   `mapstructure:"size_guard"`
+	SkipHEVC           bool   `mapstructure:"skip_hevc"`
+	ConcurrentEncoders int    `mapstructure:"concurrent_encoders"`
+	EnablePrefetch     bool   `mapstructure:"enable_prefetch"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -34,6 +36,8 @@ func LoadConfig() (*Config, error) {
 	v.SetDefault("preset", "Medium")
 	v.SetDefault("size_guard", true)
 	v.SetDefault("skip_hevc", true)
+	v.SetDefault("concurrent_encoders", 1)
+	v.SetDefault("enable_prefetch", true)
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, err
@@ -42,6 +46,9 @@ func LoadConfig() (*Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, err
+	}
+	if cfg.ConcurrentEncoders <= 0 {
+		cfg.ConcurrentEncoders = 1
 	}
 	return &cfg, nil
 }
@@ -56,6 +63,9 @@ func SaveConfig(cfg *Config) error {
 	if cfg.Preset == "" {
 		cfg.Preset = "Medium"
 	}
+	if cfg.ConcurrentEncoders <= 0 {
+		cfg.ConcurrentEncoders = 1
+	}
 
 	v := viper.New()
 	v.SetConfigName("config")
@@ -67,6 +77,8 @@ func SaveConfig(cfg *Config) error {
 	v.Set("preset", cfg.Preset)
 	v.Set("size_guard", cfg.SizeGuard)
 	v.Set("skip_hevc", cfg.SkipHEVC)
+	v.Set("concurrent_encoders", cfg.ConcurrentEncoders)
+	v.Set("enable_prefetch", cfg.EnablePrefetch)
 
 	home, err := userHomeDir()
 	if err != nil {

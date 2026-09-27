@@ -127,6 +127,10 @@ type AppModel struct {
 	currentVideoName        string
 	currentVideoOriginalSize int64
 	currentVideoResolution  string
+	currentDownloadName     string
+	currentTranscodeName    string
+	currentUploadName       string
+	probingStatus           string
 	fps                     float64
 	speed                   string
 	failedVideos            []string
@@ -288,14 +292,46 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case orchestrator.PipelineVideoStartMsg:
 		m.currentVideoID = msg.VideoID
 		m.currentVideoOriginalSize = msg.Size
-		for _, v := range m.videos {
-			if v.ID == msg.VideoID {
-				m.currentVideoName = v.OriginalFileName
-				m.currentVideoResolution = fmt.Sprintf("%dx%d", v.ExifInfo.ExifImageWidth, v.ExifInfo.ExifImageHeight)
-				break
+		if msg.VideoName != "" {
+			m.currentVideoName = msg.VideoName
+			m.currentTranscodeName = msg.VideoName
+		}
+		if msg.Resolution != "" {
+			m.currentVideoResolution = msg.Resolution
+		}
+		if m.currentVideoName == "" {
+			for _, v := range m.videos {
+				if v.ID == msg.VideoID {
+					m.currentVideoName = v.OriginalFileName
+					m.currentTranscodeName = v.OriginalFileName
+					m.currentVideoResolution = fmt.Sprintf("%dx%d", v.ExifInfo.ExifImageWidth, v.ExifInfo.ExifImageHeight)
+					break
+				}
 			}
 		}
-		m.logMessages = append(m.logMessages, fmt.Sprintf("%s - Started processing %s", time.Now().Format("15:04:05"), m.currentVideoName))
+		m.logMessages = append(m.logMessages, fmt.Sprintf("%s - Transcoding %s", time.Now().Format("15:04:05"), m.currentVideoName))
+		return m, waitForPipeline(m.pipelineChan)
+
+	case orchestrator.PipelineStageMsg:
+		switch msg.Stage {
+		case "probing":
+			m.probingStatus = msg.VideoName
+			if msg.VideoName != "" {
+				m.logMessages = append(m.logMessages, fmt.Sprintf("%s - %s", time.Now().Format("15:04:05"), msg.VideoName))
+			}
+		case "downloading":
+			m.probingStatus = ""
+			m.currentDownloadName = msg.VideoName
+		case "transcoding":
+			m.currentTranscodeName = msg.VideoName
+		case "uploading":
+			m.currentUploadName = msg.VideoName
+		case "idle":
+			m.currentDownloadName = ""
+			m.currentTranscodeName = ""
+			m.currentUploadName = ""
+			m.probingStatus = ""
+		}
 		return m, waitForPipeline(m.pipelineChan)
 
 	case orchestrator.PipelineProgressMsg:
@@ -311,12 +347,26 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case orchestrator.PipelineVideoCompleteMsg:
 		m.processedVideos++
 		m.totalSavedBytes += msg.SavedBytes
+		if m.currentUploadName != "" {
+			m.currentUploadName = ""
+		}
 
 		timeStr := time.Now().Format("15:04:05")
+		completedName := m.currentVideoName
+		for _, v := range m.videos {
+			if v.ID == msg.VideoID {
+				completedName = v.OriginalFileName
+				break
+			}
+		}
+		if completedName == "" {
+			completedName = msg.VideoID
+		}
+
 		if msg.Err != nil {
 			m.failedCount++
-			m.failedVideos = append(m.failedVideos, m.currentVideoName)
-			msgStr := fmt.Sprintf("%s - Failed %s: %v", timeStr, m.currentVideoName, msg.Err)
+			m.failedVideos = append(m.failedVideos, completedName)
+			msgStr := fmt.Sprintf("%s - Failed %s: %v", timeStr, completedName, msg.Err)
 			m.logMessages = append(m.logMessages, msgStr)
 			logFailure(msgStr)
 		} else if msg.Skipped {
@@ -325,9 +375,9 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.SkipReason != "" {
 				reason = msg.SkipReason
 			}
-			m.logMessages = append(m.logMessages, fmt.Sprintf("%s - Skipped %s (%s)", timeStr, m.currentVideoName, reason))
+			m.logMessages = append(m.logMessages, fmt.Sprintf("%s - Skipped %s (%s)", timeStr, completedName, reason))
 		} else {
-			m.logMessages = append(m.logMessages, fmt.Sprintf("%s - Completed %s (Saved %.2f MB)", timeStr, m.currentVideoName, float64(msg.SavedBytes)/1024/1024))
+			m.logMessages = append(m.logMessages, fmt.Sprintf("%s - Completed %s (Saved %.2f MB)", timeStr, completedName, float64(msg.SavedBytes)/1024/1024))
 		}
 
 		percent := 0.0
@@ -693,9 +743,9 @@ func (m *AppModel) updateBrowser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// When the threshold row is focused and user is typing into it,
+	// When the threshold row (index 6) is focused and user is typing into it,
 	// Enter confirms the value; everything else feeds the input.
-	if m.settingCursor == 4 && m.thresholdInput.Focused() {
+	if m.settingCursor == 6 && m.thresholdInput.Focused() {
 		if msg.String() == "enter" {
 			m.thresholdInput.Blur()
 			thresh := strings.TrimSpace(m.thresholdInput.Value())
@@ -727,7 +777,7 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "down", "j":
-		if m.settingCursor < 4 {
+		if m.settingCursor < 6 {
 			m.settingCursor++
 		}
 
@@ -750,6 +800,12 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cfg.SizeGuard = !m.cfg.SizeGuard
 		} else if m.settingCursor == 3 {
 			m.cfg.SkipHEVC = !m.cfg.SkipHEVC
+		} else if m.settingCursor == 4 {
+			m.cfg.EnablePrefetch = !m.cfg.EnablePrefetch
+		} else if m.settingCursor == 5 {
+			if m.cfg.ConcurrentEncoders > 1 {
+				m.cfg.ConcurrentEncoders = 1
+			}
 		}
 
 	case "right", "l":
@@ -771,6 +827,12 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cfg.SizeGuard = !m.cfg.SizeGuard
 		} else if m.settingCursor == 3 {
 			m.cfg.SkipHEVC = !m.cfg.SkipHEVC
+		} else if m.settingCursor == 4 {
+			m.cfg.EnablePrefetch = !m.cfg.EnablePrefetch
+		} else if m.settingCursor == 5 {
+			if m.cfg.ConcurrentEncoders < 2 {
+				m.cfg.ConcurrentEncoders = 2
+			}
 		}
 
 	case " ", "enter":
@@ -779,6 +841,14 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else if m.settingCursor == 3 {
 			m.cfg.SkipHEVC = !m.cfg.SkipHEVC
 		} else if m.settingCursor == 4 {
+			m.cfg.EnablePrefetch = !m.cfg.EnablePrefetch
+		} else if m.settingCursor == 5 {
+			if m.cfg.ConcurrentEncoders <= 1 {
+				m.cfg.ConcurrentEncoders = 2
+			} else {
+				m.cfg.ConcurrentEncoders = 1
+			}
+		} else if m.settingCursor == 6 {
 			// Activate the threshold text input
 			return m, m.thresholdInput.Focus()
 		}
@@ -940,7 +1010,13 @@ func (m *AppModel) viewScanPrompt() string {
 	if !m.cfg.SkipHEVC {
 		hevcText = "Disabled"
 	}
-	b.WriteString(fmt.Sprintf("  • Skip HEVC:      %s\n\n", styles.Value.Render(hevcText)))
+	b.WriteString(fmt.Sprintf("  • Skip HEVC:      %s\n", styles.Value.Render(hevcText)))
+	prefetchText := "Enabled (prefetch next video in background)"
+	if !m.cfg.EnablePrefetch {
+		prefetchText = "Disabled (sequential)"
+	}
+	b.WriteString(fmt.Sprintf("  • Prefetch Next:  %s\n", styles.Value.Render(prefetchText)))
+	b.WriteString(fmt.Sprintf("  • Encoders:       %s worker(s)\n\n", styles.Value.Render(fmt.Sprintf("%d", m.cfg.ConcurrentEncoders))))
 
 	b.WriteString(styles.SectionHeader.Render("Ready to Scan:"))
 	b.WriteString("\nNo videos loaded yet. Start a scan to discover large videos on your server.\n\n")
@@ -1082,7 +1158,19 @@ func (m *AppModel) viewSettings() string {
 			}
 			return "OFF — All eligible videos will be processed and re-encoded, even if already HEVC."
 		}(),
-		// 4 — Size Threshold
+		// 4 — Pipeline Prefetch
+		func() string {
+			if m.cfg.EnablePrefetch {
+				return "ON  — Downloads the next video in background while transcoding current video.\n" +
+					"       Eliminates download wait time without exceeding disk bounds (max 1 file)."
+			}
+			return "OFF — Sequential mode. Downloads, transcodes, and uploads strictly one at a time."
+		}(),
+		// 5 — Concurrent Encoders
+		"Controls how many ffmpeg instances encode simultaneously.\n" +
+			"  • 1 — Default. Best for hardware encoders (VideoToolbox / NVENC) and CPU thermals\n" +
+			"  • 2 — Parallel encoding. High throughput on multi-core systems",
+		// 6 — Size Threshold
 		"Minimum file size a video must exceed before it is included in the scan.\n" +
 			"  Videos smaller than this threshold are skipped entirely.\n" +
 			"  A good starting point is 500 MB. Raise it to skip already-small videos.",
@@ -1137,14 +1225,34 @@ func (m *AppModel) viewSettings() string {
 		hevcState+"  [Space / Enter] to toggle",
 	)
 
-	// Row 4 — Size Threshold (typeable)
-	b.WriteString(cursor(4) + "Size Threshold (MB): ")
-	if isFocused(4) && m.thresholdInput.Focused() {
+	// Row 4 — Pipeline Prefetch
+	prefetchState := "[✓] ON"
+	if !m.cfg.EnablePrefetch {
+		prefetchState = "[ ] OFF"
+	}
+	writeRow(4,
+		"Pipeline Prefetch:   ",
+		prefetchState+"  [Space / Enter] to toggle",
+	)
+
+	// Row 5 — Concurrent Encoders
+	encCount := m.cfg.ConcurrentEncoders
+	if encCount <= 0 {
+		encCount = 1
+	}
+	writeRow(5,
+		"Concurrent Encoders: ",
+		fmt.Sprintf("%d  ← / → to change  [1, 2]", encCount),
+	)
+
+	// Row 6 — Size Threshold (typeable)
+	b.WriteString(cursor(6) + "Size Threshold (MB): ")
+	if isFocused(6) && m.thresholdInput.Focused() {
 		b.WriteString(m.thresholdInput.View() + "  " + styles.Subtext.Render("[Enter] to confirm") + "\n")
-		b.WriteString(styles.Subtext.Render("    └ "+descriptions[4]) + "\n")
-	} else if isFocused(4) {
+		b.WriteString(styles.Subtext.Render("    └ "+descriptions[6]) + "\n")
+	} else if isFocused(6) {
 		b.WriteString(styles.Value.Render(m.cfg.SizeThreshold+" MB") + "  " + styles.Subtext.Render("[Enter] to edit") + "\n")
-		b.WriteString(styles.Subtext.Render("    └ "+descriptions[4]) + "\n")
+		b.WriteString(styles.Subtext.Render("    └ "+descriptions[6]) + "\n")
 	} else {
 		b.WriteString(styles.Value.Render(m.cfg.SizeThreshold+" MB") + "\n")
 	}
@@ -1169,25 +1277,42 @@ func (m *AppModel) viewDashboard() string {
 		styles.SuccessText.Render(fmt.Sprintf("%.2f MB", float64(m.totalSavedBytes)/(1024*1024))),
 	))
 
-	// Active Video
-	b.WriteString(styles.SectionHeader.Render("Current Video:"))
+	// Pipeline Status
+	b.WriteString(styles.SectionHeader.Render("Pipeline Status:"))
 	b.WriteString("\n")
-	if m.currentVideoName != "" {
-		b.WriteString(fmt.Sprintf("  File:         %s\n", styles.Value.Render(m.currentVideoName)))
-		if m.currentVideoOriginalSize > 0 {
-			b.WriteString(fmt.Sprintf("  Size & Res:   %.2f MB  |  %s\n",
-				float64(m.currentVideoOriginalSize)/(1024*1024),
-				m.currentVideoResolution,
-			))
+	if m.probingStatus != "" {
+		b.WriteString(fmt.Sprintf("  🔎 %s: %s\n", styles.Value.Render("Probing"), m.probingStatus))
+	}
+
+	tName := m.currentTranscodeName
+	if tName == "" {
+		tName = m.currentVideoName
+	}
+	if tName != "" {
+		b.WriteString(fmt.Sprintf("  ⚙ Transcoding: %s", styles.Value.Render(tName)))
+		if m.currentVideoOriginalSize > 0 || m.currentVideoResolution != "" {
+			b.WriteString(fmt.Sprintf("  (%.1f MB, %s)", float64(m.currentVideoOriginalSize)/(1024*1024), m.currentVideoResolution))
 		}
+		b.WriteString("\n")
 		if m.speed != "" {
-			b.WriteString(fmt.Sprintf("  Speed:        %s  |  FPS: %.1f\n",
-				styles.Value.Render(m.speed),
-				m.fps,
-			))
+			b.WriteString(fmt.Sprintf("                 Speed: %s  |  FPS: %.1f\n", styles.Value.Render(m.speed), m.fps))
 		}
 	} else {
-		b.WriteString("  Preparing next video...\n")
+		b.WriteString("  ⚙ Transcoding: idle / preparing...\n")
+	}
+
+	if m.cfg.EnablePrefetch {
+		if m.currentDownloadName != "" {
+			b.WriteString(fmt.Sprintf("  ↓ Prefetching: %s\n", styles.Value.Render(m.currentDownloadName)))
+		} else {
+			b.WriteString("  ↓ Prefetching: idle\n")
+		}
+	}
+
+	if m.currentUploadName != "" {
+		b.WriteString(fmt.Sprintf("  ↑ Uploading:   %s\n", styles.Value.Render(m.currentUploadName)))
+	} else {
+		b.WriteString("  ↑ Uploading:   idle\n")
 	}
 	b.WriteString("\n")
 
