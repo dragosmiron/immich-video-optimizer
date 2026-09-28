@@ -49,13 +49,16 @@ type DryRunVideoMsg struct {
 	IsHEVC    bool
 	Probed    int // running count of probed videos so far
 	Total     int // total videos being probed
+	Err       error
 }
 
 // DryRunCompleteMsg is sent when all HEVC probes have finished.
 // ToProcess contains videos that will actually be transcoded.
 // HEVCSkipped contains videos that will be skipped because they are already HEVC.
+// ProbeFailed contains videos whose probe encountered an error or timeout.
 type DryRunCompleteMsg struct {
 	ToProcess   []immich.Asset
 	HEVCSkipped []immich.Asset
+	ProbeFailed []immich.Asset
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"immich-video-optimizer/config"
 	"immich-video-optimizer/engine"
+	"immich-video-optimizer/immich"
 )
 
 type testRoundTripper struct {
@@ -210,5 +211,164 @@ func TestPipeline_DownloadErrorShortCircuit(t *testing.T) {
 	if !gotError {
 		t.Errorf("Expected video error from failed download")
 	}
+}
+
+func TestPipeline_RunDryRun_SkipHEVC(t *testing.T) {
+	tempHome := t.TempDir()
+
+	fakeFFmpeg := filepath.Join(tempHome, "fake_ffmpeg")
+	script := `#!/bin/sh
+for arg do
+  case "$arg" in
+    *asset-hevc*)
+      echo "Stream #0:0: Video: hevc (Main), yuv420p"
+      exit 0
+      ;;
+    *asset-h264*)
+      echo "Stream #0:0: Video: h264 (High), yuv420p"
+      exit 0
+      ;;
+    *asset-err*)
+      exit 1
+      ;;
+  esac
+done
+echo "Stream #0:0: Video: h264"
+exit 0
+`
+	if err := os.WriteFile(fakeFFmpeg, []byte(script), 0755); err != nil {
+		t.Fatalf("Failed to write fake ffmpeg: %v", err)
+	}
+
+	binaries := &engine.BinaryManager{
+		FFmpegPath: fakeFFmpeg,
+	}
+
+	videos := []immich.Asset{
+		{ID: "asset-hevc", OriginalFileName: "hevc_video.mp4"},
+		{ID: "asset-h264", OriginalFileName: "h264_video.mp4"},
+		{ID: "asset-err", OriginalFileName: "err_video.mp4"},
+	}
+
+	// 1. SkipHEVC = true
+	t.Run("SkipHEVC_True", func(t *testing.T) {
+		cfg := &config.Config{
+			URL:      "http://localhost:2283",
+			APIKey:   "key",
+			SkipHEVC: true,
+		}
+		p, err := NewPipelineWithBinaries(cfg, binaries)
+		if err != nil {
+			t.Fatalf("NewPipelineWithBinaries error: %v", err)
+		}
+
+		ch := make(chan interface{}, 20)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		p.RunDryRun(ctx, videos, ch)
+
+		var completeMsg DryRunCompleteMsg
+		var videoMsgs []DryRunVideoMsg
+		for msg := range ch {
+			switch m := msg.(type) {
+			case DryRunVideoMsg:
+				videoMsgs = append(videoMsgs, m)
+			case DryRunCompleteMsg:
+				completeMsg = m
+			}
+		}
+
+		if len(videoMsgs) != 3 {
+			t.Fatalf("expected 3 video messages, got %d", len(videoMsgs))
+		}
+
+		// When SkipHEVC = true:
+		// asset-hevc should be in HEVCSkipped
+		if len(completeMsg.HEVCSkipped) != 1 || completeMsg.HEVCSkipped[0].ID != "asset-hevc" {
+			t.Errorf("expected 1 HEVCSkipped asset (asset-hevc), got: %+v", completeMsg.HEVCSkipped)
+		}
+		// asset-h264 and asset-err should be in ToProcess
+		if len(completeMsg.ToProcess) != 2 {
+			t.Errorf("expected 2 ToProcess assets, got: %d", len(completeMsg.ToProcess))
+		}
+		// asset-err should be in ProbeFailed
+		if len(completeMsg.ProbeFailed) != 1 || completeMsg.ProbeFailed[0].ID != "asset-err" {
+			t.Errorf("expected 1 ProbeFailed asset (asset-err), got: %+v", completeMsg.ProbeFailed)
+		}
+	})
+
+	// 2. SkipHEVC = false
+	t.Run("SkipHEVC_False", func(t *testing.T) {
+		cfg := &config.Config{
+			URL:      "http://localhost:2283",
+			APIKey:   "key",
+			SkipHEVC: false, // OFF!
+		}
+		p, err := NewPipelineWithBinaries(cfg, binaries)
+		if err != nil {
+			t.Fatalf("NewPipelineWithBinaries error: %v", err)
+		}
+
+		ch := make(chan interface{}, 20)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		p.RunDryRun(ctx, videos, ch)
+
+		var completeMsg DryRunCompleteMsg
+		for msg := range ch {
+			if m, ok := msg.(DryRunCompleteMsg); ok {
+				completeMsg = m
+			}
+		}
+
+		// When SkipHEVC = false:
+		// No videos should be in HEVCSkipped!
+		if len(completeMsg.HEVCSkipped) != 0 {
+			t.Errorf("expected 0 HEVCSkipped when SkipHEVC is false, got: %+v", completeMsg.HEVCSkipped)
+		}
+		// All 3 videos must be in ToProcess!
+		if len(completeMsg.ToProcess) != 3 {
+			t.Errorf("expected 3 ToProcess assets when SkipHEVC is false, got: %d", len(completeMsg.ToProcess))
+		}
+	})
+
+	// 3. Empty video list
+	t.Run("EmptyVideos", func(t *testing.T) {
+		cfg := &config.Config{URL: "http://localhost:2283", APIKey: "key"}
+		p, _ := NewPipelineWithBinaries(cfg, binaries)
+		ch := make(chan interface{}, 5)
+		p.RunDryRun(context.Background(), nil, ch)
+		var gotComplete bool
+		for msg := range ch {
+			if _, ok := msg.(DryRunCompleteMsg); ok {
+				gotComplete = true
+			}
+		}
+		if !gotComplete {
+			t.Errorf("expected DryRunCompleteMsg on empty videos list")
+		}
+	})
+
+	// 4. Context Cancelled early exits cleanly
+	t.Run("ContextCancelled", func(t *testing.T) {
+		cfg := &config.Config{URL: "http://localhost:2283", APIKey: "key", SkipHEVC: true}
+		p, _ := NewPipelineWithBinaries(cfg, binaries)
+		ch := make(chan interface{}, 20)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // immediately cancel
+		p.RunDryRun(ctx, videos, ch)
+
+		var completeMsgReceived bool
+		for msg := range ch {
+			if _, ok := msg.(DryRunCompleteMsg); ok {
+				completeMsgReceived = true
+			}
+		}
+		if completeMsgReceived {
+			t.Errorf("expected RunDryRun to terminate early on cancelled context without emitting DryRunCompleteMsg")
+		}
+	})
 }
 

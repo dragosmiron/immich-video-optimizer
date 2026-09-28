@@ -103,7 +103,8 @@ Review discovered videos that exceed your configured size threshold:
 - **`[a]`**: Select all visible videos.
 - **`[n]`**: Deselect all videos.
 - **`[/]`**: Filter table by filename in real-time.
-- **`[Enter]`**: Preview & start optimization batch.
+- **`[d]`**: Dry Run preview (probe codecs via HTTP range requests and show pre-flight breakdown).
+- **`[Enter]`**: Start optimization batch directly.
 - **`[s]`**: Open Settings menu.
 - **`[r]`**: Rescan library.
 
@@ -144,10 +145,14 @@ Watch real-time multi-stage progress:
 | | `a` | Select all filtered videos |
 | | `n` | Deselect all videos |
 | | `/` | Open live search filter |
-| | `Enter` | Preview & start batch processing |
+| | `d` | Dry Run preview (probe codecs and show pre-flight breakdown) |
+| | `Enter` | Start optimization directly |
 | | `s` | Open Settings & Preferences |
 | | `r` | Rescan library |
 | | `q` / `Esc` | Exit application |
+| **Dry Run Preview** | `Enter` | Start optimization batch (if videos to transcode) |
+| | `s` | Open Settings & Preferences |
+| | `q` / `Esc` / `b` | Cancel & return to browser |
 | **Settings** | `↑` / `↓` (`k` / `j`) | Navigate setting rows |
 | | `←` / `→` (`h` / `l`) | Change resolution, preset, encoder count, or network retries |
 | | `Space` / `Enter` | Toggle option (Size Guard, Skip HEVC, Prefetch, Edit Threshold, Log Level, Retries) |

@@ -149,15 +149,16 @@ type AppModel struct {
 	skippedVideos           []skippedVideo // tracks each skipped video with its reason
 
 	// Dry Run
-	dryRunChan      chan interface{}
-	dryRunCtx       context.Context
-	dryRunCancel    context.CancelFunc
-	dryRunTotal     int
-	dryRunProbed    int
-	dryRunToProcess []immich.Asset
-	dryRunHEVC      []immich.Asset
-	dryRunDone      bool
-	dryRunVideos    []immich.Asset // the selection that triggered the dry run
+	dryRunChan        chan interface{}
+	dryRunCtx         context.Context
+	dryRunCancel      context.CancelFunc
+	dryRunTotal       int
+	dryRunProbed      int
+	dryRunToProcess   []immich.Asset
+	dryRunHEVC        []immich.Asset
+	dryRunProbeFailed []immich.Asset
+	dryRunDone        bool
+	dryRunVideos      []immich.Asset // the selection that triggered the dry run
 }
 
 
@@ -329,14 +330,19 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case orchestrator.DryRunVideoMsg:
-		m.dryRunProbed = msg.Probed
-		m.dryRunTotal = msg.Total
+		if m.state == ViewDryRun {
+			m.dryRunProbed = msg.Probed
+			m.dryRunTotal = msg.Total
+		}
 		return m, waitForDryRun(m.dryRunChan)
 
 	case orchestrator.DryRunCompleteMsg:
-		m.dryRunToProcess = msg.ToProcess
-		m.dryRunHEVC = msg.HEVCSkipped
-		m.dryRunDone = true
+		if m.state == ViewDryRun {
+			m.dryRunToProcess = msg.ToProcess
+			m.dryRunHEVC = msg.HEVCSkipped
+			m.dryRunProbeFailed = msg.ProbeFailed
+			m.dryRunDone = true
+		}
 		return m, nil
 
 	case orchestrator.PipelineStartMsg:
@@ -782,6 +788,29 @@ func (m *AppModel) updateBrowser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.searchInput.Focus()
 		return m, textinput.Blink
 
+	case "d", "D":
+		var toProcess []immich.Asset
+		for _, v := range m.videos {
+			if m.selectedVideos[v.ID] {
+				toProcess = append(toProcess, v)
+			}
+		}
+		if len(toProcess) > 0 {
+			m.state = ViewDryRun
+			m.dryRunVideos = toProcess
+			m.dryRunTotal = len(toProcess)
+			m.dryRunProbed = 0
+			m.dryRunToProcess = nil
+			m.dryRunHEVC = nil
+			m.dryRunProbeFailed = nil
+			m.dryRunDone = false
+			m.dryRunCtx, m.dryRunCancel = context.WithCancel(context.Background())
+			m.dryRunChan = make(chan interface{}, 200)
+			go m.pipeline.RunDryRun(m.dryRunCtx, toProcess, m.dryRunChan)
+			return m, waitForDryRun(m.dryRunChan)
+		}
+		return m, nil
+
 	case "enter":
 		var toProcess []immich.Asset
 		for _, v := range m.videos {
@@ -790,20 +819,9 @@ func (m *AppModel) updateBrowser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if len(toProcess) > 0 {
-			// Go to dry run preview before committing to the pipeline
-			m.state = ViewDryRun
-			m.dryRunVideos = toProcess
-			m.dryRunTotal = len(toProcess)
-			m.dryRunProbed = 0
-			m.dryRunToProcess = nil
-			m.dryRunHEVC = nil
-			m.dryRunDone = false
-			m.dryRunCtx, m.dryRunCancel = context.WithCancel(context.Background())
-			m.dryRunChan = make(chan interface{}, 200)
-			go m.pipeline.RunDryRun(m.dryRunCtx, toProcess, m.dryRunChan)
-			return m, waitForDryRun(m.dryRunChan)
+			return m.startOptimization(toProcess)
 		}
-
+		return m, nil
 
 	default:
 		var cmd tea.Cmd
@@ -811,6 +829,21 @@ func (m *AppModel) updateBrowser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	return m, nil
+}
+
+func (m *AppModel) startOptimization(toProcess []immich.Asset) (tea.Model, tea.Cmd) {
+	m.state = ViewDashboard
+	m.totalVideos = len(toProcess)
+	m.processedVideos = 0
+	m.skippedCount = 0
+	m.failedCount = 0
+	m.totalSavedBytes = 0
+	m.failedVideos = nil
+	m.skippedVideos = nil
+	m.ctx, m.cancelCtx = context.WithCancel(context.Background())
+	m.pipelineChan = make(chan interface{}, 200)
+	go m.pipeline.Run(m.ctx, toProcess, m.pipelineChan)
+	return m, waitForPipeline(m.pipelineChan)
 }
 
 func (m *AppModel) updateDryRun(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -821,6 +854,14 @@ func (m *AppModel) updateDryRun(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.dryRunCancel()
 		}
 		m.state = ViewBrowser
+		return m, nil
+
+	case "s", "S":
+		if m.dryRunCancel != nil {
+			m.dryRunCancel()
+		}
+		m.state = ViewSettings
+		m.settingCursor = 0
 		return m, nil
 
 	case "enter":
@@ -834,18 +875,7 @@ func (m *AppModel) updateDryRun(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.state = ViewBrowser
 			return m, nil
 		}
-		m.state = ViewDashboard
-		m.totalVideos = len(toProcess)
-		m.processedVideos = 0
-		m.skippedCount = 0
-		m.failedCount = 0
-		m.totalSavedBytes = 0
-		m.failedVideos = nil
-		m.skippedVideos = nil
-		m.ctx, m.cancelCtx = context.WithCancel(context.Background())
-		m.pipelineChan = make(chan interface{}, 200)
-		go m.pipeline.Run(m.ctx, toProcess, m.pipelineChan)
-		return m, waitForPipeline(m.pipelineChan)
+		return m.startOptimization(toProcess)
 	}
 	return m, nil
 }

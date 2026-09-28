@@ -576,4 +576,176 @@ func TestAppModel_ResumeMetadataPreservation(t *testing.T) {
 	}
 }
 
+func TestAppModel_BrowserShortcuts_DryRunAndStart(t *testing.T) {
+	cfg := &config.Config{URL: "http://localhost:2283", APIKey: "test-key"}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+
+	videos := []immich.Asset{
+		{ID: "v1", OriginalFileName: "vid1.mp4", ExifInfo: immich.ExifInfo{FileSizeInByte: 50 * 1024 * 1024}},
+		{ID: "v2", OriginalFileName: "vid2.mp4", ExifInfo: immich.ExifInfo{FileSizeInByte: 60 * 1024 * 1024}},
+	}
+
+	// 1. Pressing 'd' triggers Dry Run
+	m := NewAppModel(cfg, pipeline)
+	m.state = ViewBrowser
+	m.videos = videos
+	m.selectedVideos["v1"] = true
+	m.updateTable()
+
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	model := newM.(*AppModel)
+	if model.state != ViewDryRun {
+		t.Fatalf("expected ViewDryRun on 'd', got %v", model.state)
+	}
+	if model.dryRunCancel != nil {
+		model.dryRunCancel()
+	}
+
+	// 2. Pressing 'Enter' triggers optimization directly (ViewDashboard)
+	m2 := NewAppModel(cfg, pipeline)
+	m2.state = ViewBrowser
+	m2.videos = videos
+	m2.selectedVideos["v1"] = true
+	m2.updateTable()
+
+	newM2, _ := m2.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model2 := newM2.(*AppModel)
+	if model2.state != ViewDashboard {
+		t.Fatalf("expected ViewDashboard on 'enter', got %v", model2.state)
+	}
+	if model2.cancelCtx != nil {
+		model2.cancelCtx()
+	}
+
+	// 3. Browser shortcut text contains both [d] Dry Run and [Enter] Start Optimization
+	browserView := m.viewBrowser()
+	if !strings.Contains(browserView, "[d] Dry Run") {
+		t.Errorf("expected browser shortcuts to include [d] Dry Run")
+	}
+	if !strings.Contains(browserView, "[Enter] Start Optimization") {
+		t.Errorf("expected browser shortcuts to include [Enter] Start Optimization")
+	}
+}
+
+func TestAppModel_DryRunFlow(t *testing.T) {
+	cfg := &config.Config{
+		URL:      "http://localhost:2283",
+		APIKey:   "test-key",
+		SkipHEVC: true,
+	}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+
+	videos := []immich.Asset{
+		{ID: "v1", OriginalFileName: "vid1_hevc.mp4", ExifInfo: immich.ExifInfo{FileSizeInByte: 100 * 1024 * 1024}},
+		{ID: "v2", OriginalFileName: "vid2_hevc.mp4", ExifInfo: immich.ExifInfo{FileSizeInByte: 200 * 1024 * 1024}},
+	}
+
+	// Case A: All selected videos are HEVC and SkipHEVC is ON
+	m := NewAppModel(cfg, pipeline)
+	m.state = ViewDryRun
+	m.dryRunVideos = videos
+	m.dryRunTotal = 2
+	m.dryRunProbed = 2
+	m.dryRunHEVC = videos
+	m.dryRunToProcess = nil
+	m.dryRunDone = true
+
+	v := m.viewDryRun()
+	if !strings.Contains(v, "Will transcode:                   0 videos — nothing to do") {
+		t.Errorf("expected 0 videos to transcode in dry run view, got: %s", v)
+	}
+	if !strings.Contains(v, "all 2 selected video(s) are already HEVC/H.265 (Skip HEVC is ON)") {
+		t.Errorf("expected clear reason explaining why 0 videos will transcode, got: %s", v)
+	}
+	if !strings.Contains(v, "[ s ] Settings") {
+		t.Errorf("expected [ s ] Settings in footer when 0 videos to transcode")
+	}
+	if !strings.Contains(v, "[ Enter / Esc / B ] Back to Browser") {
+		t.Errorf("expected [ Enter / Esc / B ] Back to Browser in footer when 0 videos to transcode, got: %s", v)
+	}
+	if strings.Contains(v, "[ Enter ] Start Optimization") {
+		t.Errorf("should NOT show Start Optimization button when 0 videos to transcode")
+	}
+
+	m.videos = videos
+
+	// Press 's' from Dry Run to go to Settings
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if newM.(*AppModel).state != ViewSettings {
+		t.Errorf("expected ViewSettings on 's' in dry run, got: %v", newM.(*AppModel).state)
+	}
+
+	// Reset state to Dry Run and test 'esc'
+	m.state = ViewDryRun
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	if newM.(*AppModel).state != ViewBrowser {
+		t.Errorf("expected ViewBrowser on 'esc' in dry run, got: %v", newM.(*AppModel).state)
+	}
+
+	// Reset state to Dry Run and test 'enter' when 0 videos to transcode
+	m.state = ViewDryRun
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if newM.(*AppModel).state != ViewBrowser {
+		t.Errorf("expected ViewBrowser on 'enter' when 0 videos to transcode, got: %v", newM.(*AppModel).state)
+	}
+
+	// Case B: SkipHEVC is OFF (both videos to process)
+	m.state = ViewDryRun
+	m.cfg.SkipHEVC = false
+	m.dryRunHEVC = nil
+	m.dryRunToProcess = videos
+	m.dryRunDone = true
+
+	v2 := m.viewDryRun()
+	if !strings.Contains(v2, "Skip HEVC is OFF in Settings") {
+		t.Errorf("expected view to indicate Skip HEVC is OFF, got: %s", v2)
+	}
+	if !strings.Contains(v2, "Will transcode:                   2 videos") {
+		t.Errorf("expected 2 videos to transcode when SkipHEVC is false, got: %s", v2)
+	}
+	if !strings.Contains(v2, "[ Enter ] Start Optimization") {
+		t.Errorf("expected Start Optimization button when videos > 0")
+	}
+	if !strings.Contains(v2, "Will be transcoded:") {
+		t.Errorf("expected 'Will be transcoded:' section in view, got: %s", v2)
+	}
+
+	// Press 'enter' when videos > 0 starts optimization (ViewDashboard)
+	newM2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model2 := newM2.(*AppModel)
+	if model2.state != ViewDashboard {
+		t.Errorf("expected ViewDashboard on 'enter' with videos to transcode, got: %v", model2.state)
+	}
+	if model2.cancelCtx != nil {
+		model2.cancelCtx()
+	}
+
+	// Case C: Probe failures recorded and displayed
+	m3 := NewAppModel(cfg, pipeline)
+	m3.state = ViewDryRun
+	m3.dryRunVideos = videos
+	m3.dryRunToProcess = videos
+	m3.dryRunProbeFailed = videos[:1]
+	m3.dryRunDone = true
+
+	v3 := m3.viewDryRun()
+	if !strings.Contains(v3, "Probe timeouts/unverified:") {
+		t.Errorf("expected view to show probe timeouts/unverified, got: %s", v3)
+	}
+	if !strings.Contains(v3, "(probe unverified)") {
+		t.Errorf("expected view to show (probe unverified) tag for failed probe asset, got: %s", v3)
+	}
+
+	// Case D: DryRunCompleteMsg arriving when state != ViewDryRun does not overwrite
+	m4 := NewAppModel(cfg, pipeline)
+	m4.state = ViewBrowser
+	m4.dryRunDone = false
+	newM4, _ := m4.Update(orchestrator.DryRunCompleteMsg{
+		ToProcess: videos,
+	})
+	if newM4.(*AppModel).dryRunDone {
+		t.Errorf("expected dryRunDone to remain false when complete msg arrives in ViewBrowser")
+	}
+}
+
 

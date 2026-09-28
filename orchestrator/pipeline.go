@@ -442,6 +442,7 @@ func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan
 	type probeResult struct {
 		asset  immich.Asset
 		isHEVC bool
+		err    error
 	}
 
 	jobs := make(chan immich.Asset, total)
@@ -452,7 +453,7 @@ func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan
 			for asset := range jobs {
 				select {
 				case <-ctx.Done():
-					results <- probeResult{asset: asset, isHEVC: false}
+					results <- probeResult{asset: asset, isHEVC: false, err: ctx.Err()}
 					continue
 				default:
 				}
@@ -462,9 +463,14 @@ func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan
 				isHEVC, err := engine.ProbeRemoteHEVC(probeCtx, p.binaries.FFmpegPath, remoteURL, p.client.APIKey())
 				cancel()
 
+				if err != nil {
+					logger.Debug("Dry run remote probe failed for %s (%s): %v", asset.OriginalFileName, asset.ID, err)
+				}
+
 				results <- probeResult{
 					asset:  asset,
 					isHEVC: err == nil && isHEVC,
+					err:    err,
 				}
 			}
 		}()
@@ -477,28 +483,40 @@ func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan
 
 	var toProcess []immich.Asset
 	var hevcSkipped []immich.Asset
+	var probeFailed []immich.Asset
 	probed := 0
 
 	for i := 0; i < total; i++ {
-		res := <-results
-		probed++
-		if res.isHEVC {
-			hevcSkipped = append(hevcSkipped, res.asset)
-		} else {
-			toProcess = append(toProcess, res.asset)
-		}
-		ch <- DryRunVideoMsg{
-			VideoID:   res.asset.ID,
-			VideoName: res.asset.OriginalFileName,
-			IsHEVC:    res.isHEVC,
-			Probed:    probed,
-			Total:     total,
+		select {
+		case <-ctx.Done():
+			return
+		case res := <-results:
+			probed++
+
+			if res.err != nil {
+				probeFailed = append(probeFailed, res.asset)
+			}
+
+			if p.cfg.SkipHEVC && res.isHEVC {
+				hevcSkipped = append(hevcSkipped, res.asset)
+			} else {
+				toProcess = append(toProcess, res.asset)
+			}
+			ch <- DryRunVideoMsg{
+				VideoID:   res.asset.ID,
+				VideoName: res.asset.OriginalFileName,
+				IsHEVC:    res.isHEVC,
+				Probed:    probed,
+				Total:     total,
+				Err:       res.err,
+			}
 		}
 	}
 
 	ch <- DryRunCompleteMsg{
 		ToProcess:   toProcess,
 		HEVCSkipped: hevcSkipped,
+		ProbeFailed: probeFailed,
 	}
 }
 

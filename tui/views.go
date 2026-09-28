@@ -209,7 +209,7 @@ func (m *AppModel) viewBrowser() string {
 		float64(selectedBytes)/(1024*1024*1024),
 	))
 
-	b.WriteString(styles.Subtext.Render("Shortcuts: [Space] Toggle | [a] All | [n] None | [/] Search\n           [s] Settings   | [r] Rescan | [Enter] Preview & Start | [q] Quit"))
+	b.WriteString(styles.Subtext.Render("Shortcuts: [Space] Toggle | [a] All | [n] None | [/] Search | [s] Settings\n           [d] Dry Run    | [Enter] Start Optimization | [r] Rescan | [q] Quit"))
 	return b.String()
 }
 
@@ -245,6 +245,7 @@ func (m *AppModel) viewDryRun() string {
 	selectedCount := len(m.dryRunVideos)
 	hevcCount := len(m.dryRunHEVC)
 	processCount := len(m.dryRunToProcess)
+	probeFailedCount := len(m.dryRunProbeFailed)
 
 	// Below-threshold count from the scan (already filtered before browser)
 	belowThreshold := 0
@@ -280,8 +281,14 @@ func (m *AppModel) viewDryRun() string {
 		}
 		b.WriteString(fmt.Sprintf("  • Skipped (already HEVC/H.265):    %s\n", hevcLabel))
 	} else {
-		b.WriteString(fmt.Sprintf("  • Skipped (already HEVC/H.265):    %s  (Skip HEVC is OFF)\n",
-			styles.Subtext.Render("n/a")))
+		b.WriteString(fmt.Sprintf("  • Skipped (already HEVC/H.265):    %s  (Skip HEVC is OFF in Settings)\n",
+			styles.Subtext.Render("0")))
+	}
+
+	// Row: probe timeouts/errors (if any)
+	if probeFailedCount > 0 {
+		b.WriteString(fmt.Sprintf("  • Probe timeouts/unverified:       %s  (will transcode / verify locally)\n",
+			styles.WarningText.Render(fmt.Sprintf("%d", probeFailedCount))))
 	}
 
 	// Row: videos to transcode
@@ -292,8 +299,24 @@ func (m *AppModel) viewDryRun() string {
 			float64(processBytes)/(1024*1024*1024),
 		))
 	} else {
+		var reason string
+		if selectedCount == 0 {
+			reason = "no videos selected"
+		} else if m.cfg.SkipHEVC && hevcCount == selectedCount {
+			reason = fmt.Sprintf("all %d selected video(s) are already HEVC/H.265 (Skip HEVC is ON)", selectedCount)
+		} else if m.cfg.SkipHEVC && hevcCount > 0 {
+			reason = fmt.Sprintf("%d video(s) skipped as already HEVC", hevcCount)
+		} else {
+			reason = "no eligible videos found"
+		}
+
 		b.WriteString(fmt.Sprintf("  ℹ Will transcode:                   %s\n",
-			styles.WarningText.Render("0 videos — nothing to do")))
+			styles.WarningText.Render(fmt.Sprintf("0 videos — nothing to do (%s)", reason))))
+
+		if m.cfg.SkipHEVC && hevcCount > 0 {
+			b.WriteString(fmt.Sprintf("    %s\n",
+				styles.Subtext.Render("💡 Tip: Press [s] to open Settings and turn OFF 'Skip HEVC' if you wish to re-encode them.")))
+		}
 	}
 
 	// ── HEVC list (if any and SkipHEVC on) ───────────────────────────────────
@@ -318,13 +341,46 @@ func (m *AppModel) viewDryRun() string {
 		}
 	}
 
+	// ── Transcode list (if any videos to process) ───────────────────────────
+	if processCount > 0 {
+		b.WriteString("\n")
+		b.WriteString(styles.SectionHeader.Render("Will be transcoded:"))
+		b.WriteString("\n")
+		limit := len(m.dryRunToProcess)
+		shown := limit
+		if shown > 8 {
+			shown = 8
+		}
+		failedMap := make(map[string]bool)
+		for _, f := range m.dryRunProbeFailed {
+			failedMap[f.ID] = true
+		}
+		for i := 0; i < shown; i++ {
+			v := m.dryRunToProcess[i]
+			extra := ""
+			if failedMap[v.ID] {
+				extra = " " + styles.WarningText.Render("(probe unverified)")
+			}
+			b.WriteString(fmt.Sprintf("  • %-45s  %s%s\n",
+				truncate(v.OriginalFileName, 45),
+				styles.Subtext.Render(fmt.Sprintf("%.1f MB", float64(v.GetSize())/(1024*1024))),
+				extra,
+			))
+		}
+		if limit > shown {
+			b.WriteString(fmt.Sprintf("  %s\n", styles.Subtext.Render(fmt.Sprintf("  … and %d more", limit-shown))))
+		}
+	}
+
 	b.WriteString("\n")
 	// ── Footer ────────────────────────────────────────────────────────────────
 	if processCount > 0 {
 		b.WriteString(styles.ActiveButton.Render("[ Enter ] Start Optimization") + "  " +
+			styles.Button.Render("[ s ] Settings") + "  " +
 			styles.Button.Render("[ Esc / B ] Back to Browser"))
 	} else {
-		b.WriteString(styles.Button.Render("[ Esc / B ] Back to Browser"))
+		b.WriteString(styles.Button.Render("[ s ] Settings") + "  " +
+			styles.Button.Render("[ Enter / Esc / B ] Back to Browser"))
 	}
 
 	return b.String()
