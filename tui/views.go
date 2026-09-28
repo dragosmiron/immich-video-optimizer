@@ -25,6 +25,8 @@ func (m *AppModel) View() string {
 		s = m.viewScanning()
 	case ViewBrowser:
 		s = m.viewBrowser()
+	case ViewDryRun:
+		s = m.viewDryRun()
 	case ViewSettings:
 		s = m.viewSettings()
 	case ViewDashboard:
@@ -132,8 +134,8 @@ func (m *AppModel) viewScanPrompt() string {
 	b.WriteString(styles.SectionHeader.Render("Ready to Scan:"))
 	b.WriteString("\nNo videos loaded yet. Start a scan to discover large videos on your server.\n\n")
 
-	b.WriteString(styles.ActiveButton.Render("[ Enter / S ] Scan Immich Library") + "\n\n")
-	b.WriteString(styles.Button.Render("[ C ] Settings") + "  " + styles.Button.Render("[ E ] Edit Server Credentials") + "  " + styles.Button.Render("[ Q ] Quit") + "\n")
+	b.WriteString(styles.ActiveButton.Render("[ Enter ] Scan Immich Library") + "\n\n")
+	b.WriteString(styles.Button.Render("[ S ] Settings") + "  " + styles.Button.Render("[ E ] Edit Server Credentials") + "  " + styles.Button.Render("[ Q ] Quit") + "\n")
 
 	return b.String()
 }
@@ -177,8 +179,8 @@ func (m *AppModel) viewBrowser() string {
 		b.WriteString(styles.WarningText.Render("ℹ No videos found exceeding the " + m.cfg.SizeThreshold + " MB threshold."))
 		b.WriteString("\n\nAll videos in your library are already within the target size limit.\n\n")
 		b.WriteString("Actions:\n")
-		b.WriteString("  [ C ] Adjust Size Threshold in Settings\n")
-		b.WriteString("  [ S ] Rescan Library\n")
+		b.WriteString("  [ S ] Adjust Size Threshold in Settings\n")
+		b.WriteString("  [ R ] Rescan Library\n")
 		b.WriteString("  [ E ] Edit Server Credentials\n")
 		b.WriteString("  [ Q ] Quit\n")
 		return b.String()
@@ -207,11 +209,129 @@ func (m *AppModel) viewBrowser() string {
 		float64(selectedBytes)/(1024*1024*1024),
 	))
 
-	b.WriteString(styles.Subtext.Render("Shortcuts: [Space] Toggle | [a] All | [n] None | [/] Search\n           [c] Settings   | [s] Rescan | [Enter] Start | [q] Quit"))
+	b.WriteString(styles.Subtext.Render("Shortcuts: [Space] Toggle | [a] All | [n] None | [/] Search\n           [s] Settings   | [r] Rescan | [Enter] Preview & Start | [q] Quit"))
+	return b.String()
+}
+
+
+func (m *AppModel) viewDryRun() string {
+	b := strings.Builder{}
+	b.WriteString(styles.Title.Render("🔍 Dry Run Preview"))
+	b.WriteString("\n\n")
+
+	// ── Probe progress bar ───────────────────────────────────────────────────
+	if !m.dryRunDone {
+		b.WriteString(styles.SectionHeader.Render("Probing video codecs via HTTP range headers..."))
+		b.WriteString("\n")
+
+		total := m.dryRunTotal
+		probed := m.dryRunProbed
+		if total <= 0 {
+			total = 1
+		}
+
+		// ASCII progress bar (no external dependency)
+		barWidth := 40
+		filled := barWidth * probed / total
+		bar := "[" + strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled) + "]"
+		b.WriteString(fmt.Sprintf("  %s  %d / %d\n\n", styles.Value.Render(bar), probed, total))
+		b.WriteString(styles.Subtext.Render("No files are downloaded. This reads only the first few bytes of each video."))
+		b.WriteString("\n\n")
+		b.WriteString(styles.Subtext.Render("[Esc / B] Cancel & Back to Browser"))
+		return b.String()
+	}
+
+	// ── Results ───────────────────────────────────────────────────────────────
+	selectedCount := len(m.dryRunVideos)
+	hevcCount := len(m.dryRunHEVC)
+	processCount := len(m.dryRunToProcess)
+
+	// Below-threshold count from the scan (already filtered before browser)
+	belowThreshold := 0
+	if m.scanResult != nil {
+		belowThreshold = m.scanResult.SkippedBelowSize
+	}
+
+	// Total size of videos that will actually be processed
+	var processBytes int64
+	for _, v := range m.dryRunToProcess {
+		processBytes += v.GetSize()
+	}
+
+	b.WriteString(styles.SectionHeader.Render("Pre-flight Breakdown:"))
+	b.WriteString("\n")
+
+	// Row: total selected in browser
+	b.WriteString(fmt.Sprintf("  • Videos selected in browser:      %s\n",
+		styles.Value.Render(fmt.Sprintf("%d", selectedCount))))
+
+	// Row: below-threshold (filtered at scan time — not in the selection)
+	if belowThreshold > 0 {
+		b.WriteString(fmt.Sprintf("  • Skipped at scan (below %s MB):   %s  (never shown in browser)\n",
+			m.cfg.SizeThreshold,
+			styles.WarningText.Render(fmt.Sprintf("%d", belowThreshold))))
+	}
+
+	// Row: already HEVC — skipped by probe
+	if m.cfg.SkipHEVC {
+		hevcLabel := styles.WarningText.Render(fmt.Sprintf("%d", hevcCount))
+		if hevcCount == 0 {
+			hevcLabel = styles.Value.Render("0")
+		}
+		b.WriteString(fmt.Sprintf("  • Skipped (already HEVC/H.265):    %s\n", hevcLabel))
+	} else {
+		b.WriteString(fmt.Sprintf("  • Skipped (already HEVC/H.265):    %s  (Skip HEVC is OFF)\n",
+			styles.Subtext.Render("n/a")))
+	}
+
+	// Row: videos to transcode
+	b.WriteString("\n")
+	if processCount > 0 {
+		b.WriteString(fmt.Sprintf("  ✓ Will transcode:                   %s  (%.2f GB total to process)\n",
+			styles.SuccessText.Render(fmt.Sprintf("%d videos", processCount)),
+			float64(processBytes)/(1024*1024*1024),
+		))
+	} else {
+		b.WriteString(fmt.Sprintf("  ℹ Will transcode:                   %s\n",
+			styles.WarningText.Render("0 videos — nothing to do")))
+	}
+
+	// ── HEVC list (if any and SkipHEVC on) ───────────────────────────────────
+	if m.cfg.SkipHEVC && len(m.dryRunHEVC) > 0 {
+		b.WriteString("\n")
+		b.WriteString(styles.SectionHeader.Render("Already HEVC — will be skipped:"))
+		b.WriteString("\n")
+		limit := len(m.dryRunHEVC)
+		shown := limit
+		if shown > 8 {
+			shown = 8
+		}
+		for i := 0; i < shown; i++ {
+			v := m.dryRunHEVC[i]
+			b.WriteString(fmt.Sprintf("  • %-45s  %s\n",
+				truncate(v.OriginalFileName, 45),
+				styles.Subtext.Render(fmt.Sprintf("%.1f MB", float64(v.GetSize())/(1024*1024))),
+			))
+		}
+		if limit > shown {
+			b.WriteString(fmt.Sprintf("  %s\n", styles.Subtext.Render(fmt.Sprintf("  … and %d more", limit-shown))))
+		}
+	}
+
+	b.WriteString("\n")
+	// ── Footer ────────────────────────────────────────────────────────────────
+	if processCount > 0 {
+		b.WriteString(styles.ActiveButton.Render("[ Enter ] Start Optimization") + "  " +
+			styles.Button.Render("[ Esc / B ] Back to Browser"))
+	} else {
+		b.WriteString(styles.Button.Render("[ Esc / B ] Back to Browser"))
+	}
+
 	return b.String()
 }
 
 func (m *AppModel) viewResumePrompt() string {
+
 	b := strings.Builder{}
 	b.WriteString(styles.Title.Render("🎬 Resume Previous Session"))
 	b.WriteString("\n\n")

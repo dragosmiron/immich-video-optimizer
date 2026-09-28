@@ -103,10 +103,11 @@ Review discovered videos that exceed your configured size threshold:
 - **`[a]`**: Select all visible videos.
 - **`[n]`**: Deselect all videos.
 - **`[/]`**: Filter table by filename in real-time.
-- **`[Enter]`**: Start optimization batch.
-- **`[c]`**: Open Settings menu.
+- **`[Enter]`**: Preview & start optimization batch.
+- **`[s]`**: Open Settings menu.
+- **`[r]`**: Rescan library.
 
-### 3. Settings & Preferences (`c`)
+### 3. Settings & Preferences (`s`)
 Customize processing options:
 - **Target Resolution:** `Original` (preserves source dimensions), `4K`, `1440p`, `1080p`, or `720p` (never upscales).
 - **Transcoding Preset:** `Ultrafast`, `Fast`, `Medium` (default), or `Slow`.
@@ -134,8 +135,8 @@ Watch real-time multi-stage progress:
 | **Global** | `Ctrl + C` | Force exit application |
 | **Connection Setup** | `Tab` / `↓` / `↑` | Move between URL, API key, and submit button |
 | | `Enter` | Test connection and continue |
-| **Scan Prompt** | `Enter` / `s` | Start scanning Immich library for large videos |
-| | `c` | Open Settings & Preferences |
+| **Scan Prompt** | `Enter` | Start scanning Immich library for large videos |
+| | `s` | Open Settings & Preferences |
 | | `e` | Edit server connection details |
 | | `q` / `Esc` | Exit application |
 | **Video Browser** | `↑` / `↓` | Navigate table rows |
@@ -143,9 +144,9 @@ Watch real-time multi-stage progress:
 | | `a` | Select all filtered videos |
 | | `n` | Deselect all videos |
 | | `/` | Open live search filter |
-| | `Enter` | Start batch processing selected videos |
-| | `c` | Open Settings & Preferences |
-| | `s` | Rescan library |
+| | `Enter` | Preview & start batch processing |
+| | `s` | Open Settings & Preferences |
+| | `r` | Rescan library |
 | | `q` / `Esc` | Exit application |
 | **Settings** | `↑` / `↓` (`k` / `j`) | Navigate setting rows |
 | | `←` / `→` (`h` / `l`) | Change resolution, preset, encoder count, or network retries |
@@ -157,6 +158,7 @@ Watch real-time multi-stage progress:
 | | `c` | Clear session and exit |
 | **Summary** | `r` | Retry failed videos |
 | | `Enter` / `q` | Exit application |
+
 
 ---
 

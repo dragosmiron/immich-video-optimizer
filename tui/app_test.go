@@ -71,18 +71,32 @@ func TestAppModel_ScanTransitionAndBulkSummary(t *testing.T) {
 	m := NewAppModel(cfg, pipeline)
 	m.state = ViewScanPrompt
 
-	// Trigger Scan
-	newM, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	// Verify 's' opens Settings
+	settingsM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if settingsM.(*AppModel).state != ViewSettings {
+		t.Fatalf("expected ViewSettings on 's', got %v", settingsM.(*AppModel).state)
+	}
+
+	// Return to ViewScanPrompt
+	promptM, _ := settingsM.(*AppModel).Update(tea.KeyMsg{Type: tea.KeyEscape})
+	if promptM.(*AppModel).state != ViewScanPrompt {
+		t.Fatalf("expected ViewScanPrompt on 'esc', got %v", promptM.(*AppModel).state)
+	}
+
+	// Trigger Scan with Enter
+	newM, cmd := promptM.(*AppModel).Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model := newM.(*AppModel)
 	if model.state != ViewScanning {
 		t.Fatalf("expected ViewScanning, got %v", model.state)
 	}
+
 	if cmd == nil {
 		t.Fatalf("expected non-nil scan command")
 	}
 
 	// Complete Scan with mock results
 	res := &immich.QueryResult{
+
 		TotalAssetsScanned: 50,
 		SkippedNonVideo:    25,
 		SkippedBelowSize:   23,
@@ -143,7 +157,29 @@ func TestAppModel_SelectionShortcuts(t *testing.T) {
 	if len(model.selectedVideos) != 2 {
 		t.Fatalf("expected 2 selected videos after 'a', got %d", len(model.selectedVideos))
 	}
+
+	// Press 's' to open settings from browser
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	model = newM.(*AppModel)
+	if model.state != ViewSettings {
+		t.Fatalf("expected ViewSettings after 's' in browser, got %v", model.state)
+	}
+
+	// Press 'esc' to return to browser
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	model = newM.(*AppModel)
+	if model.state != ViewBrowser {
+		t.Fatalf("expected ViewBrowser after 'esc' from settings, got %v", model.state)
+	}
+
+	// Press 'r' to rescan from browser
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = newM.(*AppModel)
+	if model.state != ViewScanPrompt {
+		t.Fatalf("expected ViewScanPrompt after 'r' in browser, got %v", model.state)
+	}
 }
+
 
 func TestAppModel_DynamicDisplayInDashboard(t *testing.T) {
 	cfg := &config.Config{URL: "http://localhost:2283", APIKey: "test-key"}

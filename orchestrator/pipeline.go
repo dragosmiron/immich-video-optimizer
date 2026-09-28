@@ -420,6 +420,88 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 	ch <- PipelineDoneMsg{TotalSavedBytes: sess.GetTotalSavedBytes()}
 }
 
+// RunDryRun performs a read-only pre-flight check on the selected videos.
+// It probes each video's codec via HTTP range headers (no downloading) and
+// emits a DryRunVideoMsg per video as results arrive, followed by a single
+// DryRunCompleteMsg when all probes are complete.
+// The channel is closed when this function returns.
+func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan<- interface{}) {
+	defer close(ch)
+
+	total := len(videos)
+	if total == 0 {
+		ch <- DryRunCompleteMsg{}
+		return
+	}
+
+	numWorkers := 8
+	if total < numWorkers {
+		numWorkers = total
+	}
+
+	type probeResult struct {
+		asset  immich.Asset
+		isHEVC bool
+	}
+
+	jobs := make(chan immich.Asset, total)
+	results := make(chan probeResult, total)
+
+	for w := 0; w < numWorkers; w++ {
+		go func() {
+			for asset := range jobs {
+				select {
+				case <-ctx.Done():
+					results <- probeResult{asset: asset, isHEVC: false}
+					continue
+				default:
+				}
+
+				remoteURL := fmt.Sprintf("%s/api/assets/%s/original", p.client.BaseURL(), asset.ID)
+				probeCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+				isHEVC, err := engine.ProbeRemoteHEVC(probeCtx, p.binaries.FFmpegPath, remoteURL, p.client.APIKey())
+				cancel()
+
+				results <- probeResult{
+					asset:  asset,
+					isHEVC: err == nil && isHEVC,
+				}
+			}
+		}()
+	}
+
+	for _, v := range videos {
+		jobs <- v
+	}
+	close(jobs)
+
+	var toProcess []immich.Asset
+	var hevcSkipped []immich.Asset
+	probed := 0
+
+	for i := 0; i < total; i++ {
+		res := <-results
+		probed++
+		if res.isHEVC {
+			hevcSkipped = append(hevcSkipped, res.asset)
+		} else {
+			toProcess = append(toProcess, res.asset)
+		}
+		ch <- DryRunVideoMsg{
+			VideoID:   res.asset.ID,
+			VideoName: res.asset.OriginalFileName,
+			IsHEVC:    res.isHEVC,
+			Probed:    probed,
+			Total:     total,
+		}
+	}
+
+	ch <- DryRunCompleteMsg{
+		ToProcess:   toProcess,
+		HEVCSkipped: hevcSkipped,
+	}
+}
+
 func (p *Pipeline) filterHEVCParallel(ctx context.Context, videos []immich.Asset, sess *state.Session, ch chan<- interface{}) []immich.Asset {
 	numWorkers := 8
 	if len(videos) < numWorkers {
