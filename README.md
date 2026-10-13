@@ -192,7 +192,6 @@ go build -o immich-video-optimizer .
 
 ## 📄 License
 
-This project is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+This project is licensed under the [GNU Affero General Public License v3.0 (AGPL-3.0)](LICENSE).
 
-- **Attribution Required:** You must provide clear credit and copyright notice to the author.
-- **Non-Commercial Use Only:** Use of this software is strictly limited to noncommercial purposes. Commercial use or monetary compensation is prohibited.
+- **Attribution & Copyleft:** You are free to run, study, share, and modify the software under the condition that any distributed copies or network services (SaaS) running modified versions must make their complete source code freely available under the AGPLv3.
