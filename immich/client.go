@@ -189,11 +189,20 @@ func (c *Client) doRequest(req *http.Request) (*http.Response, error) {
 
 // ScanVideos returns videos exceeding sizeThreshold along with bulk stats on excluded assets
 func (c *Client) ScanVideos(sizeThreshold int64) (*QueryResult, error) {
+	return c.ScanVideosWithContext(context.Background(), sizeThreshold)
+}
+
+// ScanVideosWithContext returns videos exceeding sizeThreshold along with bulk stats on excluded assets, supporting context cancellation
+func (c *Client) ScanVideosWithContext(ctx context.Context, sizeThreshold int64) (*QueryResult, error) {
 	res := &QueryResult{}
 	page := 1
 	size := 1000
 
 	for {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		payload := map[string]interface{}{
 			"page":     page,
 			"size":     size,
@@ -201,7 +210,7 @@ func (c *Client) ScanVideos(sizeThreshold int64) (*QueryResult, error) {
 		}
 		body, _ := json.Marshal(payload)
 
-		req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/search/metadata", bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/search/metadata", bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
@@ -506,21 +515,64 @@ func (c *Client) UploadReplacementAsset(filePath string, orig Asset) (*Asset, er
 	return c.UploadReplacementAssetWithContext(context.Background(), filePath, orig)
 }
 
-// DeleteAsset deletes the specified asset
-func (c *Client) DeleteAsset(assetID string) error {
+// DeleteAssetWithContext deletes the specified asset with context cancellation and automatic retries
+func (c *Client) DeleteAssetWithContext(ctx context.Context, assetID string) error {
+	attempts := c.maxRetries + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+
 	payload := map[string][]string{"ids": {assetID}}
 	body, _ := json.Marshal(payload)
 
-	req, err := http.NewRequest(http.MethodDelete, c.baseURL+"/api/assets", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 
-	resp, err := c.doRequest(req)
-	if err != nil {
-		return err
+		if attempt > 1 {
+			backoff := retryBackoff(attempt)
+			logger.Info("Retrying delete for asset %s (attempt %d/%d) in %v...", assetID, attempt, attempts, backoff)
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+"/api/assets", bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := c.doRequest(req)
+		if err == nil {
+			resp.Body.Close()
+			return nil
+		}
+		lastErr = err
+
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 {
+			logger.Error("Delete failed with client error %d for asset %s; aborting retries", apiErr.StatusCode, assetID)
+			return err
+		}
+
+		if attempt < attempts {
+			logger.Error("Delete attempt %d/%d failed for asset %s: %v", attempt, attempts, assetID, err)
+		}
 	}
-	defer resp.Body.Close()
-	return nil
+	logger.Error("All %d delete attempts failed for asset %s: %v", attempts, assetID, lastErr)
+	return lastErr
+}
+
+// DeleteAsset deletes the specified asset
+func (c *Client) DeleteAsset(assetID string) error {
+	return c.DeleteAssetWithContext(context.Background(), assetID)
 }

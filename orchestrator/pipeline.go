@@ -73,7 +73,11 @@ func (p *Pipeline) QueryVideos(thresholdBytes int64) ([]immich.Asset, error) {
 }
 
 func (p *Pipeline) ScanVideos(thresholdBytes int64) (*immich.QueryResult, error) {
-	return p.client.ScanVideos(thresholdBytes)
+	return p.ScanVideosWithContext(context.Background(), thresholdBytes)
+}
+
+func (p *Pipeline) ScanVideosWithContext(ctx context.Context, thresholdBytes int64) (*immich.QueryResult, error) {
+	return p.client.ScanVideosWithContext(ctx, thresholdBytes)
 }
 
 func (p *Pipeline) ValidateConnection() error {
@@ -404,7 +408,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 			_ = p.client.AddAssetsToAlbum(albumID, []string{newAsset.ID})
 		}
 
-		if err := p.client.DeleteAsset(item.Asset.ID); err != nil {
+		if err := p.client.DeleteAssetWithContext(ctx, item.Asset.ID); err != nil {
 			item.Cleanup()
 			logger.Error("Failed to delete original asset %s (%s): %v", item.Asset.OriginalFileName, item.Asset.ID, err)
 			sess.MarkFailed(item.Asset.ID, fmt.Sprintf("failed to delete original asset: %v", err))

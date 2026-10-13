@@ -1,6 +1,7 @@
 package immich
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -397,6 +398,35 @@ func TestUploadAsset_RetrySuccess(t *testing.T) {
 	}
 	if asset.ID != "new-uploaded-asset" {
 		t.Errorf("expected ID 'new-uploaded-asset', got '%s'", asset.ID)
+	}
+	if attempts != 2 {
+		t.Errorf("expected 2 attempts, got %d", attempts)
+	}
+}
+
+func TestDeleteAsset_RetrySuccess(t *testing.T) {
+	origBackoff := retryBackoff
+	retryBackoff = func(attempt int) time.Duration { return 5 * time.Millisecond }
+	defer func() { retryBackoff = origBackoff }()
+
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("busy"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+	client.SetMaxRetries(2)
+
+	err := client.DeleteAssetWithContext(context.Background(), "del-123")
+	if err != nil {
+		t.Fatalf("expected delete to succeed on retry, got: %v", err)
 	}
 	if attempts != 2 {
 		t.Errorf("expected 2 attempts, got %d", attempts)
