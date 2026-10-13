@@ -25,8 +25,8 @@ A high-performance, interactive terminal client that reclaims gigabytes of disk 
   - Resume anytime with full metadata and tracking album continuity.
 - **Size Guard:**
   - Automatically compares output against source. If a transcoded video ends up larger than the original, replacement is skipped and the original is untouched.
-- **Zero-Dependency Architecture:**
-  - Single standalone binary. Automatically locates, extracts, or downloads standalone static binaries for `ffmpeg` and `exiftool` on demand.
+- **Streamlined Setup:**
+  - Automatically locates system binaries or downloads static `ffmpeg` on supported platforms (macOS & Linux). Uses `exiftool` for metadata replication.
 
 ---
 
