@@ -253,10 +253,27 @@ func (m *AppModel) viewDryRun() string {
 		belowThreshold = m.scanResult.SkippedBelowSize
 	}
 
-	// Total size of videos that will actually be processed
+	// Total size and estimated savings for videos to process
 	var processBytes int64
+	var estSavedBytes int64
 	for _, v := range m.dryRunToProcess {
-		processBytes += v.GetSize()
+		orig := v.GetSize()
+		processBytes += orig
+		detail := m.dryRunDetails[v.ID]
+		var ratio float64
+		if detail.IsHEVC {
+			ratio = 0.90
+		} else if m.cfg.Resolution == "1080p" && (detail.Resolution == "4K" || detail.Resolution == "2160p") {
+			ratio = 0.25
+		} else {
+			ratio = 0.45
+		}
+		saved := int64(float64(orig) * (1.0 - ratio))
+		estSavedBytes += saved
+	}
+	estFinalBytes := processBytes - estSavedBytes
+	if estFinalBytes < 0 {
+		estFinalBytes = 0
 	}
 
 	b.WriteString(styles.SectionHeader.Render("Pre-flight Breakdown:"))
@@ -291,12 +308,23 @@ func (m *AppModel) viewDryRun() string {
 			styles.WarningText.Render(fmt.Sprintf("%d", probeFailedCount))))
 	}
 
-	// Row: videos to transcode
+	// Row: videos to transcode & storage estimates
 	b.WriteString("\n")
 	if processCount > 0 {
-		b.WriteString(fmt.Sprintf("  ✓ Will transcode:                   %s  (%.2f GB total to process)\n",
+		pct := 0.0
+		if processBytes > 0 {
+			pct = (float64(estSavedBytes) / float64(processBytes)) * 100
+		}
+		b.WriteString(fmt.Sprintf("  ✓ Will transcode:                   %s  (%s total)\n",
 			styles.SuccessText.Render(fmt.Sprintf("%d videos", processCount)),
-			float64(processBytes)/(1024*1024*1024),
+			formatByteSize(processBytes),
+		))
+		b.WriteString(fmt.Sprintf("  💾 Est. Storage Reclaimed:         %s  (~%.0f%% space saved)\n",
+			styles.SuccessText.Render(fmt.Sprintf("~%s", formatByteSize(estSavedBytes))),
+			pct,
+		))
+		b.WriteString(fmt.Sprintf("  📦 Est. Final Storage:             %s\n",
+			styles.Value.Render(fmt.Sprintf("~%s", formatByteSize(estFinalBytes))),
 		))
 	} else {
 		var reason string
@@ -322,7 +350,7 @@ func (m *AppModel) viewDryRun() string {
 	// ── HEVC list (if any and SkipHEVC on) ───────────────────────────────────
 	if m.cfg.SkipHEVC && len(m.dryRunHEVC) > 0 {
 		b.WriteString("\n")
-		b.WriteString(styles.SectionHeader.Render("Already HEVC — will be skipped:"))
+		b.WriteString(styles.SectionHeader.Render("Already HEVC — will be skipped (0 MB downloaded):"))
 		b.WriteString("\n")
 		limit := len(m.dryRunHEVC)
 		shown := limit
@@ -331,9 +359,16 @@ func (m *AppModel) viewDryRun() string {
 		}
 		for i := 0; i < shown; i++ {
 			v := m.dryRunHEVC[i]
-			b.WriteString(fmt.Sprintf("  • %-45s  %s\n",
-				truncate(v.OriginalFileName, 45),
-				styles.Subtext.Render(fmt.Sprintf("%.1f MB", float64(v.GetSize())/(1024*1024))),
+			detail := m.dryRunDetails[v.ID]
+			res := detail.Resolution
+			if res == "" {
+				res = "1080p"
+			}
+			b.WriteString(fmt.Sprintf("  • %-26s  %-9s  %-26s  %s\n",
+				truncate(v.OriginalFileName, 26),
+				styles.Subtext.Render(formatByteSize(v.GetSize())),
+				styles.Value.Render(fmt.Sprintf("[HEVC • %s]", res)),
+				styles.Subtext.Render("✓ Already optimal"),
 			))
 		}
 		if limit > shown {
@@ -357,13 +392,46 @@ func (m *AppModel) viewDryRun() string {
 		}
 		for i := 0; i < shown; i++ {
 			v := m.dryRunToProcess[i]
+			orig := v.GetSize()
+			detail := m.dryRunDetails[v.ID]
+			codec := detail.Codec
+			if codec == "" {
+				codec = "H.264"
+			}
+			res := detail.Resolution
+			if res == "" {
+				res = "1080p"
+			}
+			targetRes := res
+			if m.cfg.Resolution != "original" && m.cfg.Resolution != "" {
+				targetRes = m.cfg.Resolution
+			}
+
+			var ratio float64
+			if detail.IsHEVC {
+				ratio = 0.90
+			} else if targetRes != res && (res == "4K" || res == "2160p") {
+				ratio = 0.25
+			} else {
+				ratio = 0.45
+			}
+			itemSaved := int64(float64(orig) * (1.0 - ratio))
+
+			transcodeBadge := fmt.Sprintf("[%s • %s] ➔ [HEVC • %s]", codec, res, targetRes)
+			itemEst := fmt.Sprintf("~%s saved", formatByteSize(itemSaved))
+
 			extra := ""
-			if failedMap[v.ID] {
+			if detail.IsHEVC && !m.cfg.SkipHEVC {
+				extra = " " + styles.WarningText.Render("⚠️ Already HEVC")
+			} else if failedMap[v.ID] {
 				extra = " " + styles.WarningText.Render("(probe unverified)")
 			}
-			b.WriteString(fmt.Sprintf("  • %-45s  %s%s\n",
-				truncate(v.OriginalFileName, 45),
-				styles.Subtext.Render(fmt.Sprintf("%.1f MB", float64(v.GetSize())/(1024*1024))),
+
+			b.WriteString(fmt.Sprintf("  • %-26s  %-9s  %-26s  %s%s\n",
+				truncate(v.OriginalFileName, 26),
+				styles.Subtext.Render(formatByteSize(orig)),
+				styles.Value.Render(transcodeBadge),
+				styles.SuccessText.Render(itemEst),
 				extra,
 			))
 		}
@@ -776,4 +844,30 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string(runes[:n-1]) + "…"
+}
+
+func formatByteSize(b int64) string {
+	if b < 0 {
+		b = 0
+	}
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	val := float64(b) / float64(div)
+	switch exp {
+	case 0:
+		return fmt.Sprintf("%.1f KB", val)
+	case 1:
+		return fmt.Sprintf("%.1f MB", val)
+	case 2:
+		return fmt.Sprintf("%.2f GB", val)
+	default:
+		return fmt.Sprintf("%.2f TB", val)
+	}
 }

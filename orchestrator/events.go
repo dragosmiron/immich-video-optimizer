@@ -42,23 +42,27 @@ type PipelineDoneMsg struct {
 	Paused          bool // true when the user cancelled via Q; session is preserved for resume
 }
 
-// DryRunVideoMsg is sent once per video after its HEVC codec probe completes.
+// DryRunVideoMsg is sent once per video after its codec probe completes.
 type DryRunVideoMsg struct {
-	VideoID   string
-	VideoName string
-	IsHEVC    bool
-	Probed    int // running count of probed videos so far
-	Total     int // total videos being probed
-	Err       error
+	VideoID    string
+	VideoName  string
+	IsHEVC     bool
+	Codec      string
+	Resolution string
+	Probed     int // running count of probed videos so far
+	Total      int // total videos being probed
+	Err        error
 }
 
-// DryRunCompleteMsg is sent when all HEVC probes have finished.
+// DryRunCompleteMsg is sent when all probes have finished.
 // ToProcess contains videos that will actually be transcoded.
 // HEVCSkipped contains videos that will be skipped because they are already HEVC.
 // ProbeFailed contains videos whose probe encountered an error or timeout.
+// VideoDetails maps asset ID to parsed codec and resolution info.
 type DryRunCompleteMsg struct {
-	ToProcess   []immich.Asset
-	HEVCSkipped []immich.Asset
-	ProbeFailed []immich.Asset
+	ToProcess    []immich.Asset
+	HEVCSkipped  []immich.Asset
+	ProbeFailed  []immich.Asset
+	VideoDetails map[string]engine.ProbeDetails
 }
 

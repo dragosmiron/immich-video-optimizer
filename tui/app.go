@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"immich-video-optimizer/config"
+	"immich-video-optimizer/engine"
 	"immich-video-optimizer/immich"
 	"immich-video-optimizer/logger"
 	"immich-video-optimizer/orchestrator"
@@ -163,6 +164,7 @@ type AppModel struct {
 	dryRunToProcess   []immich.Asset
 	dryRunHEVC        []immich.Asset
 	dryRunProbeFailed []immich.Asset
+	dryRunDetails     map[string]engine.ProbeDetails
 	dryRunDone        bool
 	dryRunVideos      []immich.Asset // the selection that triggered the dry run
 }
@@ -352,6 +354,14 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.state == ViewDryRun {
 			m.dryRunProbed = msg.Probed
 			m.dryRunTotal = msg.Total
+			if m.dryRunDetails == nil {
+				m.dryRunDetails = make(map[string]engine.ProbeDetails)
+			}
+			m.dryRunDetails[msg.VideoID] = engine.ProbeDetails{
+				Codec:      msg.Codec,
+				Resolution: msg.Resolution,
+				IsHEVC:     msg.IsHEVC,
+			}
 		}
 		return m, waitForDryRun(m.dryRunChan)
 
@@ -360,6 +370,9 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.dryRunToProcess = msg.ToProcess
 			m.dryRunHEVC = msg.HEVCSkipped
 			m.dryRunProbeFailed = msg.ProbeFailed
+			if msg.VideoDetails != nil {
+				m.dryRunDetails = msg.VideoDetails
+			}
 			m.dryRunDone = true
 		}
 		return m, nil
@@ -827,6 +840,7 @@ func (m *AppModel) updateBrowser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.dryRunToProcess = nil
 			m.dryRunHEVC = nil
 			m.dryRunProbeFailed = nil
+			m.dryRunDetails = make(map[string]engine.ProbeDetails)
 			m.dryRunDone = false
 			m.dryRunCtx, m.dryRunCancel = context.WithCancel(context.Background())
 			m.dryRunChan = make(chan interface{}, 200)

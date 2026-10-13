@@ -465,9 +465,9 @@ func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan
 	}
 
 	type probeResult struct {
-		asset  immich.Asset
-		isHEVC bool
-		err    error
+		asset   immich.Asset
+		details engine.ProbeDetails
+		err     error
 	}
 
 	jobs := make(chan immich.Asset, total)
@@ -478,14 +478,14 @@ func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan
 			for asset := range jobs {
 				select {
 				case <-ctx.Done():
-					results <- probeResult{asset: asset, isHEVC: false, err: ctx.Err()}
+					results <- probeResult{asset: asset, details: engine.ProbeDetails{}, err: ctx.Err()}
 					continue
 				default:
 				}
 
 				remoteURL := fmt.Sprintf("%s/api/assets/%s/original", p.client.BaseURL(), asset.ID)
 				probeCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
-				isHEVC, err := engine.ProbeRemoteHEVC(probeCtx, p.binaries.FFmpegPath, remoteURL, p.client.APIKey())
+				details, err := engine.ProbeRemoteDetails(probeCtx, p.binaries.FFmpegPath, remoteURL, p.client.APIKey())
 				cancel()
 
 				if err != nil {
@@ -493,9 +493,9 @@ func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan
 				}
 
 				results <- probeResult{
-					asset:  asset,
-					isHEVC: err == nil && isHEVC,
-					err:    err,
+					asset:   asset,
+					details: details,
+					err:     err,
 				}
 			}
 		}()
@@ -509,6 +509,7 @@ func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan
 	var toProcess []immich.Asset
 	var hevcSkipped []immich.Asset
 	var probeFailed []immich.Asset
+	videoDetails := make(map[string]engine.ProbeDetails)
 	probed := 0
 
 	for i := 0; i < total; i++ {
@@ -517,31 +518,35 @@ func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan
 			return
 		case res := <-results:
 			probed++
+			videoDetails[res.asset.ID] = res.details
 
 			if res.err != nil {
 				probeFailed = append(probeFailed, res.asset)
 			}
 
-			if p.cfg.SkipHEVC && res.isHEVC {
+			if p.cfg.SkipHEVC && res.details.IsHEVC {
 				hevcSkipped = append(hevcSkipped, res.asset)
 			} else {
 				toProcess = append(toProcess, res.asset)
 			}
 			ch <- DryRunVideoMsg{
-				VideoID:   res.asset.ID,
-				VideoName: res.asset.OriginalFileName,
-				IsHEVC:    res.isHEVC,
-				Probed:    probed,
-				Total:     total,
-				Err:       res.err,
+				VideoID:    res.asset.ID,
+				VideoName:  res.asset.OriginalFileName,
+				IsHEVC:     res.details.IsHEVC,
+				Codec:      res.details.Codec,
+				Resolution: res.details.Resolution,
+				Probed:     probed,
+				Total:      total,
+				Err:        res.err,
 			}
 		}
 	}
 
 	ch <- DryRunCompleteMsg{
-		ToProcess:   toProcess,
-		HEVCSkipped: hevcSkipped,
-		ProbeFailed: probeFailed,
+		ToProcess:    toProcess,
+		HEVCSkipped:  hevcSkipped,
+		ProbeFailed:  probeFailed,
+		VideoDetails: videoDetails,
 	}
 }
 
