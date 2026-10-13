@@ -126,14 +126,6 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		}
 	}
 
-	var videoIDs []string
-	for _, v := range videos {
-		videoIDs = append(videoIDs, v.ID)
-	}
-	if albumID != "" {
-		_ = p.client.AddAssetsToAlbum(albumID, videoIDs)
-	}
-
 	if sess == nil {
 		timestamp := time.Now().Format("20060102-150405")
 		sess = &state.Session{
@@ -243,7 +235,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 					item.Cleanup()
 					sess.MarkSkipped(v.ID, "already HEVC")
 					_ = state.SaveSession(sess)
-					ch <- PipelineVideoCompleteMsg{VideoID: v.ID, VideoName: v.OriginalFileName, Skipped: true, SkipReason: "already HEVC"}
+					ch <- PipelineVideoCompleteMsg{VideoID: v.ID, VideoName: v.OriginalFileName, OriginalSize: v.GetSize(), Skipped: true, SkipReason: "already HEVC"}
 					continue
 				}
 			}
@@ -348,10 +340,11 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 					logger.Info("Size guard: skipped %s (transcoded %d >= original %d bytes)", item.Asset.OriginalFileName, optStat.Size(), item.Asset.GetSize())
 					sess.MarkSkipped(item.Asset.ID, "transcoded file larger")
 					_ = state.SaveSession(sess)
-					ch <- PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Skipped: true, SkipReason: "transcoded file larger"}
+					ch <- PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, OriginalSize: item.Asset.GetSize(), Skipped: true, SkipReason: "transcoded file larger"}
 					continue
 				}
 
+				item.OptimizedSize = optStat.Size()
 				item.SavedBytes = item.Asset.GetSize() - optStat.Size()
 				logger.Debug("Transcode success for %s: saved %d bytes", item.Asset.OriginalFileName, item.SavedBytes)
 
@@ -427,7 +420,13 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		_ = state.SaveSession(sess)
 
 		logger.Info("Completed %s (Saved %.2f MB)", item.Asset.OriginalFileName, float64(item.SavedBytes)/1024/1024)
-		ch <- PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, SavedBytes: item.SavedBytes}
+		ch <- PipelineVideoCompleteMsg{
+			VideoID:       item.Asset.ID,
+			VideoName:     item.Asset.OriginalFileName,
+			OriginalSize:  item.Asset.GetSize(),
+			OptimizedSize: item.OptimizedSize,
+			SavedBytes:    item.SavedBytes,
+		}
 	}
 
 	// Guarantee all workers have completely drained and terminated before proceeding
@@ -605,10 +604,11 @@ func (p *Pipeline) filterHEVCParallel(ctx context.Context, videos []immich.Asset
 		if res.isHEVC {
 			sess.MarkSkipped(res.asset.ID, "already HEVC")
 			ch <- PipelineVideoCompleteMsg{
-				VideoID:    res.asset.ID,
-				VideoName:  res.asset.OriginalFileName,
-				Skipped:    true,
-				SkipReason: "already HEVC",
+				VideoID:      res.asset.ID,
+				VideoName:    res.asset.OriginalFileName,
+				OriginalSize: res.asset.GetSize(),
+				Skipped:      true,
+				SkipReason:   "already HEVC",
 			}
 		} else {
 			toProcess = append(toProcess, res.asset)

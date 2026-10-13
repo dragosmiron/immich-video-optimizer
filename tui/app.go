@@ -151,8 +151,9 @@ type AppModel struct {
 	probingStatus           string
 	fps                     float64
 	speed                   string
-	failedVideos            []failureEntry // tracks each failed video with its error message
-	skippedVideos           []skippedVideo // tracks each skipped video with its reason
+	transcodedVideos        []transcodedVideo // tracks each successfully transcoded video with space saved
+	failedVideos            []failureEntry    // tracks each failed video with its error message
+	skippedVideos           []skippedVideo    // tracks each skipped video with its reason
 
 	// Scan
 	scanCancel        context.CancelFunc
@@ -172,6 +173,14 @@ type AppModel struct {
 	dryRunVideos      []immich.Asset // the selection that triggered the dry run
 }
 
+// transcodedVideo holds details for a successfully transcoded and replaced video.
+type transcodedVideo struct {
+	VideoID      string
+	Name         string
+	OriginalSize int64
+	NewSize      int64
+	SavedBytes   int64
+}
 
 // skippedVideo holds the name and reason for a skipped video.
 type skippedVideo struct {
@@ -511,6 +520,26 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.skippedVideos = append(m.skippedVideos, skippedVideo{Name: completedName, Reason: reason})
 			m.addLog(fmt.Sprintf("%s - Skipped %s (%s)", timeStr, completedName, reason))
 		} else {
+			origSize := msg.OriginalSize
+			if origSize == 0 {
+				for _, v := range m.videos {
+					if v.ID == msg.VideoID {
+						origSize = v.GetSize()
+						break
+					}
+				}
+			}
+			newSize := msg.OptimizedSize
+			if newSize == 0 && origSize > 0 {
+				newSize = origSize - msg.SavedBytes
+			}
+			m.transcodedVideos = append(m.transcodedVideos, transcodedVideo{
+				VideoID:      msg.VideoID,
+				Name:         completedName,
+				OriginalSize: origSize,
+				NewSize:      newSize,
+				SavedBytes:   msg.SavedBytes,
+			})
 			m.addLog(fmt.Sprintf("%s - Completed %s (Saved %.2f MB)", timeStr, completedName, float64(msg.SavedBytes)/1024/1024))
 		}
 
@@ -714,6 +743,22 @@ func (m *AppModel) updateResumePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.processedVideos = 0
 			m.skippedCount = 0
 			m.failedCount = 0
+			m.failedVideos = nil
+			m.skippedVideos = nil
+			m.transcodedVideos = nil
+			if m.session != nil {
+				for _, vs := range m.session.Videos {
+					if vs.Status == state.StatusCompleted {
+						m.transcodedVideos = append(m.transcodedVideos, transcodedVideo{
+							VideoID:      vs.ID,
+							Name:         vs.OriginalName,
+							OriginalSize: vs.OriginalSize,
+							NewSize:      vs.OriginalSize - vs.SavedBytes,
+							SavedBytes:   vs.SavedBytes,
+						})
+					}
+				}
+			}
 			m.totalSavedBytes = m.session.GetTotalSavedBytes()
 			m.ctx, m.cancelCtx = context.WithCancel(context.Background())
 			m.pipelineChan = make(chan interface{}, 200)
@@ -911,6 +956,7 @@ func (m *AppModel) startOptimization(toProcess []immich.Asset) (tea.Model, tea.C
 	m.totalSavedBytes = 0
 	m.failedVideos = nil
 	m.skippedVideos = nil
+	m.transcodedVideos = nil
 	m.ctx, m.cancelCtx = context.WithCancel(context.Background())
 	m.pipelineChan = make(chan interface{}, 200)
 	go m.pipeline.Run(m.ctx, toProcess, m.pipelineChan)

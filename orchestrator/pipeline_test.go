@@ -2,10 +2,13 @@ package orchestrator
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -562,5 +565,148 @@ func TestPipeline_DeleteFailureHandling(t *testing.T) {
 		t.Errorf("Expected 0 saved bytes when deletion fails, got %d", totalSaved)
 	}
 }
+
+func TestPipeline_AlbumDoesNotIncludeSkippedVideos(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	var addedToAlbum []string
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "POST" && r.URL.Path == "/api/albums":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "album-only-transcoded"}`))
+			return
+		case r.Method == "PUT" && strings.HasPrefix(r.URL.Path, "/api/albums/"):
+			body, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			addedToAlbum = append(addedToAlbum, string(body))
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			return
+		case r.Method == "GET" && r.URL.Path == "/api/assets/asset-hevc/original":
+			// Handled by range probe or download
+			w.Header().Set("Content-Type", "video/mp4")
+			w.Write([]byte("SIMULATED_HEVC"))
+			return
+		case r.Method == "GET" && r.URL.Path == "/api/assets/asset-h264/original":
+			w.Header().Set("Content-Type", "video/mp4")
+			w.Write([]byte("SIMULATED_H264"))
+			return
+		case r.Method == "POST" && r.URL.Path == "/api/assets":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "asset-replacement-new"}`))
+			return
+		case r.Method == "DELETE" && r.URL.Path == "/api/assets":
+			w.WriteHeader(http.StatusOK)
+			return
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer ts.Close()
+
+	fakeFFmpeg := filepath.Join(tempHome, "fake_ffmpeg")
+	// If asked for info, print hevc for asset-hevc, h264 for asset-h264. If transcoding, write 5 bytes output.
+	script := `#!/bin/sh
+for arg do
+  if [ "$arg" = "output.mp4" ] || echo "$arg" | grep -q "opt_"; then
+    echo "opt" > "$arg"
+    exit 0
+  fi
+  last_arg="$arg"
+done
+if echo "$*" | grep -q "asset-hevc"; then
+  echo "Stream #0:0: Video: hevc, 1920x1080"
+  exit 0
+fi
+if echo "$*" | grep -q "asset-h264"; then
+  echo "Stream #0:0: Video: h264, 1920x1080"
+  exit 0
+fi
+echo "dummy" > "$last_arg"
+exit 0
+`
+	_ = os.WriteFile(fakeFFmpeg, []byte(script), 0755)
+
+	fakeExifTool := filepath.Join(tempHome, "fake_exiftool")
+	_ = os.WriteFile(fakeExifTool, []byte("#!/bin/sh\nexit 0\n"), 0755)
+
+	cfg := &config.Config{
+		URL:           ts.URL,
+		APIKey:        "test-key",
+		SizeThreshold: "0",
+		SkipHEVC:      true,
+	}
+
+	binaries := &engine.BinaryManager{
+		FFmpegPath:   fakeFFmpeg,
+		ExifToolPath: fakeExifTool,
+	}
+
+	p, err := NewPipelineWithBinaries(cfg, binaries)
+	if err != nil {
+		t.Fatalf("Failed to initialize pipeline: %v", err)
+	}
+	p.Client().SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: ts.Config.Handler},
+	})
+
+	videos := []immich.Asset{
+		{
+			ID:               "asset-hevc",
+			OriginalFileName: "already_hevc.mp4",
+			ExifInfo: immich.ExifInfo{
+				FileSizeInByte:  2000,
+				ExifImageWidth:  1920,
+				ExifImageHeight: 1080,
+			},
+		},
+		{
+			ID:               "asset-h264",
+			OriginalFileName: "convert_me.mp4",
+			ExifInfo: immich.ExifInfo{
+				FileSizeInByte:  2000,
+				ExifImageWidth:  1920,
+				ExifImageHeight: 1080,
+			},
+		},
+	}
+
+	ch := make(chan interface{}, 20)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	p.Run(ctx, videos, ch)
+
+	for msg := range ch {
+		_ = msg
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	for _, reqBody := range addedToAlbum {
+		if strings.Contains(reqBody, "asset-hevc") {
+			t.Errorf("Skipped HEVC asset 'asset-hevc' was erroneously added to tracking album! Body: %s", reqBody)
+		}
+		if strings.Contains(reqBody, "asset-h264") {
+			t.Errorf("Original asset 'asset-h264' was erroneously added to tracking album! Body: %s", reqBody)
+		}
+	}
+
+	foundReplacement := false
+	for _, reqBody := range addedToAlbum {
+		if strings.Contains(reqBody, "asset-replacement-new") {
+			foundReplacement = true
+		}
+	}
+	if !foundReplacement {
+		t.Errorf("Expected replacement asset 'asset-replacement-new' to be added to album, but got bodies: %v", addedToAlbum)
+	}
+}
+
 
 

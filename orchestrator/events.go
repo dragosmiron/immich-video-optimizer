@@ -28,12 +28,14 @@ type PipelineProgressMsg struct {
 }
 
 type PipelineVideoCompleteMsg struct {
-	VideoID    string
-	VideoName  string
-	SavedBytes int64
-	Skipped    bool
-	SkipReason string
-	Err        error
+	VideoID       string
+	VideoName     string
+	OriginalSize  int64
+	OptimizedSize int64
+	SavedBytes    int64
+	Skipped       bool
+	SkipReason    string
+	Err           error
 }
 
 type PipelineDoneMsg struct {

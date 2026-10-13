@@ -2,11 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 
+	"immich-video-optimizer/engine"
 	"immich-video-optimizer/tui/styles"
 )
 
@@ -253,6 +255,11 @@ func (m *AppModel) viewDryRun() string {
 		belowThreshold = m.scanResult.SkippedBelowSize
 	}
 
+	failedMap := make(map[string]bool)
+	for _, f := range m.dryRunProbeFailed {
+		failedMap[f.ID] = true
+	}
+
 	// Total size and estimated savings for videos to process
 	var processBytes int64
 	var estSavedBytes int64
@@ -260,15 +267,7 @@ func (m *AppModel) viewDryRun() string {
 		orig := v.GetSize()
 		processBytes += orig
 		detail := m.dryRunDetails[v.ID]
-		var ratio float64
-		if detail.IsHEVC {
-			ratio = 0.90
-		} else if m.cfg.Resolution == "1080p" && (detail.Resolution == "4K" || detail.Resolution == "2160p") {
-			ratio = 0.25
-		} else {
-			ratio = 0.45
-		}
-		saved := int64(float64(orig) * (1.0 - ratio))
+		_, saved := estimateSavings(orig, detail, m.cfg.Resolution, failedMap[v.ID])
 		estSavedBytes += saved
 	}
 	estFinalBytes := processBytes - estSavedBytes
@@ -368,7 +367,7 @@ func (m *AppModel) viewDryRun() string {
 				truncate(v.OriginalFileName, 26),
 				styles.Subtext.Render(formatByteSize(v.GetSize())),
 				styles.Value.Render(fmt.Sprintf("[HEVC • %s]", res)),
-				styles.Subtext.Render("✓ Already optimal"),
+				styles.Subtext.Render("✓ Already HEVC (0 MB saved — skipped)"),
 			))
 		}
 		if limit > shown {
@@ -385,10 +384,6 @@ func (m *AppModel) viewDryRun() string {
 		shown := limit
 		if shown > 8 {
 			shown = 8
-		}
-		failedMap := make(map[string]bool)
-		for _, f := range m.dryRunProbeFailed {
-			failedMap[f.ID] = true
 		}
 		for i := 0; i < shown; i++ {
 			v := m.dryRunToProcess[i]
@@ -407,22 +402,19 @@ func (m *AppModel) viewDryRun() string {
 				targetRes = m.cfg.Resolution
 			}
 
-			var ratio float64
-			if detail.IsHEVC {
-				ratio = 0.90
-			} else if targetRes != res && (res == "4K" || res == "2160p") {
-				ratio = 0.25
-			} else {
-				ratio = 0.45
-			}
-			itemSaved := int64(float64(orig) * (1.0 - ratio))
+			_, itemSaved := estimateSavings(orig, detail, m.cfg.Resolution, failedMap[v.ID])
 
 			transcodeBadge := fmt.Sprintf("[%s • %s] ➔ [HEVC • %s]", codec, res, targetRes)
-			itemEst := fmt.Sprintf("~%s saved", formatByteSize(itemSaved))
+			var itemEst string
+			if itemSaved > 0 {
+				itemEst = fmt.Sprintf("~%s saved", formatByteSize(itemSaved))
+			} else {
+				itemEst = "0 MB saved"
+			}
 
 			extra := ""
 			if detail.IsHEVC && !m.cfg.SkipHEVC {
-				extra = " " + styles.WarningText.Render("⚠️ Already HEVC")
+				extra = " " + styles.WarningText.Render("⚠️ Already HEVC (0 MB saved)")
 			} else if failedMap[v.ID] {
 				extra = " " + styles.WarningText.Render("(probe unverified)")
 			}
@@ -793,10 +785,29 @@ func (m *AppModel) viewSummary() string {
 	b.WriteString("\n\n")
 
 	// ── Detailed breakdown ───────────────────────────────────────────────────
-	hasDetails := len(m.failedVideos) > 0 || len(m.skippedVideos) > 0
+	hasDetails := len(m.transcodedVideos) > 0 || len(m.failedVideos) > 0 || len(m.skippedVideos) > 0
 	if hasDetails {
 		b.WriteString(styles.SectionHeader.Render("Detailed Breakdown:"))
 		b.WriteString("\n")
+
+		if len(m.transcodedVideos) > 0 {
+			b.WriteString(styles.SuccessText.Render("  Transcoded & Uploaded:"))
+			b.WriteString("\n")
+			for _, tv := range m.transcodedVideos {
+				pct := 0.0
+				if tv.OriginalSize > 0 {
+					pct = (float64(tv.SavedBytes) / float64(tv.OriginalSize)) * 100.0
+				}
+				savedBadge := fmt.Sprintf("saved %s, -%.1f%%", formatByteSize(tv.SavedBytes), pct)
+				b.WriteString(fmt.Sprintf("    • %-32s  %s ➔ %s  (%s)\n",
+					truncate(tv.Name, 32),
+					formatByteSize(tv.OriginalSize),
+					formatByteSize(tv.NewSize),
+					styles.SuccessText.Render(savedBadge),
+				))
+			}
+			b.WriteString("\n")
+		}
 
 		if len(m.failedVideos) > 0 {
 			b.WriteString(styles.ErrorText.Render("  Failures:"))
@@ -893,4 +904,61 @@ func formatByteSize(b int64) string {
 	default:
 		return fmt.Sprintf("%.2f TB", val)
 	}
+}
+
+// estimateSavings calculates a conservative, realistic ratio and saved byte count
+// for a video asset based on probed codec, resolution, and target settings.
+func estimateSavings(orig int64, detail engine.ProbeDetails, targetResSetting string, isProbeFailed bool) (float64, int64) {
+	if isProbeFailed || detail.IsHEVC {
+		return 1.0, 0
+	}
+
+	res := detail.Resolution
+	if res == "" {
+		res = "1080p"
+	}
+	targetRes := res
+	if targetResSetting != "original" && targetResSetting != "" {
+		targetRes = targetResSetting
+	}
+
+	isDownscaling := targetRes != res && (res == "4K" || res == "2160p" || res == "1440p")
+
+	var ratio float64
+	switch detail.Codec {
+	case "ProRes":
+		if isDownscaling {
+			ratio = 0.20
+		} else {
+			ratio = 0.30
+		}
+	case "MJPEG":
+		ratio = 0.40
+	case "MPEG-4", "VP8":
+		if isDownscaling {
+			ratio = 0.45
+		} else {
+			ratio = 0.65
+		}
+	case "VP9", "AV1":
+		ratio = 1.0
+	case "H.264":
+		if isDownscaling {
+			ratio = 0.55
+		} else {
+			ratio = 0.80
+		}
+	default:
+		if isDownscaling {
+			ratio = 0.60
+		} else {
+			ratio = 0.85
+		}
+	}
+
+	saved := int64(math.Round(float64(orig) * (1.0 - ratio)))
+	if saved < 0 {
+		saved = 0
+	}
+	return ratio, saved
 }

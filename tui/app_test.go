@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"immich-video-optimizer/config"
+	"immich-video-optimizer/engine"
 	"immich-video-optimizer/immich"
 	"immich-video-optimizer/orchestrator"
 	"immich-video-optimizer/state"
@@ -989,6 +990,98 @@ func TestAppModel_ScanStaleSequenceDiscarded(t *testing.T) {
 		t.Errorf("expected m.videos to contain valid-vid, got: %+v", model.videos)
 	}
 }
+
+func TestViewSummary_TranscodedDetailedBreakdown(t *testing.T) {
+	cfg := config.DefaultConfig()
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.state = ViewSummary
+	m.totalVideos = 3
+	m.processedVideos = 3
+	m.skippedCount = 1
+	m.totalSavedBytes = 25 * 1024 * 1024
+
+	m.transcodedVideos = []transcodedVideo{
+		{
+			VideoID:      "v1",
+			Name:         "family_trip.mov",
+			OriginalSize: 100 * 1024 * 1024,
+			NewSize:      75 * 1024 * 1024,
+			SavedBytes:   25 * 1024 * 1024,
+		},
+	}
+	m.skippedVideos = []skippedVideo{
+		{
+			Name:   "existing_hevc.mp4",
+			Reason: "already HEVC",
+		},
+	}
+
+	view := m.viewSummary()
+
+	if !strings.Contains(view, "Detailed Breakdown:") {
+		t.Errorf("expected view to contain 'Detailed Breakdown:', got:\n%s", view)
+	}
+	if !strings.Contains(view, "Transcoded & Uploaded:") {
+		t.Errorf("expected view to contain 'Transcoded & Uploaded:', got:\n%s", view)
+	}
+	if !strings.Contains(view, "family_trip.mov") {
+		t.Errorf("expected view to contain video name 'family_trip.mov', got:\n%s", view)
+	}
+	if !strings.Contains(view, "100.0 MB ➔ 75.0 MB") {
+		t.Errorf("expected view to contain size transition '100.0 MB ➔ 75.0 MB', got:\n%s", view)
+	}
+	if !strings.Contains(view, "saved 25.0 MB, -25.0%") {
+		t.Errorf("expected view to contain saved stats 'saved 25.0 MB, -25.0%%', got:\n%s", view)
+	}
+	if !strings.Contains(view, "Skipped (originals kept, nothing uploaded):") {
+		t.Errorf("expected view to contain skipped section, got:\n%s", view)
+	}
+	if !strings.Contains(view, "existing_hevc.mp4") {
+		t.Errorf("expected view to contain skipped video name 'existing_hevc.mp4', got:\n%s", view)
+	}
+}
+
+func TestEstimateSavings(t *testing.T) {
+	orig := int64(100 * 1024 * 1024) // 100 MB
+
+	// 1. Probe failed -> 0 MB saved
+	ratio, saved := estimateSavings(orig, engine.ProbeDetails{Codec: "H.264"}, "original", true)
+	if ratio != 1.0 || saved != 0 {
+		t.Errorf("expected 0 saved for probe failed, got ratio=%v, saved=%v", ratio, saved)
+	}
+
+	// 2. Already HEVC -> 0 MB saved
+	ratio, saved = estimateSavings(orig, engine.ProbeDetails{Codec: "HEVC", IsHEVC: true}, "original", false)
+	if ratio != 1.0 || saved != 0 {
+		t.Errorf("expected 0 saved for HEVC, got ratio=%v, saved=%v", ratio, saved)
+	}
+
+	// 3. VP9 / AV1 -> 0 MB saved
+	ratio, saved = estimateSavings(orig, engine.ProbeDetails{Codec: "VP9"}, "original", false)
+	if ratio != 1.0 || saved != 0 {
+		t.Errorf("expected 0 saved for VP9, got ratio=%v, saved=%v", ratio, saved)
+	}
+
+	// 4. H.264 without downscale -> conservative 20% saved (ratio 0.80)
+	ratio, saved = estimateSavings(orig, engine.ProbeDetails{Codec: "H.264", Resolution: "1080p"}, "original", false)
+	if ratio != 0.80 || saved != int64(20*1024*1024) {
+		t.Errorf("expected 20MB saved for H.264, got ratio=%v, saved=%v", ratio, saved)
+	}
+
+	// 5. H.264 with 4K -> 1080p downscale -> ~45% saved (ratio 0.55)
+	ratio, saved = estimateSavings(orig, engine.ProbeDetails{Codec: "H.264", Resolution: "4K"}, "1080p", false)
+	if ratio != 0.55 || saved != int64(45*1024*1024) {
+		t.Errorf("expected 45MB saved for 4K downscale, got ratio=%v, saved=%v", ratio, saved)
+	}
+
+	// 6. ProRes -> ~70% saved (ratio 0.30)
+	ratio, saved = estimateSavings(orig, engine.ProbeDetails{Codec: "ProRes", Resolution: "1080p"}, "original", false)
+	if ratio != 0.30 || saved != int64(70*1024*1024) {
+		t.Errorf("expected 70MB saved for ProRes, got ratio=%v, saved=%v", ratio, saved)
+	}
+}
+
 
 
 

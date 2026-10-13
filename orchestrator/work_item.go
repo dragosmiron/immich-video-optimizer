@@ -13,6 +13,7 @@ type WorkItem struct {
 	Asset          immich.Asset
 	OrigPath       string
 	TranscodedPath string
+	OptimizedSize  int64
 	SavedBytes     int64
 	Skipped        bool
 	SkipReason     string
