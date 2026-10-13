@@ -15,3 +15,10 @@ temp_home/
 .DS_Store
 .vscode/
 .idea/
+
+# Local Config & Runtime Session Data
+config.yaml
+config.yml
+*.log
+session*.json*
+
