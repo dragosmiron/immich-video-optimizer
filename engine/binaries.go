@@ -66,6 +66,12 @@ func findOrExtractBinary(name string, cacheDir string) (string, error) {
 	if _, err := os.Stat(path); err == nil {
 		return path, nil
 	}
+	if runtime.GOOS == "windows" {
+		exePath := filepath.Join(cacheDir, name+".exe")
+		if _, err := os.Stat(exePath); err == nil {
+			return exePath, nil
+		}
+	}
 
 	// If it's ffmpeg and missing, attempt transparent download for macOS/Linux
 	if name == "ffmpeg" {

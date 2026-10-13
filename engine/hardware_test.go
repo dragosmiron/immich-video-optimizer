@@ -48,6 +48,12 @@ func TestDetectHEVCEncoder(t *testing.T) {
 			expected: "libx265",
 		},
 		{
+			name:     "Windows with Nvidia uses nvenc",
+			osName:   "windows",
+			commands: map[string]bool{"nvidia-smi": true},
+			expected: "hevc_nvenc",
+		},
+		{
 			name:     "Windows uses libx265 fallback",
 			osName:   "windows",
 			expected: "libx265",

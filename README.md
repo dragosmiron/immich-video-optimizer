@@ -9,7 +9,7 @@ A high-performance, interactive terminal client that reclaims gigabytes of disk 
 - **Blistering Fast Hardware Acceleration:**
   - **macOS:** Apple Silicon & Intel VideoToolbox (`hevc_videotoolbox`) — **~7.3x realtime, 220+ FPS**.
   - **Linux:** NVIDIA NVENC (`hevc_nvenc`), Intel VA-API (`hevc_vaapi`), or CPU (`libx265`).
-  - **Windows:** NVIDIA NVENC, Intel QuickSync, or CPU fallback.
+  - **Windows:** NVIDIA NVENC (`hevc_nvenc`) or multi-threaded CPU (`libx265`).
 - **Assembly Line Pipelining:**
   - Decoupled **Prefetch Downloader** $\to$ **Transcoder Pool** $\to$ **Background Uploader**. Network downloads and GPU encoding run concurrently.
   - **Strictly Bounded Disk Usage:** Channels are capped at buffer capacity 1, guaranteeing at most **2 video files** are ever on local disk at once.
@@ -59,11 +59,28 @@ tar -xzf immich-video-optimizer_darwin_arm64.tar.gz
 > ```
 > Or right-click the binary in Finder $\to$ choose **Open** $\to$ click **Open Anyway**.
 
+#### Windows Quick Start:
+1. Install prerequisites in PowerShell using **Winget** (built into Windows 10/11):
+   ```powershell
+   winget install Gyan.FFmpeg PhilHarvey.ExifTool
+   ```
+   *(Alternatively, using Scoop: `scoop install ffmpeg exiftool` or Chocolatey: `choco install ffmpeg exiftool`)*
+
+2. Extract `immich-video-optimizer_windows_amd64.zip` and run the binary inside **Windows Terminal** or PowerShell:
+   ```powershell
+   .\immich-video-optimizer.exe
+   ```
+
+   > **Tip:** For optimal TUI colors and smooth rendering, use modern **Windows Terminal** rather than legacy `cmd.exe`.
+
 ---
 
 ### Option 2: Build From Source
 
-Requirements: **Go 1.24+** and Git. System `ffmpeg` and `exiftool` are required prerequisites in your `PATH` (e.g. `brew install ffmpeg exiftool` on macOS, or `sudo apt update && sudo apt install -y ffmpeg libimage-exiftool-perl` on Linux).
+Requirements: **Go 1.24+** and Git. System `ffmpeg` and `exiftool` are required prerequisites in your `PATH`:
+- **macOS:** `brew install ffmpeg exiftool`
+- **Linux (Debian/Ubuntu):** `sudo apt update && sudo apt install -y ffmpeg libimage-exiftool-perl`
+- **Windows:** `winget install Gyan.FFmpeg PhilHarvey.ExifTool`
 
 ```bash
 git clone https://github.com/dragos/immich-video-optimizer.git

@@ -42,8 +42,13 @@ func DetectHEVCEncoder(osName string, checker EnvChecker) string {
 		}
 		// CPU fallback
 		return "libx265"
+	case "windows":
+		if checker.HasCommand("nvidia-smi") {
+			return "hevc_nvenc"
+		}
+		return "libx265"
 	default:
-		// Windows or other OS fallback
+		// Other OS fallback
 		return "libx265"
 	}
 }
