@@ -1,6 +1,9 @@
 package engine
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -127,4 +130,80 @@ func TestScanFFmpegOutput_KeyValueProgress(t *testing.T) {
 		t.Errorf("unexpected second report: %+v", reports[1])
 	}
 }
+
+func TestBuildFFmpegArgs_VAAPI(t *testing.T) {
+	opts := TranscodeOptions{
+		Input:      "in.mp4",
+		Output:     "out.mp4",
+		Encoder:    "hevc_vaapi",
+		AudioCopy:  true,
+		CRF:        28,
+		Preset:     "medium",
+		Resolution: "1080p",
+	}
+	args := BuildFFmpegArgs(opts)
+	if len(args) < 2 || args[0] != "-vaapi_device" {
+		t.Errorf("expected -vaapi_device as first arg, got: %v", args)
+	}
+	for i, arg := range args {
+		if arg == "-preset" {
+			t.Errorf("hevc_vaapi should not receive -preset, found at index %d", i)
+		}
+		if arg == "-crf" {
+			t.Errorf("hevc_vaapi should not receive -crf, found at index %d", i)
+		}
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-qp 28") {
+		t.Errorf("expected -qp 28 in args, got: %s", joined)
+	}
+	if !strings.Contains(joined, "scale=-2:'min(ih,1080)',format=nv12,hwupload") {
+		t.Errorf("expected VAAPI filter with scale and hwupload, got: %s", joined)
+	}
+}
+
+func TestTranscode_HardwareFallbackToCPU(t *testing.T) {
+	tempDir := t.TempDir()
+	fakeFFmpeg := filepath.Join(tempDir, "fake_ffmpeg")
+
+	// Script that fails if hevc_vaapi is passed, but succeeds if libx265 is passed
+	script := `#!/bin/sh
+for arg do
+	if [ "$arg" = "hevc_vaapi" ]; then
+		echo "Option preset not found / hevc_vaapi failed" >&2
+		exit 1
+	fi
+	last_arg="$arg"
+done
+echo "libx265 success" > "$last_arg"
+exit 0
+`
+	if err := os.WriteFile(fakeFFmpeg, []byte(script), 0755); err != nil {
+		t.Fatalf("failed to create fake ffmpeg: %v", err)
+	}
+
+	inFile := filepath.Join(tempDir, "input.mp4")
+	_ = os.WriteFile(inFile, []byte("input"), 0644)
+	outFile := filepath.Join(tempDir, "output.mp4")
+
+	opts := TranscodeOptions{
+		Input:   inFile,
+		Output:  outFile,
+		Encoder: "hevc_vaapi",
+	}
+
+	err := Transcode(context.Background(), fakeFFmpeg, opts, nil)
+	if err != nil {
+		t.Fatalf("expected Transcode to fallback to libx265 and succeed, got error: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("failed to read output file: %v", err)
+	}
+	if !strings.Contains(string(data), "libx265 success") {
+		t.Errorf("expected fallback output from libx265, got: %s", string(data))
+	}
+}
+
 

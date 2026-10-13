@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -38,30 +39,45 @@ type ProgressCallback func(p Progress)
 
 // BuildFFmpegArgs constructs the command-line arguments for ffmpeg
 func BuildFFmpegArgs(opts TranscodeOptions) []string {
-	args := []string{
+	var args []string
+
+	if opts.Encoder == "hevc_vaapi" {
+		vaapiDev := "/dev/dri/renderD128"
+		if _, err := os.Stat(vaapiDev); os.IsNotExist(err) {
+			if _, err := os.Stat("/dev/dri/card0"); err == nil {
+				vaapiDev = "/dev/dri/card0"
+			}
+		}
+		args = append(args, "-vaapi_device", vaapiDev)
+	}
+
+	args = append(args,
 		"-y", // Overwrite output files without asking
 		"-i", opts.Input,
 		"-c:v", opts.Encoder,
-	}
+	)
 
 	if opts.Encoder == "hevc_videotoolbox" {
 		args = append(args, "-tag:v", "hvc1", "-allow_sw", "1")
 	}
 
-	if opts.Preset != "" {
+	if opts.Preset != "" && opts.Encoder != "hevc_vaapi" {
 		args = append(args, "-preset", strings.ToLower(opts.Preset))
 	}
 
 	if opts.CRF > 0 {
-		if opts.Encoder == "hevc_videotoolbox" {
+		switch opts.Encoder {
+		case "hevc_videotoolbox":
 			args = append(args, "-q:v", strconv.Itoa(opts.CRF))
-		} else {
+		case "hevc_vaapi":
+			args = append(args, "-qp", strconv.Itoa(opts.CRF))
+		default:
 			args = append(args, "-crf", strconv.Itoa(opts.CRF))
 		}
 	}
 
+	var scale string
 	if opts.Resolution != "" && opts.Resolution != "Original" {
-		var scale string
 		switch opts.Resolution {
 		case "4K":
 			scale = "-2:'min(ih,2160)'"
@@ -72,9 +88,16 @@ func BuildFFmpegArgs(opts TranscodeOptions) []string {
 		case "720p":
 			scale = "-2:'min(ih,720)'"
 		}
+	}
+
+	if opts.Encoder == "hevc_vaapi" {
 		if scale != "" {
-			args = append(args, "-vf", "scale="+scale)
+			args = append(args, "-vf", fmt.Sprintf("scale=%s,format=nv12,hwupload", scale))
+		} else {
+			args = append(args, "-vf", "format=nv12,hwupload")
 		}
+	} else if scale != "" {
+		args = append(args, "-vf", "scale="+scale)
 	}
 
 	if opts.AudioCopy {
@@ -221,7 +244,17 @@ func Transcode(ctx context.Context, ffmpegPath string, opts TranscodeOptions, on
 	}
 
 	if err := cmd.Wait(); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		stderrOutput := strings.TrimSpace(ringBuf.String())
+		if opts.Encoder != "libx265" {
+			logger.Info("Hardware transcode with %s failed for %s (%v); falling back to CPU encoder libx265", opts.Encoder, opts.Input, err)
+			_ = os.Remove(opts.Output)
+			fallbackOpts := opts
+			fallbackOpts.Encoder = "libx265"
+			return Transcode(ctx, ffmpegPath, fallbackOpts, onProgress)
+		}
 		if stderrOutput != "" {
 			logger.Error("FFmpeg transcode failed for %s (%v)\n[Command]: %s %s\n[Stderr]:\n%s", opts.Input, err, ffmpegPath, strings.Join(args, " "), stderrOutput)
 			return fmt.Errorf("transcode failed (%w): %s", err, stderrOutput)

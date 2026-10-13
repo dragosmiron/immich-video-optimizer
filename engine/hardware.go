@@ -36,7 +36,7 @@ func DetectHEVCEncoder(osName string, checker EnvChecker) string {
 			return "hevc_nvenc"
 		}
 		// Intel/AMD GPU Check
-		if checker.HasFile("/dev/dri") {
+		if checker.HasFile("/dev/dri") || checker.HasFile("/dev/dri/renderD128") {
 			// fallback to vaapi or qsv
 			return "hevc_vaapi"
 		}
