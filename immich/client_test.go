@@ -70,7 +70,7 @@ func TestQueryVideoAssets(t *testing.T) {
 		var assets []Asset
 		if reqBody["page"].(float64) == 1 {
 			assets = []Asset{
-				{ID: "1", Type: "VIDEO", Size: 0, ExifInfo: struct{ FileSizeInByte int64 `json:"fileSizeInByte"`; ExifImageWidth int `json:"exifImageWidth,omitempty"`; ExifImageHeight int `json:"exifImageHeight,omitempty"` }{FileSizeInByte: 1000}},
+				{ID: "1", Type: "VIDEO", Size: 0, ExifInfo: ExifInfo{FileSizeInByte: 1000}},
 				{ID: "2", Type: "IMAGE", Size: 2000},
 				{ID: "3", Type: "VIDEO", Size: 500},
 			}
@@ -430,5 +430,152 @@ func TestDeleteAsset_RetrySuccess(t *testing.T) {
 	}
 	if attempts != 2 {
 		t.Errorf("expected 2 attempts, got %d", attempts)
+	}
+}
+
+func TestParseDurationSeconds(t *testing.T) {
+	tests := []struct {
+		name     string
+		raw      string
+		expected float64
+	}{
+		{"HH:MM:SS format", `"01:02:03"`, 3723},
+		{"HH:MM:SS with fractional seconds", `"0:01:23.456000"`, 83.456},
+		{"MM:SS format", `"02:30"`, 150},
+		{"MM:SS fractional", `"01:23.500"`, 83.5},
+		{"Numeric float in quotes", `"83.456"`, 83.456},
+		{"Numeric float unquoted", `83.456`, 83.456},
+		{"Numeric integer", `60`, 60},
+		{"Numeric integer in quotes", `"60"`, 60},
+		{"Milliseconds large integer", `120000`, 120},
+		{"Milliseconds with ms suffix", `"15000ms"`, 15},
+		{"Seconds with s suffix", `"83.45s"`, 83.45},
+		{"Seconds with sec suffix", `"90sec"`, 90},
+		{"Comma decimal separator", `"0:01:23,456"`, 83.456},
+		{"ISO-8601 PT1H2M3S", `"PT1H2M3S"`, 3723},
+		{"ISO-8601 PT1M20S", `"PT1M20S"`, 80},
+		{"ISO-8601 PT45.5S", `"PT45.5S"`, 45.5},
+		{"ISO-8601 with P0DT0H1M20S", `"P0DT0H1M20S"`, 80},
+		{"Null json", `null`, 0},
+		{"Empty string", `""`, 0},
+		{"Empty bytes", ``, 0},
+		{"Invalid format", `"invalid"`, 0},
+		{"Negative number", `-50`, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseDurationSeconds(json.RawMessage(tt.raw))
+			diff := got - tt.expected
+			if diff < -0.001 || diff > 0.001 {
+				t.Errorf("ParseDurationSeconds(%s) = %f, expected %f", tt.raw, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestAsset_MBPerMin(t *testing.T) {
+	// 1. 600 MB video over 2 minutes (120 seconds) = 300 MB/min
+	a1 := Asset{
+		Size:     600 * 1024 * 1024,
+		Duration: json.RawMessage(`"0:02:00.000"`),
+	}
+	if diff := a1.MBPerMin() - 300; diff < -0.1 || diff > 0.1 {
+		t.Errorf("expected ~300 MB/min, got %f", a1.MBPerMin())
+	}
+
+	// 2. 500 MB video over 10 seconds (0.1667 min) = 3000 MB/min
+	a2 := Asset{
+		Size:     500 * 1024 * 1024,
+		Duration: json.RawMessage(`"0:00:10.000"`),
+	}
+	if diff := a2.MBPerMin() - 3000; diff < -0.1 || diff > 0.1 {
+		t.Errorf("expected ~3000 MB/min, got %f", a2.MBPerMin())
+	}
+
+	// 3. 500 MB video over 10 minutes = 50 MB/min
+	a3 := Asset{
+		Size:     500 * 1024 * 1024,
+		Duration: json.RawMessage(`"0:10:00.000"`),
+	}
+	if diff := a3.MBPerMin() - 50; diff < -0.1 || diff > 0.1 {
+		t.Errorf("expected ~50 MB/min, got %f", a3.MBPerMin())
+	}
+
+	// 4. Missing top-level duration, but ExifInfo has duration (1 minute)
+	a4 := Asset{
+		Size: 120 * 1024 * 1024,
+		ExifInfo: ExifInfo{
+			Duration: json.RawMessage(`"0:01:00"`),
+		},
+	}
+	if diff := a4.MBPerMin() - 120; diff < -0.1 || diff > 0.1 {
+		t.Errorf("expected ExifInfo fallback ~120 MB/min, got %f", a4.MBPerMin())
+	}
+
+	// 5. Missing duration completely fallback (assumes 1 minute) -> 250 MB total = 250 MB/min
+	a5 := Asset{
+		Size: 250 * 1024 * 1024,
+	}
+	if diff := a5.MBPerMin() - 250; diff < -0.1 || diff > 0.1 {
+		t.Errorf("expected fallback ~250 MB/min, got %f", a5.MBPerMin())
+	}
+}
+
+func TestScanVideos_MBPerMinFilter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/search/metadata" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		var reqBody map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&reqBody)
+
+		var assets []Asset
+		if reqBody["page"].(float64) == 1 {
+			assets = []Asset{
+				// Dense video: 500 MB over 1 minute = 500 MB/min -> should be included
+				{ID: "v-dense", Type: "VIDEO", Size: 500 * 1024 * 1024, Duration: json.RawMessage(`"0:01:00"`)},
+				// Lean video: 500 MB over 10 minutes = 50 MB/min -> should be skipped below 100 MB/min
+				{ID: "v-lean", Type: "VIDEO", Size: 500 * 1024 * 1024, Duration: json.RawMessage(`"0:10:00"`)},
+				// Short dense clip: 30 MB over 5 seconds = 360 MB/min -> should be included
+				{ID: "v-short", Type: "VIDEO", Size: 30 * 1024 * 1024, Duration: json.RawMessage(`"0:00:05"`)},
+				// Photo -> skipped non-video
+				{ID: "photo", Type: "IMAGE", Size: 10 * 1024 * 1024},
+			}
+		} else {
+			assets = []Asset{}
+		}
+
+		resp := map[string]interface{}{
+			"assets": map[string]interface{}{
+				"items": assets,
+			},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+
+	// Scan with 100 MB/min threshold
+	res, err := client.ScanVideos(100.0)
+	if err != nil {
+		t.Fatalf("ScanVideos failed: %v", err)
+	}
+
+	if res.TotalAssetsScanned != 4 {
+		t.Errorf("expected 4 scanned, got %d", res.TotalAssetsScanned)
+	}
+	if res.SkippedNonVideo != 1 {
+		t.Errorf("expected 1 non-video skipped, got %d", res.SkippedNonVideo)
+	}
+	if res.SkippedBelowSize != 1 {
+		t.Errorf("expected 1 video skipped below density, got %d", res.SkippedBelowSize)
+	}
+	if len(res.Videos) != 2 {
+		t.Fatalf("expected 2 dense videos included, got %d", len(res.Videos))
+	}
+	if res.Videos[0].ID != "v-dense" || res.Videos[1].ID != "v-short" {
+		t.Errorf("unexpected videos returned: %+v", res.Videos)
 	}
 }

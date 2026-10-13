@@ -45,9 +45,21 @@ func (c *Config) SizeThresholdBytes() int64 {
 	return mb * 1024 * 1024
 }
 
+// SizeThresholdMBPerMin returns the bitrate density threshold parsed as MB/min.
+func (c *Config) SizeThresholdMBPerMin() float64 {
+	if c == nil {
+		return 0
+	}
+	val, err := strconv.ParseFloat(strings.TrimSpace(c.SizeThreshold), 64)
+	if err != nil || val < 0 {
+		return 0
+	}
+	return val
+}
+
 func DefaultConfig() *Config {
 	return &Config{
-		SizeThreshold:      "500",
+		SizeThreshold:      "100",
 		Resolution:         "Original",
 		Preset:             "Medium",
 		SizeGuard:          true,
@@ -55,7 +67,7 @@ func DefaultConfig() *Config {
 		ConcurrentEncoders: 1,
 		EnablePrefetch:     true,
 		LogLevel:           "info",
-		MaxRetries:         3,
+		MaxRetries:         2,
 	}
 }
 
@@ -69,7 +81,7 @@ func LoadConfig() (*Config, error) {
 		v.AddConfigPath(filepath.Join(home, ".config", "immich-video-optimizer"))
 	}
 
-	v.SetDefault("size_threshold", "500")
+	v.SetDefault("size_threshold", "100")
 	v.SetDefault("resolution", "Original")
 	v.SetDefault("preset", "Medium")
 	v.SetDefault("size_guard", true)
@@ -77,7 +89,7 @@ func LoadConfig() (*Config, error) {
 	v.SetDefault("concurrent_encoders", 1)
 	v.SetDefault("enable_prefetch", true)
 	v.SetDefault("log_level", "info")
-	v.SetDefault("max_retries", 3)
+	v.SetDefault("max_retries", 2)
 
 	if err := v.ReadInConfig(); err != nil {
 		return DefaultConfig(), err
@@ -91,7 +103,7 @@ func LoadConfig() (*Config, error) {
 		cfg.ConcurrentEncoders = 1
 	}
 	if cfg.SizeThreshold == "" {
-		cfg.SizeThreshold = "500"
+		cfg.SizeThreshold = "100"
 	}
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"

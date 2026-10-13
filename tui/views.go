@@ -114,7 +114,7 @@ func (m *AppModel) viewScanPrompt() string {
 
 	b.WriteString(styles.SectionHeader.Render("Server Status:"))
 	b.WriteString(fmt.Sprintf("\n  • Immich Server:  %s  %s\n", styles.Value.Render(m.cfg.URL), styles.SuccessText.Render("[Connected ✓]")))
-	b.WriteString(fmt.Sprintf("  • Size Threshold: %s (Videos larger than this will be scanned)\n", styles.Value.Render(m.cfg.SizeThreshold+" MB")))
+	b.WriteString(fmt.Sprintf("  • MB/Min Threshold: %s (Videos denser than this will be scanned)\n", styles.Value.Render(m.cfg.SizeThreshold+" MB/min")))
 	b.WriteString(fmt.Sprintf("  • Resolution:     %s\n", styles.Value.Render(m.cfg.Resolution)))
 	b.WriteString(fmt.Sprintf("  • Transcode Speed:%s\n", styles.Value.Render(m.cfg.Preset)))
 	sgText := "Enabled (skips replacement if transcoded is larger)"
@@ -150,7 +150,7 @@ func (m *AppModel) viewScanning() string {
 	b.WriteString(styles.SectionHeader.Render("🔍 Scanning Immich Library..."))
 	b.WriteString("\n\n")
 	b.WriteString(fmt.Sprintf("  Querying assets on %s\n", styles.Value.Render(m.cfg.URL)))
-	b.WriteString(fmt.Sprintf("  Inspecting videos exceeding %s MB...\n\n", styles.Value.Render(m.cfg.SizeThreshold)))
+	b.WriteString(fmt.Sprintf("  Inspecting videos exceeding %s MB/min...\n\n", styles.Value.Render(m.cfg.SizeThreshold)))
 	b.WriteString(styles.Subtext.Render("Please wait, this may take a moment for large libraries..."))
 	return b.String()
 }
@@ -165,7 +165,7 @@ func (m *AppModel) renderScanSummary() string {
 	b.WriteString("\n")
 	b.WriteString(fmt.Sprintf("  • Total assets inspected in library: %d\n", r.TotalAssetsScanned))
 	b.WriteString(fmt.Sprintf("  • Non-video assets skipped:          %d (photos, RAW, etc.)\n", r.SkippedNonVideo))
-	b.WriteString(fmt.Sprintf("  • Videos skipped (below %s MB):      %d\n", m.cfg.SizeThreshold, r.SkippedBelowSize))
+	b.WriteString(fmt.Sprintf("  • Videos skipped (below %s MB/min):   %d\n", m.cfg.SizeThreshold, r.SkippedBelowSize))
 	b.WriteString(fmt.Sprintf("  • Eligible videos found:             %s\n", styles.SuccessText.Render(fmt.Sprintf("%d", len(m.videos)))))
 	return styles.SummaryBox.Render(b.String())
 }
@@ -179,10 +179,10 @@ func (m *AppModel) viewBrowser() string {
 	b.WriteString("\n")
 
 	if len(m.videos) == 0 {
-		b.WriteString(styles.WarningText.Render("ℹ No videos found exceeding the " + m.cfg.SizeThreshold + " MB threshold."))
+		b.WriteString(styles.WarningText.Render("ℹ No videos found exceeding the " + m.cfg.SizeThreshold + " MB/min threshold."))
 		b.WriteString("\n\nAll videos in your library are already within the target size limit.\n\n")
 		b.WriteString("Actions:\n")
-		b.WriteString("  [ S ] Adjust Size Threshold in Settings\n")
+		b.WriteString("  [ S ] Adjust MB/min Threshold in Settings\n")
 		b.WriteString("  [ R ] Rescan Library\n")
 		b.WriteString("  [ E ] Edit Server Credentials\n")
 		b.WriteString("  [ Q ] Quit\n")
@@ -285,7 +285,7 @@ func (m *AppModel) viewDryRun() string {
 
 	// Row: below-threshold (filtered at scan time — not in the selection)
 	if belowThreshold > 0 {
-		b.WriteString(fmt.Sprintf("  • Skipped at scan (below %s MB):   %s  (never shown in browser)\n",
+		b.WriteString(fmt.Sprintf("  • Skipped at scan (below %s MB/min): %s  (never shown in browser)\n",
 			m.cfg.SizeThreshold,
 			styles.WarningText.Render(fmt.Sprintf("%d", belowThreshold))))
 	}
@@ -515,10 +515,10 @@ func (m *AppModel) viewSettings() string {
 		"Controls how many ffmpeg instances encode simultaneously.\n" +
 			"  • 1 — Default. Best for hardware encoders (VideoToolbox / NVENC) and CPU thermals\n" +
 			"  • 2 — Parallel encoding. High throughput on multi-core systems",
-		// 6 — Size Threshold
-		"Minimum file size a video must exceed before it is included in the scan.\n" +
-			"  Videos smaller than this threshold are skipped entirely.\n" +
-			"  A good starting point is 500 MB. Raise it to skip already-small videos.",
+		// 6 — Threshold (MB/min)
+		"Minimum size per minute of video (MB/min). Videos with a bitrate density below\n" +
+			"  this threshold are skipped entirely (e.g. 100 MB/min).\n" +
+			"  Filters out low-bitrate videos regardless of video duration.",
 		// 7 — Log Level
 		"Controls detail of output logs. Set to Debug for full FFmpeg & ExifTool command lines,\n" +
 			"  stderr outputs, and diagnostic traces to identify error root causes.\n" +
@@ -598,16 +598,16 @@ func (m *AppModel) viewSettings() string {
 		fmt.Sprintf("%d  ← / → to change  [1, 2]", encCount),
 	)
 
-	// Row 6 — Size Threshold (typeable)
-	b.WriteString(cursor(6) + "Size Threshold (MB): ")
+	// Row 6 — Threshold (MB/min) (typeable)
+	b.WriteString(cursor(6) + "Threshold (MB/min):  ")
 	if isFocused(6) && m.thresholdInput.Focused() {
 		b.WriteString(m.thresholdInput.View() + "  " + styles.Subtext.Render("[Enter] to confirm") + "\n")
 		b.WriteString(styles.Subtext.Render("    └ "+descriptions[6]) + "\n")
 	} else if isFocused(6) {
-		b.WriteString(styles.Value.Render(m.cfg.SizeThreshold+" MB") + "  " + styles.Subtext.Render("[Enter] to edit") + "\n")
+		b.WriteString(styles.Value.Render(m.cfg.SizeThreshold+" MB/min") + "  " + styles.Subtext.Render("[Enter] to edit") + "\n")
 		b.WriteString(styles.Subtext.Render("    └ "+descriptions[6]) + "\n")
 	} else {
-		b.WriteString(styles.Value.Render(m.cfg.SizeThreshold+" MB") + "\n")
+		b.WriteString(styles.Value.Render(m.cfg.SizeThreshold+" MB/min") + "\n")
 	}
 	b.WriteString("\n")
 

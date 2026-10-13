@@ -56,9 +56,9 @@ func testConnectionCmd(pipeline *orchestrator.Pipeline) tea.Cmd {
 	}
 }
 
-func scanVideosCmd(ctx context.Context, pipeline *orchestrator.Pipeline, thresholdBytes int64, seq int) tea.Cmd {
+func scanVideosCmd(ctx context.Context, pipeline *orchestrator.Pipeline, thresholdMBPerMin float64, seq int) tea.Cmd {
 	return func() tea.Msg {
-		res, err := pipeline.ScanVideosWithContext(ctx, thresholdBytes)
+		res, err := pipeline.ScanVideosWithContext(ctx, thresholdMBPerMin)
 		return ScanCompleteMsg{Seq: seq, Result: res, Err: err}
 	}
 }
@@ -228,10 +228,10 @@ func NewAppModel(cfg *config.Config, pipeline *orchestrator.Pipeline, opts ...Op
 
 	// Threshold input used in Settings
 	if cfg.SizeThreshold == "" {
-		cfg.SizeThreshold = "500"
+		cfg.SizeThreshold = "100"
 	}
 	thi := textinput.New()
-	thi.Placeholder = "e.g. 500"
+	thi.Placeholder = "e.g. 100"
 	thi.SetValue(cfg.SizeThreshold)
 	thi.CharLimit = 10
 	thi.Width = 15
@@ -246,9 +246,10 @@ func NewAppModel(cfg *config.Config, pipeline *orchestrator.Pipeline, opts ...Op
 	t := table.New(
 		table.WithColumns([]table.Column{
 			{Title: "[ ]", Width: 4},
-			{Title: "Filename", Width: 40},
-			{Title: "Size", Width: 11},
-			{Title: "Resolution", Width: 12},
+			{Title: "Filename", Width: 35},
+			{Title: "Size", Width: 9},
+			{Title: "MB/min", Width: 10},
+			{Title: "Resolution", Width: 10},
 		}),
 		table.WithFocused(true),
 		table.WithHeight(10),
@@ -690,16 +691,16 @@ func (m *AppModel) updateScanPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
 		m.state = ViewScanning
-		thresholdMB, _ := strconv.ParseInt(m.cfg.SizeThreshold, 10, 64)
-		if thresholdMB <= 0 {
-			thresholdMB = 500
+		threshStr := strings.TrimSpace(m.cfg.SizeThreshold)
+		threshMBMin, err := strconv.ParseFloat(threshStr, 64)
+		if err != nil || threshMBMin < 0 || threshStr == "" {
+			threshMBMin = 100
 		}
-		thresholdBytes := thresholdMB * 1024 * 1024
 		m.scanSeq++
 		seq := m.scanSeq
 		var ctx context.Context
 		ctx, m.scanCancel = context.WithCancel(context.Background())
-		return m, scanVideosCmd(ctx, m.pipeline, thresholdBytes, seq)
+		return m, scanVideosCmd(ctx, m.pipeline, threshMBMin, seq)
 
 	case "s", "S":
 		m.state = ViewSettings
@@ -800,24 +801,26 @@ func (m *AppModel) updateResumePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *AppModel) resizeTable(width, height int) {
 	// Base style has Padding(1, 2) which uses 2 spaces left and 2 spaces right (total 4 chars).
-	// Leave an extra 2 chars margin so text never wraps against terminal edges.
-	availWidth := width - 6
+	// Leave margin so text never wraps against terminal edges.
+	availWidth := width - 4
 	if availWidth < 36 {
 		availWidth = 36
 	}
 
 	selectColWidth := 4
-	sizeColWidth := 11
-	resColWidth := 12
+	sizeColWidth := 9
+	mbMinColWidth := 10
+	resColWidth := 10
 
-	if availWidth < 55 {
-		sizeColWidth = 9
-		resColWidth = 10
+	if availWidth < 60 {
+		sizeColWidth = 8
+		mbMinColWidth = 9
+		resColWidth = 9
 	}
 
-	// bubbles/table adds default cell padding of 1 on each side (2 per column = 8 total for 4 columns)
-	tablePadding := 8
-	availFilenameWidth := availWidth - selectColWidth - sizeColWidth - resColWidth - tablePadding
+	// bubbles/table adds default cell padding of 1 on each side (2 per column = 10 total for 5 columns)
+	tablePadding := 10
+	availFilenameWidth := availWidth - selectColWidth - sizeColWidth - mbMinColWidth - resColWidth - tablePadding
 	if availFilenameWidth < 12 {
 		availFilenameWidth = 12
 	}
@@ -826,10 +829,11 @@ func (m *AppModel) resizeTable(width, height int) {
 		{Title: "[ ]", Width: selectColWidth},
 		{Title: "Filename", Width: availFilenameWidth},
 		{Title: "Size", Width: sizeColWidth},
+		{Title: "MB/min", Width: mbMinColWidth},
 		{Title: "Resolution", Width: resColWidth},
 	})
 
-	totalTableWidth := selectColWidth + availFilenameWidth + sizeColWidth + resColWidth + tablePadding
+	totalTableWidth := selectColWidth + availFilenameWidth + sizeColWidth + mbMinColWidth + resColWidth + tablePadding
 	m.table.SetWidth(totalTableWidth)
 
 	if height > 0 {
@@ -859,8 +863,17 @@ func (m *AppModel) updateTable() {
 			selected = "[x]"
 		}
 		sizeStr := fmt.Sprintf("%.1f MB", float64(v.GetSize())/(1024*1024))
+		mbMin := v.MBPerMin()
+		var mbMinStr string
+		if mbMin >= 10 {
+			mbMinStr = fmt.Sprintf("%.0f MB/min", mbMin)
+		} else if mbMin > 0 {
+			mbMinStr = fmt.Sprintf("%.1f MB/min", mbMin)
+		} else {
+			mbMinStr = "N/A"
+		}
 		resStr := fmt.Sprintf("%dx%d", v.ExifInfo.ExifImageWidth, v.ExifInfo.ExifImageHeight)
-		rows = append(rows, table.Row{selected, v.OriginalFileName, sizeStr, resStr})
+		rows = append(rows, table.Row{selected, v.OriginalFileName, sizeStr, mbMinStr, resStr})
 	}
 	m.table.SetRows(rows)
 }
@@ -1019,7 +1032,7 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.thresholdInput.Blur()
 			thresh := strings.TrimSpace(m.thresholdInput.Value())
 			if thresh == "" {
-				thresh = "500"
+				thresh = "100"
 				m.thresholdInput.SetValue(thresh)
 			}
 			m.cfg.SizeThreshold = thresh

@@ -121,3 +121,48 @@ func TestConfig_SizeThresholdBytes(t *testing.T) {
 	}
 }
 
+func TestConfig_SizeThresholdMBPerMin(t *testing.T) {
+	tests := []struct {
+		threshold string
+		expected  float64
+	}{
+		{"100", 100},
+		{"120.5", 120.5},
+		{"0", 0},
+		{"", 0},
+		{"invalid", 0},
+		{"-10", 0},
+	}
+
+	for _, tt := range tests {
+		cfg := &Config{SizeThreshold: tt.threshold}
+		if got := cfg.SizeThresholdMBPerMin(); got != tt.expected {
+			t.Errorf("SizeThresholdMBPerMin() for %q = %f, expected %f", tt.threshold, got, tt.expected)
+		}
+	}
+
+	var nilCfg *Config
+	if got := nilCfg.SizeThresholdMBPerMin(); got != 0 {
+		t.Errorf("nil Config SizeThresholdMBPerMin() = %f, expected 0", got)
+	}
+}
+
+func TestDefaultConfig(t *testing.T) {
+	cfg := DefaultConfig()
+	if !cfg.SizeGuard {
+		t.Errorf("expected default SizeGuard true")
+	}
+	if !cfg.SkipHEVC {
+		t.Errorf("expected default SkipHEVC true")
+	}
+	if !cfg.EnablePrefetch {
+		t.Errorf("expected default EnablePrefetch true")
+	}
+	if cfg.MaxRetries != 2 {
+		t.Errorf("expected default MaxRetries 2, got %d", cfg.MaxRetries)
+	}
+	if cfg.SizeThreshold != "100" {
+		t.Errorf("expected default SizeThreshold 100, got %s", cfg.SizeThreshold)
+	}
+}
+

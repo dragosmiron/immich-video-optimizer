@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -1194,6 +1195,82 @@ func TestResolveTargetResolution(t *testing.T) {
 			t.Errorf("resolveTargetResolution(%q, %q) = (%q, %v); want (%q, %v)",
 				tt.inputRes, tt.targetSetting, gotRes, gotDownscale, tt.wantRes, tt.wantDownscale)
 		}
+	}
+}
+
+func TestAppModel_MBPerMinDisplayAndSettings(t *testing.T) {
+	cfg := &config.Config{
+		URL:           "http://localhost:2283",
+		APIKey:        "test-key",
+		SizeThreshold: "100",
+		MaxRetries:    2,
+	}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+
+	// 1. Check Table columns and rows with MB/min
+	m.state = ViewBrowser
+	m.videos = []immich.Asset{
+		{
+			ID:               "v1",
+			OriginalFileName: "dense.mp4",
+			Size:             240 * 1024 * 1024,
+			Duration:         json.RawMessage(`"0:02:00"`), // 120 MB/min
+			ExifInfo:         immich.ExifInfo{ExifImageWidth: 1920, ExifImageHeight: 1080},
+		},
+		{
+			ID:               "v2",
+			OriginalFileName: "medium.mp4",
+			Size:             45 * 1024 * 1024,
+			Duration:         json.RawMessage(`"0:01:00"`), // 45 MB/min
+			ExifInfo:         immich.ExifInfo{ExifImageWidth: 1280, ExifImageHeight: 720},
+		},
+	}
+	m.updateTable()
+
+	rows := m.table.Rows()
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(rows))
+	}
+	// Column 0: [ ], Column 1: Filename, Column 2: Size, Column 3: MB/min, Column 4: Resolution
+	if rows[0][3] != "120 MB/min" {
+		t.Errorf("expected row 0 MB/min to be '120 MB/min', got %q", rows[0][3])
+	}
+	if rows[1][3] != "45 MB/min" {
+		t.Errorf("expected row 1 MB/min to be '45 MB/min', got %q", rows[1][3])
+	}
+
+	renderedBrowser := m.viewBrowser()
+	if !strings.Contains(renderedBrowser, "MB/min") {
+		t.Errorf("expected browser view to contain 'MB/min'")
+	}
+
+	// 2. Check Settings View displays Threshold (MB/min)
+	m.state = ViewSettings
+	renderedSettings := m.viewSettings()
+	if !strings.Contains(renderedSettings, "Threshold (MB/min):") {
+		t.Errorf("expected settings to contain 'Threshold (MB/min):', got %s", renderedSettings)
+	}
+	if !strings.Contains(renderedSettings, "100 MB/min") {
+		t.Errorf("expected settings to contain '100 MB/min', got %s", renderedSettings)
+	}
+
+	// 3. Edit Threshold in Settings
+	m.settingCursor = 6
+	// Press Enter to focus threshold input
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newM.(*AppModel)
+	if !m.thresholdInput.Focused() {
+		t.Fatalf("expected threshold input to be focused")
+	}
+
+	// Set value to 150
+	m.thresholdInput.SetValue("150")
+	// Press Enter to commit
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newM.(*AppModel)
+	if m.cfg.SizeThreshold != "150" {
+		t.Errorf("expected cfg.SizeThreshold to be updated to 150, got %s", m.cfg.SizeThreshold)
 	}
 }
 

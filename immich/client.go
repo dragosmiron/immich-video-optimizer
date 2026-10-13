@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -55,7 +56,7 @@ func NewClient(baseURL, apiKey string) *Client {
 			// No global timeout so large multi-GB video downloads and uploads are not cut off.
 			// Individual API calls and transfers manage deadlines via Context.
 		},
-		maxRetries: 3,
+		maxRetries: 2,
 	}
 }
 
@@ -131,22 +132,24 @@ type QueryResult struct {
 }
 
 type ExifInfo struct {
-	FileSizeInByte  int64 `json:"fileSizeInByte"`
-	ExifImageWidth  int   `json:"exifImageWidth,omitempty"`
-	ExifImageHeight int   `json:"exifImageHeight,omitempty"`
+	FileSizeInByte  int64           `json:"fileSizeInByte"`
+	ExifImageWidth  int             `json:"exifImageWidth,omitempty"`
+	ExifImageHeight int             `json:"exifImageHeight,omitempty"`
+	Duration        json.RawMessage `json:"duration,omitempty"`
 }
 
 // Asset represents an Immich asset
 type Asset struct {
-	ID               string   `json:"id"`
-	Type             string   `json:"type"`
-	Size             int64    `json:"size"`
-	DeviceAssetID    string   `json:"deviceAssetId,omitempty"`
-	DeviceID         string   `json:"deviceId,omitempty"`
-	FileCreatedAt    string   `json:"fileCreatedAt,omitempty"`
-	FileModifiedAt   string   `json:"fileModifiedAt,omitempty"`
-	OriginalFileName string   `json:"originalFileName,omitempty"`
-	ExifInfo         ExifInfo `json:"exifInfo,omitempty"`
+	ID               string          `json:"id"`
+	Type             string          `json:"type"`
+	Size             int64           `json:"size"`
+	Duration         json.RawMessage `json:"duration,omitempty"`
+	DeviceAssetID    string          `json:"deviceAssetId,omitempty"`
+	DeviceID         string          `json:"deviceId,omitempty"`
+	FileCreatedAt    string          `json:"fileCreatedAt,omitempty"`
+	FileModifiedAt   string          `json:"fileModifiedAt,omitempty"`
+	OriginalFileName string          `json:"originalFileName,omitempty"`
+	ExifInfo         ExifInfo        `json:"exifInfo,omitempty"`
 }
 
 // GetSize returns the asset size, falling back to exifInfo.fileSizeInByte if Size is 0
@@ -155,6 +158,182 @@ func (a *Asset) GetSize() int64 {
 		return a.Size
 	}
 	return a.ExifInfo.FileSizeInByte
+}
+
+// parseISO8601Duration parses ISO 8601 duration strings like "PT1H2M3.45S" or "PT45S".
+func parseISO8601Duration(s string) (float64, bool) {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	if !strings.HasPrefix(s, "P") {
+		return 0, false
+	}
+	s = s[1:]
+	var days, hours, mins, secs float64
+	timePart := ""
+	datePart := s
+	if idx := strings.Index(s, "T"); idx != -1 {
+		datePart = s[:idx]
+		timePart = s[idx+1:]
+	}
+	if idx := strings.Index(datePart, "D"); idx != -1 {
+		d, err := strconv.ParseFloat(datePart[:idx], 64)
+		if err == nil {
+			days = d
+		}
+	}
+	cur := ""
+	for i := 0; i < len(timePart); i++ {
+		ch := timePart[i]
+		if (ch >= '0' && ch <= '9') || ch == '.' || ch == ',' {
+			cur += string(ch)
+		} else if ch == 'H' {
+			cur = strings.ReplaceAll(cur, ",", ".")
+			h, err := strconv.ParseFloat(cur, 64)
+			if err == nil {
+				hours = h
+			}
+			cur = ""
+		} else if ch == 'M' {
+			cur = strings.ReplaceAll(cur, ",", ".")
+			m, err := strconv.ParseFloat(cur, 64)
+			if err == nil {
+				mins = m
+			}
+			cur = ""
+		} else if ch == 'S' {
+			cur = strings.ReplaceAll(cur, ",", ".")
+			sec, err := strconv.ParseFloat(cur, 64)
+			if err == nil {
+				secs = sec
+			}
+			cur = ""
+		}
+	}
+	total := days*86400 + hours*3600 + mins*60 + secs
+	return total, total > 0
+}
+
+// ParseDurationSeconds parses duration from raw JSON bytes (string interval, ISO-8601, or numeric).
+// Supported formats:
+// - ISO-8601 durations (e.g. "PT1M20S", "PT1H2M3.45S", "PT45S")
+// - "HH:MM:SS" / "HH:MM:SS.micro" (e.g. "0:01:23.456000")
+// - "MM:SS" / "MM:SS.micro" (e.g. "01:23.45")
+// - Numeric seconds or formatted seconds string (e.g. "83.45", 83.45, "83.45s")
+// - Milliseconds if specified with "ms" or integer > 86400 (e.g. 120000 -> 120s)
+// Returns duration in seconds, or 0 if unparseable / missing / non-positive.
+func ParseDurationSeconds(raw json.RawMessage) float64 {
+	if len(raw) == 0 {
+		return 0
+	}
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" {
+		return 0
+	}
+	if strings.HasPrefix(s, `"`) && strings.HasSuffix(s, `"`) {
+		s = strings.Trim(s, `"`)
+		s = strings.TrimSpace(s)
+	}
+	if s == "" || s == "null" {
+		return 0
+	}
+
+	// 1. ISO-8601 duration
+	if strings.HasPrefix(strings.ToUpper(s), "P") {
+		if dur, ok := parseISO8601Duration(s); ok && dur > 0 {
+			return dur
+		}
+	}
+
+	// 2. Colon-separated interval (HH:MM:SS or MM:SS)
+	if strings.Contains(s, ":") {
+		sClean := strings.ReplaceAll(s, ",", ".")
+		parts := strings.Split(sClean, ":")
+		if len(parts) == 4 {
+			d, err0 := strconv.ParseFloat(parts[0], 64)
+			h, err1 := strconv.ParseFloat(parts[1], 64)
+			m, err2 := strconv.ParseFloat(parts[2], 64)
+			sec, err3 := strconv.ParseFloat(parts[3], 64)
+			if err0 == nil && err1 == nil && err2 == nil && err3 == nil {
+				total := d*86400 + h*3600 + m*60 + sec
+				if total > 0 {
+					return total
+				}
+			}
+		} else if len(parts) == 3 {
+			h, err1 := strconv.ParseFloat(parts[0], 64)
+			m, err2 := strconv.ParseFloat(parts[1], 64)
+			sec, err3 := strconv.ParseFloat(parts[2], 64)
+			if err1 == nil && err2 == nil && err3 == nil {
+				total := h*3600 + m*60 + sec
+				if total > 0 {
+					return total
+				}
+			}
+		} else if len(parts) == 2 {
+			m, err1 := strconv.ParseFloat(parts[0], 64)
+			sec, err2 := strconv.ParseFloat(parts[1], 64)
+			if err1 == nil && err2 == nil {
+				total := m*60 + sec
+				if total > 0 {
+					return total
+				}
+			}
+		}
+	}
+
+	// 3. Milliseconds suffix (e.g. "120000ms")
+	lower := strings.ToLower(s)
+	if strings.HasSuffix(lower, "ms") {
+		numStr := strings.TrimSpace(strings.TrimSuffix(lower, "ms"))
+		numStr = strings.ReplaceAll(numStr, ",", ".")
+		if val, err := strconv.ParseFloat(numStr, 64); err == nil && val > 0 {
+			return val / 1000.0
+		}
+	}
+
+	// 4. Seconds suffix (e.g. "83.45s", "83.45sec")
+	if strings.HasSuffix(lower, "sec") {
+		s = strings.TrimSpace(strings.TrimSuffix(lower, "sec"))
+	} else if strings.HasSuffix(lower, "s") {
+		s = strings.TrimSpace(strings.TrimSuffix(lower, "s"))
+	}
+
+	s = strings.ReplaceAll(s, ",", ".")
+	val, err := strconv.ParseFloat(s, 64)
+	if err == nil && val > 0 {
+		if val > 86400 {
+			return val / 1000.0
+		}
+		return val
+	}
+	return 0
+}
+
+// DurationSeconds returns the asset duration in seconds, checking Asset.Duration and ExifInfo.Duration.
+func (a *Asset) DurationSeconds() float64 {
+	if len(a.Duration) > 0 {
+		if sec := ParseDurationSeconds(a.Duration); sec > 0 {
+			return sec
+		}
+	}
+	if len(a.ExifInfo.Duration) > 0 {
+		if sec := ParseDurationSeconds(a.ExifInfo.Duration); sec > 0 {
+			return sec
+		}
+	}
+	return 0
+}
+
+// MBPerMin returns the bitrate density of the asset in megabytes per minute.
+// If duration is missing or non-positive, it falls back to assuming 1 minute (so total MB is used),
+// ensuring large videos without duration metadata are conservatively included.
+func (a *Asset) MBPerMin() float64 {
+	sizeMB := float64(a.GetSize()) / (1024.0 * 1024.0)
+	durSec := a.DurationSeconds()
+	if durSec <= 0 {
+		return sizeMB
+	}
+	durMin := durSec / 60.0
+	return sizeMB / durMin
 }
 
 // Album represents an Immich album
@@ -187,13 +366,13 @@ func (c *Client) doRequest(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-// ScanVideos returns videos exceeding sizeThreshold along with bulk stats on excluded assets
-func (c *Client) ScanVideos(sizeThreshold int64) (*QueryResult, error) {
-	return c.ScanVideosWithContext(context.Background(), sizeThreshold)
+// ScanVideos returns videos exceeding thresholdMBPerMin along with bulk stats on excluded assets
+func (c *Client) ScanVideos(thresholdMBPerMin float64) (*QueryResult, error) {
+	return c.ScanVideosWithContext(context.Background(), thresholdMBPerMin)
 }
 
-// ScanVideosWithContext returns videos exceeding sizeThreshold along with bulk stats on excluded assets, supporting context cancellation
-func (c *Client) ScanVideosWithContext(ctx context.Context, sizeThreshold int64) (*QueryResult, error) {
+// ScanVideosWithContext returns videos exceeding thresholdMBPerMin along with bulk stats on excluded assets, supporting context cancellation
+func (c *Client) ScanVideosWithContext(ctx context.Context, thresholdMBPerMin float64) (*QueryResult, error) {
 	res := &QueryResult{}
 	page := 1
 	size := 1000
@@ -242,7 +421,7 @@ func (c *Client) ScanVideosWithContext(ctx context.Context, sizeThreshold int64)
 		for _, a := range searchResp.Assets.Items {
 			if a.Type != "VIDEO" {
 				res.SkippedNonVideo++
-			} else if a.GetSize() <= sizeThreshold {
+			} else if thresholdMBPerMin > 0 && a.MBPerMin() < thresholdMBPerMin {
 				res.SkippedBelowSize++
 			} else {
 				res.Videos = append(res.Videos, a)
@@ -258,12 +437,65 @@ func (c *Client) ScanVideosWithContext(ctx context.Context, sizeThreshold int64)
 	return res, nil
 }
 
-// QueryVideoAssets returns video assets that exceed the given size threshold
-func (c *Client) QueryVideoAssets(sizeThreshold int64) ([]Asset, error) {
-	res, err := c.ScanVideos(sizeThreshold)
-	if err != nil {
-		return nil, err
+// QueryVideoAssets returns video assets that exceed the given size threshold in bytes
+func (c *Client) QueryVideoAssets(sizeThresholdBytes int64) ([]Asset, error) {
+	res := &QueryResult{}
+	page := 1
+	size := 1000
+
+	for {
+		payload := map[string]interface{}{
+			"page":     page,
+			"size":     size,
+			"withExif": true,
+		}
+		body, _ := json.Marshal(payload)
+
+		req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/search/metadata", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := c.doRequest(req)
+		if err != nil {
+			return nil, err
+		}
+
+		var searchResp struct {
+			Assets struct {
+				Items []Asset `json:"items"`
+			} `json:"assets"`
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("failed to decode response: %w", err)
+		}
+		resp.Body.Close()
+
+		if len(searchResp.Assets.Items) == 0 {
+			break
+		}
+
+		res.TotalAssetsScanned += len(searchResp.Assets.Items)
+
+		for _, a := range searchResp.Assets.Items {
+			if a.Type != "VIDEO" {
+				res.SkippedNonVideo++
+			} else if a.GetSize() <= sizeThresholdBytes {
+				res.SkippedBelowSize++
+			} else {
+				res.Videos = append(res.Videos, a)
+			}
+		}
+
+		if len(searchResp.Assets.Items) < size {
+			break
+		}
+		page++
 	}
+
 	return res.Videos, nil
 }
 

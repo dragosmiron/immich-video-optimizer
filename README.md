@@ -100,7 +100,7 @@ The terminal interface guides you through the process:
 
 ```mermaid
 flowchart TD
-    A["Connection Setup<br/>(URL & API Key)"] --> B["Library Scan<br/>(Size Threshold)"]
+    A["Connection Setup<br/>(URL & API Key)"] --> B["Library Scan<br/>(MB/min Density)"]
     B --> C["Interactive Video Browser<br/>(Filter & Select)"]
     C --> D["Preferences & Settings<br/>(Resolution, Presets, Encoders)"]
     D --> E["Remote Codec Probing<br/>(Skip existing HEVC)"]
@@ -112,7 +112,7 @@ flowchart TD
 Enter your Immich server URL (e.g. `http://192.168.1.100:2283` or `https://immich.example.com`) and your **API Key** (created in Immich under *Account Settings $\to$ API Keys*). Credentials are saved to `~/.config/immich-video-optimizer/config.yaml`.
 
 ### 2. Video Browser & Selection
-Review discovered videos exceeding your configured file size threshold:
+Review discovered videos exceeding your configured bitrate density threshold (MB/min):
 - **`[Space]`**: Toggle selection for highlighted video.
 - **`[a]`**: Select all visible videos.
 - **`[n]`**: Deselect all videos.
@@ -125,13 +125,13 @@ Review discovered videos exceeding your configured file size threshold:
 ### 3. Settings & Preferences (`s`)
 - **Target Resolution:** `Original` (default), `4K`, `1440p`, `1080p`, or `720p` (never upscales).
 - **Transcoding Preset:** `Ultrafast`, `Fast`, `Medium` (default), or `Slow`.
-- **Size Guard:** Skips replacement if the transcoded file is larger than the original.
-- **Skip HEVC Videos:** Automatically detects and skips videos already encoded in H.265.
-- **Pipeline Prefetch:** Downloads the next video in background while the current video transcodes.
+- **Size Guard:** `[✓] ON` (default checked) — skips replacement if the transcoded file is larger than the original.
+- **Skip HEVC Videos:** `[✓] ON` (default checked) — automatically detects and skips videos already encoded in H.265.
+- **Pipeline Prefetch:** `[✓] ON` (default checked) — downloads the next video in background while the current video transcodes.
 - **Concurrent Encoders:** `1` (default, recommended for hardware encoders) or `2`.
-- **Size Threshold (MB):** Minimum file size to include in scans (e.g. `500` MB).
+- **Threshold (MB/min):** Minimum size per minute to include in scans (e.g. `100` MB/min). Skips videos with bitrate density below this threshold, ensuring short high-bitrate clips are caught while long lean files are bypassed.
 - **Logging Level:** `Info` (default) or `Debug` (logs FFmpeg/ExifTool command arguments and stderr).
-- **Network Retries:** Automatic retry count with exponential backoff on transient network drops (`0` to `5`, default `3`).
+- **Network Retries:** Automatic retry count with exponential backoff on transient network drops (`0` to `5`, default `2`).
 
 ### 4. Live Dashboard
 - **`⚙ Transcoding`**: Active file, resolution, file size, encoding speed, and FPS.
