@@ -168,10 +168,11 @@ type skippedVideo struct {
 	Reason string
 }
 
-// failureEntry holds the name and error message for a failed video.
+// failureEntry holds the video ID, name and error message for a failed video.
 type failureEntry struct {
-	Name string
-	Err  string
+	VideoID string
+	Name    string
+	Err     string
 }
 
 func NewAppModel(cfg *config.Config, pipeline *orchestrator.Pipeline, opts ...Option) *AppModel {
@@ -313,6 +314,9 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ScanCompleteMsg:
+		if m.state != ViewScanning {
+			return m, nil
+		}
 		if msg.Err != nil {
 			m.scanError = fmt.Sprintf("Scan failed: %v", msg.Err)
 			m.state = ViewScanPrompt
@@ -433,7 +437,7 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if msg.Err != nil {
 			m.failedCount++
-			m.failedVideos = append(m.failedVideos, failureEntry{Name: completedName, Err: msg.Err.Error()})
+			m.failedVideos = append(m.failedVideos, failureEntry{VideoID: msg.VideoID, Name: completedName, Err: msg.Err.Error()})
 			msgStr := fmt.Sprintf("%s - Failed %s: %v", timeStr, completedName, msg.Err)
 			m.addLog(msgStr)
 			logFailure(msgStr)
@@ -772,14 +776,10 @@ func (m *AppModel) updateBrowser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.updateTable()
 
 	case " ":
-		row := m.table.SelectedRow()
-		if row != nil {
-			for _, v := range m.filteredVideos {
-				if v.OriginalFileName == row[1] {
-					m.selectedVideos[v.ID] = !m.selectedVideos[v.ID]
-					break
-				}
-			}
+		cursor := m.table.Cursor()
+		if cursor >= 0 && cursor < len(m.filteredVideos) {
+			targetID := m.filteredVideos[cursor].ID
+			m.selectedVideos[targetID] = !m.selectedVideos[targetID]
 			m.updateTable()
 		}
 
@@ -1057,8 +1057,9 @@ func (m *AppModel) updateSummary(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			var toRetry []immich.Asset
 			for _, v := range m.videos {
 				for _, f := range m.failedVideos {
-					if v.OriginalFileName == f.Name {
+					if (f.VideoID != "" && v.ID == f.VideoID) || (f.VideoID == "" && v.OriginalFileName == f.Name) {
 						toRetry = append(toRetry, v)
+						break
 					}
 				}
 			}

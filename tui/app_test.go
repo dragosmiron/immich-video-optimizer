@@ -748,4 +748,116 @@ func TestAppModel_DryRunFlow(t *testing.T) {
 	}
 }
 
+func TestAppModel_SelectionSameFilenameCollision(t *testing.T) {
+	cfg := &config.Config{URL: "http://localhost:2283", APIKey: "key"}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+
+	// Two videos with identical filename but different IDs
+	videos := []immich.Asset{
+		{ID: "id-1", OriginalFileName: "clip.mp4", ExifInfo: immich.ExifInfo{FileSizeInByte: 100 * 1024 * 1024}},
+		{ID: "id-2", OriginalFileName: "clip.mp4", ExifInfo: immich.ExifInfo{FileSizeInByte: 200 * 1024 * 1024}},
+	}
+
+	m.state = ViewBrowser
+	m.videos = videos
+	m.selectedVideos = map[string]bool{"id-1": true, "id-2": true}
+	m.updateTable()
+
+	// Initially both are selected
+	if !m.selectedVideos["id-1"] || !m.selectedVideos["id-2"] {
+		t.Fatalf("expected both to be selected initially")
+	}
+
+	// Move cursor down to second row (id-2)
+	m.table.SetCursor(1)
+
+	// Press space to toggle second row
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	model := newM.(*AppModel)
+
+	// id-1 should still be selected, id-2 should now be unselected
+	if !model.selectedVideos["id-1"] {
+		t.Errorf("expected id-1 to remain selected, but it was toggled!")
+	}
+	if model.selectedVideos["id-2"] {
+		t.Errorf("expected id-2 to be unselected, but it is still selected!")
+	}
+}
+
+func TestAppModel_RetryFailedCollision(t *testing.T) {
+	cfg := &config.Config{URL: "http://localhost:2283", APIKey: "key"}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+
+	// Two videos with identical filename
+	videos := []immich.Asset{
+		{ID: "id-1", OriginalFileName: "clip.mp4"},
+		{ID: "id-2", OriginalFileName: "clip.mp4"},
+	}
+	m.videos = videos
+	m.state = ViewDashboard
+	m.totalVideos = 2
+
+	// Only id-2 fails
+	newM, _ := m.Update(orchestrator.PipelineVideoCompleteMsg{
+		VideoID:   "id-2",
+		VideoName: "clip.mp4",
+		Err:       errors.New("transcode error"),
+	})
+	m = newM.(*AppModel)
+
+	if len(m.failedVideos) != 1 || m.failedVideos[0].VideoID != "id-2" {
+		t.Fatalf("expected failedVideos to track id-2, got: %+v", m.failedVideos)
+	}
+
+	// Move to summary
+	m.state = ViewSummary
+
+	// Press 'r' to retry failed videos
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model := newM.(*AppModel)
+
+	if model.state != ViewDashboard {
+		t.Errorf("expected state to transition to ViewDashboard on retry, got: %v", model.state)
+	}
+	if model.totalVideos != 1 {
+		t.Errorf("expected exactly 1 video to be retried (id-2), got totalVideos: %d", model.totalVideos)
+	}
+	if model.cancelCtx != nil {
+		model.cancelCtx()
+	}
+}
+
+func TestAppModel_ScanCancellation(t *testing.T) {
+	cfg := &config.Config{URL: "http://localhost:2283", APIKey: "key"}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+
+	m.state = ViewScanning
+
+	// User presses 'esc' while scanning
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model := newM.(*AppModel)
+
+	if model.state != ViewScanPrompt {
+		t.Fatalf("expected ViewScanPrompt after cancelling scan, got: %v", model.state)
+	}
+
+	// Later, background scan completes
+	res := &immich.QueryResult{
+		Videos: []immich.Asset{
+			{ID: "v1", OriginalFileName: "video.mp4"},
+		},
+	}
+	newM2, _ := model.Update(ScanCompleteMsg{Result: res, Err: nil})
+	model2 := newM2.(*AppModel)
+
+	// State must NOT be overridden to ViewBrowser
+	if model2.state != ViewScanPrompt {
+		t.Errorf("expected state to remain ViewScanPrompt after scan completion following user cancellation, got: %v", model2.state)
+	}
+}
+
+
 
