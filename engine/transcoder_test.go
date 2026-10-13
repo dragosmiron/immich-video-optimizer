@@ -162,6 +162,28 @@ func TestBuildFFmpegArgs_VAAPI(t *testing.T) {
 	}
 }
 
+func TestBuildFFmpegArgs_NVENC(t *testing.T) {
+	opts := TranscodeOptions{
+		Input:      "in.mp4",
+		Output:     "out.mp4",
+		Encoder:    "hevc_nvenc",
+		AudioCopy:  true,
+		CRF:        28,
+		Preset:     "medium",
+		Resolution: "Original",
+	}
+	args := BuildFFmpegArgs(opts)
+	for i, arg := range args {
+		if arg == "-crf" {
+			t.Errorf("hevc_nvenc should not receive -crf, found at index %d", i)
+		}
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-cq 28") {
+		t.Errorf("expected -cq 28 in args, got: %s", joined)
+	}
+}
+
 func TestTranscode_HardwareFallbackToCPU(t *testing.T) {
 	tempDir := t.TempDir()
 	fakeFFmpeg := filepath.Join(tempDir, "fake_ffmpeg")

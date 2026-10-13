@@ -71,6 +71,8 @@ func BuildFFmpegArgs(opts TranscodeOptions) []string {
 			args = append(args, "-q:v", strconv.Itoa(opts.CRF))
 		case "hevc_vaapi":
 			args = append(args, "-qp", strconv.Itoa(opts.CRF))
+		case "hevc_nvenc":
+			args = append(args, "-cq", strconv.Itoa(opts.CRF))
 		default:
 			args = append(args, "-crf", strconv.Itoa(opts.CRF))
 		}
