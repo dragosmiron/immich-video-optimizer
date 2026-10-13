@@ -756,6 +756,19 @@ func (m *AppModel) updateResumePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 							NewSize:      vs.OriginalSize - vs.SavedBytes,
 							SavedBytes:   vs.SavedBytes,
 						})
+					} else if vs.Status == state.StatusSkipped {
+						m.skippedCount++
+						m.skippedVideos = append(m.skippedVideos, skippedVideo{
+							Name:   vs.OriginalName,
+							Reason: vs.ErrorMessage,
+						})
+					} else if vs.Status == state.StatusFailed {
+						m.failedCount++
+						m.failedVideos = append(m.failedVideos, failureEntry{
+							VideoID: vs.ID,
+							Name:    vs.OriginalName,
+							Err:     vs.ErrorMessage,
+						})
 					}
 				}
 			}

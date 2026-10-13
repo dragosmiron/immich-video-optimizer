@@ -929,6 +929,76 @@ func TestAppModel_ResumeRetryFailed(t *testing.T) {
 	}
 }
 
+func TestAppModel_ResumeRestoresSkippedAndFailedVideos(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	cfg := &config.Config{URL: "http://localhost:2283", APIKey: "key"}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+
+	sess := &state.Session{
+		SessionID: "test-sess",
+		Videos: map[string]*state.VideoState{
+			"v-done": {
+				ID:           "v-done",
+				OriginalName: "completed.mp4",
+				OriginalSize: 100 * 1024 * 1024,
+				SavedBytes:   15 * 1024 * 1024,
+				Status:       state.StatusCompleted,
+			},
+			"v-skipped": {
+				ID:           "v-skipped",
+				OriginalName: "already_hevc.mp4",
+				OriginalSize: 50 * 1024 * 1024,
+				Status:       state.StatusSkipped,
+				ErrorMessage: "already HEVC/H.265",
+			},
+			"v-failed": {
+				ID:           "v-failed",
+				OriginalName: "corrupt.mp4",
+				OriginalSize: 80 * 1024 * 1024,
+				Status:       state.StatusFailed,
+				ErrorMessage: "transcode error",
+			},
+			"v-pending": {
+				ID:           "v-pending",
+				OriginalName: "pending.mp4",
+				OriginalSize: 60 * 1024 * 1024,
+				Status:       state.StatusPending,
+			},
+		},
+		TotalVideos: 4,
+	}
+	_ = state.SaveSession(sess)
+	m.session = sess
+	m.state = ViewResumePrompt
+
+	// Press 'r' to resume
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model := newM.(*AppModel)
+
+	if model.cancelCtx != nil {
+		model.cancelCtx()
+	}
+
+	if len(model.transcodedVideos) != 1 {
+		t.Errorf("expected 1 transcodedVideo restored, got %d", len(model.transcodedVideos))
+	}
+	if len(model.skippedVideos) != 1 {
+		t.Errorf("expected 1 skippedVideo restored, got %d", len(model.skippedVideos))
+	}
+	if model.skippedCount != 1 {
+		t.Errorf("expected skippedCount == 1, got %d", model.skippedCount)
+	}
+	if len(model.failedVideos) != 1 {
+		t.Errorf("expected 1 failedVideo restored, got %d", len(model.failedVideos))
+	}
+	if model.failedCount != 1 {
+		t.Errorf("expected failedCount == 1, got %d", model.failedCount)
+	}
+}
+
 func TestAppModel_ScanStaleSequenceDiscarded(t *testing.T) {
 	cfg := &config.Config{URL: "http://localhost:2283", APIKey: "key"}
 	pipeline, _ := orchestrator.NewPipeline(cfg)
@@ -1063,22 +1133,67 @@ func TestEstimateSavings(t *testing.T) {
 		t.Errorf("expected 0 saved for VP9, got ratio=%v, saved=%v", ratio, saved)
 	}
 
-	// 4. H.264 without downscale -> conservative 20% saved (ratio 0.80)
+	// 4. Empty / unknown codec -> 0 MB saved
+	ratio, saved = estimateSavings(orig, engine.ProbeDetails{Codec: ""}, "original", false)
+	if ratio != 1.0 || saved != 0 {
+		t.Errorf("expected 0 saved for empty codec, got ratio=%v, saved=%v", ratio, saved)
+	}
+
+	// 5. H.264 without downscale -> conservative 15% saved (ratio 0.85)
 	ratio, saved = estimateSavings(orig, engine.ProbeDetails{Codec: "H.264", Resolution: "1080p"}, "original", false)
-	if ratio != 0.80 || saved != int64(20*1024*1024) {
-		t.Errorf("expected 20MB saved for H.264, got ratio=%v, saved=%v", ratio, saved)
+	if ratio != 0.85 || saved != int64(15*1024*1024) {
+		t.Errorf("expected 15MB saved for H.264 same-res, got ratio=%v, saved=%v", ratio, saved)
 	}
 
-	// 5. H.264 with 4K -> 1080p downscale -> ~45% saved (ratio 0.55)
+	// 6. 4K H.264 with capitalized "Original" setting -> does NOT downscale (ratio 0.85)
+	ratio, saved = estimateSavings(orig, engine.ProbeDetails{Codec: "H.264", Resolution: "4K"}, "Original", false)
+	if ratio != 0.85 || saved != int64(15*1024*1024) {
+		t.Errorf("expected 15MB saved for 4K with 'Original' setting, got ratio=%v, saved=%v", ratio, saved)
+	}
+
+	// 7. 720p H.264 with "1080p" target setting -> does NOT upscale (ratio 0.85)
+	ratio, saved = estimateSavings(orig, engine.ProbeDetails{Codec: "H.264", Resolution: "720p"}, "1080p", false)
+	if ratio != 0.85 || saved != int64(15*1024*1024) {
+		t.Errorf("expected 15MB saved for 720p with 1080p target (no upscale), got ratio=%v, saved=%v", ratio, saved)
+	}
+
+	// 8. H.264 with 4K -> 1080p downscale -> 50% saved (ratio 0.50)
 	ratio, saved = estimateSavings(orig, engine.ProbeDetails{Codec: "H.264", Resolution: "4K"}, "1080p", false)
-	if ratio != 0.55 || saved != int64(45*1024*1024) {
-		t.Errorf("expected 45MB saved for 4K downscale, got ratio=%v, saved=%v", ratio, saved)
+	if ratio != 0.50 || saved != int64(50*1024*1024) {
+		t.Errorf("expected 50MB saved for 4K downscale, got ratio=%v, saved=%v", ratio, saved)
 	}
 
-	// 6. ProRes -> ~70% saved (ratio 0.30)
+	// 9. ProRes -> ~70% saved (ratio 0.30)
 	ratio, saved = estimateSavings(orig, engine.ProbeDetails{Codec: "ProRes", Resolution: "1080p"}, "original", false)
 	if ratio != 0.30 || saved != int64(70*1024*1024) {
 		t.Errorf("expected 70MB saved for ProRes, got ratio=%v, saved=%v", ratio, saved)
+	}
+}
+
+func TestResolveTargetResolution(t *testing.T) {
+	tests := []struct {
+		inputRes      string
+		targetSetting string
+		wantRes       string
+		wantDownscale bool
+	}{
+		{"4K", "Original", "4K", false},
+		{"4K", "original", "4K", false},
+		{"4K", "", "4K", false},
+		{"4K", "1080p", "1080p", true},
+		{"1080p", "1080p", "1080p", false},
+		{"720p", "1080p", "720p", false}, // no upscaling
+		{"1440p", "720p", "720p", true},
+		{"3840x2160", "1080p", "1080p", true},
+		{"", "1080p", "1080p", false},
+	}
+
+	for _, tt := range tests {
+		gotRes, gotDownscale := resolveTargetResolution(tt.inputRes, tt.targetSetting)
+		if gotRes != tt.wantRes || gotDownscale != tt.wantDownscale {
+			t.Errorf("resolveTargetResolution(%q, %q) = (%q, %v); want (%q, %v)",
+				tt.inputRes, tt.targetSetting, gotRes, gotDownscale, tt.wantRes, tt.wantDownscale)
+		}
 	}
 }
 

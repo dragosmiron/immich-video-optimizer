@@ -708,5 +708,94 @@ exit 0
 	}
 }
 
+func TestPipeline_AllSkippedDoesNotCreateAlbum(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	var albumCreated bool
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.Method == "POST" && r.URL.Path == "/api/albums" {
+			albumCreated = true
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "album-should-not-exist"}`))
+			return
+		}
+		if r.Method == "GET" && strings.Contains(r.URL.Path, "/original") {
+			w.Header().Set("Content-Type", "video/mp4")
+			w.Write([]byte("SIMULATED_HEVC"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	fakeFFmpeg := filepath.Join(tempHome, "fake_ffmpeg")
+	script := `#!/bin/sh
+echo "Stream #0:0: Video: hevc, 1920x1080"
+exit 0
+`
+	_ = os.WriteFile(fakeFFmpeg, []byte(script), 0755)
+
+	fakeExifTool := filepath.Join(tempHome, "fake_exiftool")
+	_ = os.WriteFile(fakeExifTool, []byte("#!/bin/sh\nexit 0\n"), 0755)
+
+	cfg := &config.Config{
+		URL:           ts.URL,
+		APIKey:        "test-key",
+		SizeThreshold: "0",
+		SkipHEVC:      true,
+	}
+
+	binaries := &engine.BinaryManager{
+		FFmpegPath:   fakeFFmpeg,
+		ExifToolPath: fakeExifTool,
+	}
+
+	p, err := NewPipelineWithBinaries(cfg, binaries)
+	if err != nil {
+		t.Fatalf("Failed to initialize pipeline: %v", err)
+	}
+	p.Client().SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: ts.Config.Handler},
+	})
+
+	videos := []immich.Asset{
+		{
+			ID:               "asset-hevc-1",
+			OriginalFileName: "already_hevc_1.mp4",
+			ExifInfo: immich.ExifInfo{
+				FileSizeInByte: 2000,
+			},
+		},
+		{
+			ID:               "asset-hevc-2",
+			OriginalFileName: "already_hevc_2.mp4",
+			ExifInfo: immich.ExifInfo{
+				FileSizeInByte: 2000,
+			},
+		},
+	}
+
+	ch := make(chan interface{}, 20)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	p.Run(ctx, videos, ch)
+
+	for msg := range ch {
+		_ = msg
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if albumCreated {
+		t.Errorf("Expected NO tracking album to be created when all videos are skipped, but CreateTrackingAlbum was invoked!")
+	}
+}
+
 
 

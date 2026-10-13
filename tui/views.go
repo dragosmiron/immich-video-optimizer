@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -397,10 +398,7 @@ func (m *AppModel) viewDryRun() string {
 			if res == "" {
 				res = "1080p"
 			}
-			targetRes := res
-			if m.cfg.Resolution != "original" && m.cfg.Resolution != "" {
-				targetRes = m.cfg.Resolution
-			}
+			targetRes, _ := resolveTargetResolution(res, m.cfg.Resolution)
 
 			_, itemSaved := estimateSavings(orig, detail, m.cfg.Resolution, failedMap[v.ID])
 
@@ -798,7 +796,12 @@ func (m *AppModel) viewSummary() string {
 				if tv.OriginalSize > 0 {
 					pct = (float64(tv.SavedBytes) / float64(tv.OriginalSize)) * 100.0
 				}
-				savedBadge := fmt.Sprintf("saved %s, -%.1f%%", formatByteSize(tv.SavedBytes), pct)
+				var savedBadge string
+				if tv.SavedBytes >= 0 {
+					savedBadge = fmt.Sprintf("saved %s, -%.1f%%", formatByteSize(tv.SavedBytes), pct)
+				} else {
+					savedBadge = fmt.Sprintf("+%s, +%.1f%%", formatByteSize(-tv.SavedBytes), -pct)
+				}
 				b.WriteString(fmt.Sprintf("    • %-32s  %s ➔ %s  (%s)\n",
 					truncate(tv.Name, 32),
 					formatByteSize(tv.OriginalSize),
@@ -906,23 +909,58 @@ func formatByteSize(b int64) string {
 	}
 }
 
+// parseResolutionHeight extracts vertical pixel height from resolution label.
+func parseResolutionHeight(res string) int {
+	res = strings.ToLower(strings.TrimSpace(res))
+	switch {
+	case strings.Contains(res, "4k") || strings.Contains(res, "2160"):
+		return 2160
+	case strings.Contains(res, "1440"):
+		return 1440
+	case strings.Contains(res, "1080"):
+		return 1080
+	case strings.Contains(res, "720"):
+		return 720
+	case strings.Contains(res, "480"):
+		return 480
+	}
+	if strings.Contains(res, "x") {
+		parts := strings.Split(res, "x")
+		if len(parts) == 2 {
+			if h, err := strconv.Atoi(parts[1]); err == nil {
+				return h
+			}
+		}
+	}
+	return 0
+}
+
+// resolveTargetResolution computes the actual target resolution string and whether
+// genuine downscaling will occur given the input video resolution and user setting.
+func resolveTargetResolution(inputRes, targetSetting string) (string, bool) {
+	if inputRes == "" {
+		inputRes = "1080p"
+	}
+	if targetSetting == "" || strings.EqualFold(targetSetting, "original") {
+		return inputRes, false
+	}
+	inH := parseResolutionHeight(inputRes)
+	outH := parseResolutionHeight(targetSetting)
+	if inH > 0 && outH > 0 && inH > outH {
+		return targetSetting, true
+	}
+	// Never upscales; if input height is <= target height, preserve input resolution
+	return inputRes, false
+}
+
 // estimateSavings calculates a conservative, realistic ratio and saved byte count
 // for a video asset based on probed codec, resolution, and target settings.
 func estimateSavings(orig int64, detail engine.ProbeDetails, targetResSetting string, isProbeFailed bool) (float64, int64) {
-	if isProbeFailed || detail.IsHEVC {
+	if isProbeFailed || detail.IsHEVC || detail.Codec == "" {
 		return 1.0, 0
 	}
 
-	res := detail.Resolution
-	if res == "" {
-		res = "1080p"
-	}
-	targetRes := res
-	if targetResSetting != "original" && targetResSetting != "" {
-		targetRes = targetResSetting
-	}
-
-	isDownscaling := targetRes != res && (res == "4K" || res == "2160p" || res == "1440p")
+	_, isDownscaling := resolveTargetResolution(detail.Resolution, targetResSetting)
 
 	var ratio float64
 	switch detail.Codec {
@@ -936,23 +974,23 @@ func estimateSavings(orig int64, detail engine.ProbeDetails, targetResSetting st
 		ratio = 0.40
 	case "MPEG-4", "VP8":
 		if isDownscaling {
-			ratio = 0.45
+			ratio = 0.50
 		} else {
-			ratio = 0.65
+			ratio = 0.70
 		}
 	case "VP9", "AV1":
 		ratio = 1.0
 	case "H.264":
 		if isDownscaling {
-			ratio = 0.55
+			ratio = 0.50
 		} else {
-			ratio = 0.80
+			ratio = 0.85
 		}
 	default:
 		if isDownscaling {
 			ratio = 0.60
 		} else {
-			ratio = 0.85
+			ratio = 0.88
 		}
 	}
 

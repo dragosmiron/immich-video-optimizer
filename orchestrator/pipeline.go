@@ -117,13 +117,6 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 	var albumID string
 	if sess != nil && sess.TrackingAlbumID != "" {
 		albumID = sess.TrackingAlbumID
-	} else {
-		timestamp := time.Now().Format("20060102-150405")
-		albumName := fmt.Sprintf("Immich-Optimizer-InProgress-%s", timestamp)
-		album, err := p.client.CreateTrackingAlbum(albumName)
-		if err == nil && album != nil {
-			albumID = album.ID
-		}
 	}
 
 	if sess == nil {
@@ -135,8 +128,6 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 			Videos:          make(map[string]*state.VideoState),
 			TotalVideos:     len(videos),
 		}
-	} else if sess.TrackingAlbumID == "" && albumID != "" {
-		sess.TrackingAlbumID = albumID
 	}
 
 	for _, v := range videos {
@@ -397,6 +388,19 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 			_ = state.SaveSession(sess)
 			ch <- PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: errors.New(errMsg)}
 			continue
+		}
+
+		if albumID == "" {
+			timestamp := time.Now().Format("20060102-150405")
+			albumName := fmt.Sprintf("Immich-Optimizer-InProgress-%s", timestamp)
+			album, err := p.client.CreateTrackingAlbum(albumName)
+			if err != nil {
+				logger.Error("Failed to create tracking album %s: %v", albumName, err)
+			} else if album != nil {
+				albumID = album.ID
+				sess.TrackingAlbumID = albumID
+				_ = state.SaveSession(sess)
+			}
 		}
 
 		if albumID != "" {
