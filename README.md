@@ -63,7 +63,7 @@ tar -xzf immich-video-optimizer_darwin_arm64.tar.gz
 
 ### Option 2: Build From Source
 
-Requirements: Go 1.22+ and Git. System `ffmpeg` and `exiftool` are recommended in your `PATH` (e.g. `brew install ffmpeg exiftool` on macOS, or `sudo apt install ffmpeg libimage-exiftool-perl` on Linux).
+Requirements: **Go 1.24+** and Git. System `ffmpeg` and `exiftool` are required prerequisites in your `PATH` (e.g. `brew install ffmpeg exiftool` on macOS, or `sudo apt update && sudo apt install -y ffmpeg libimage-exiftool-perl` on Linux).
 
 ```bash
 git clone https://github.com/dragos/immich-video-optimizer.git
@@ -192,4 +192,7 @@ go build -o immich-video-optimizer .
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+
+- **Attribution Required:** You must provide clear credit and copyright notice to the author.
+- **Non-Commercial Use Only:** Use of this software is strictly limited to noncommercial purposes. Commercial use or monetary compensation is prohibited.
