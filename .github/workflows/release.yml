@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Install zip
+        run: sudo apt-get update && sudo apt-get install -y zip
+
+      - name: Build and package release archives
+        run: |
+          mkdir -p dist
+
+          # 1. macOS ARM64 (Apple Silicon M1/M2/M3/M4)
+          GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o immich-video-optimizer .
+          tar -czf dist/immich-video-optimizer_darwin_arm64.tar.gz immich-video-optimizer
+          rm immich-video-optimizer
+
+          # 2. macOS AMD64 (Intel)
+          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o immich-video-optimizer .
+          tar -czf dist/immich-video-optimizer_darwin_amd64.tar.gz immich-video-optimizer
+          rm immich-video-optimizer
+
+          # 3. Linux AMD64
+          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o immich-video-optimizer .
+          tar -czf dist/immich-video-optimizer_linux_amd64.tar.gz immich-video-optimizer
+          rm immich-video-optimizer
+
+          # 4. Linux ARM64
+          GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o immich-video-optimizer .
+          tar -czf dist/immich-video-optimizer_linux_arm64.tar.gz immich-video-optimizer
+          rm immich-video-optimizer
+
+          # 5. Windows AMD64
+          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o immich-video-optimizer.exe .
+          zip -j dist/immich-video-optimizer_windows_amd64.zip immich-video-optimizer.exe
+          rm immich-video-optimizer.exe
+
+          # 6. Generate SHA256 checksums
+          cd dist
+          sha256sum * > checksums.txt
+          cd ..
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*
+          generate_release_notes: true

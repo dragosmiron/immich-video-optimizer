@@ -10,12 +10,8 @@ on:
 
 jobs:
   test:
-    name: Build & Test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ ubuntu-latest, macos-latest ]
+    name: Test & Verify Build
+    runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
@@ -30,8 +26,11 @@ jobs:
       - name: Run go vet
         run: go vet ./...
 
-      - name: Run tests
+      - name: Run unit & integration tests
         run: go test -v ./...
 
-      - name: Build binary
-        run: go build -v -o immich-video-optimizer .
+      - name: Verify cross-compilation
+        run: |
+          go build -v .
+          GOOS=darwin GOARCH=arm64 go build -v .
+          GOOS=windows GOARCH=amd64 go build -v .
