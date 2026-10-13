@@ -34,7 +34,7 @@ A high-performance, interactive terminal client that reclaims gigabytes of disk 
 
 ### Option 1: Pre-Compiled Binary (Recommended)
 
-Download the latest release for your platform from the [Releases](https://github.com/dragos/immich-video-optimizer/releases) page:
+Download the latest release for your platform from the [Releases](https://github.com/dragosmiron/immich-video-optimizer/releases) page:
 
 | Platform | Architecture | Binary Archive |
 |---|---|---|
@@ -83,7 +83,7 @@ Requirements: **Go 1.24+** and Git. System `ffmpeg` and `exiftool` are required 
 - **Windows:** `winget install Gyan.FFmpeg PhilHarvey.ExifTool`
 
 ```bash
-git clone https://github.com/dragos/immich-video-optimizer.git
+git clone https://github.com/dragosmiron/immich-video-optimizer.git
 cd immich-video-optimizer
 go build -o immich-video-optimizer .
 ./immich-video-optimizer
