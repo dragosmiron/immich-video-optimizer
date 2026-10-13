@@ -1,10 +1,20 @@
 package main
 
 import (
+	"os"
 	"testing"
 
 	"immich-video-optimizer/config"
 )
+
+func TestMain(m *testing.M) {
+	tempDir, err := os.MkdirTemp("", "main-test-*")
+	if err == nil {
+		os.Setenv("HOME", tempDir)
+		defer os.RemoveAll(tempDir)
+	}
+	os.Exit(m.Run())
+}
 
 func TestConfigOverwrite(t *testing.T) {
 	tempDir := t.TempDir()

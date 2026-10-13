@@ -14,6 +14,15 @@ import (
 	"immich-video-optimizer/immich"
 )
 
+func TestMain(m *testing.M) {
+	tempDir, err := os.MkdirTemp("", "orchestrator-test-*")
+	if err == nil {
+		os.Setenv("HOME", tempDir)
+		defer os.RemoveAll(tempDir)
+	}
+	os.Exit(m.Run())
+}
+
 type testRoundTripper struct {
 	handler http.Handler
 }

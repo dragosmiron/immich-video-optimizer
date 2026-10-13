@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -13,6 +14,15 @@ import (
 	"immich-video-optimizer/orchestrator"
 	"immich-video-optimizer/state"
 )
+
+func TestMain(m *testing.M) {
+	tempDir, err := os.MkdirTemp("", "tui-test-*")
+	if err == nil {
+		os.Setenv("HOME", tempDir)
+		defer os.RemoveAll(tempDir)
+	}
+	os.Exit(m.Run())
+}
 
 func TestAppModel_InitialRouting(t *testing.T) {
 	// 1. Missing credentials routes to ViewConnectionSetup
