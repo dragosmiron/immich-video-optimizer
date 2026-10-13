@@ -669,7 +669,7 @@ func (m *AppModel) viewDashboard() string {
 	}
 
 	tName := m.currentTranscodeName
-	if tName == "" {
+	if tName == "" && m.currentMetadataName == "" && m.currentUploadName == "" && m.currentFinalizeName == "" {
 		tName = m.currentVideoName
 	}
 	if tName != "" {
@@ -678,11 +678,26 @@ func (m *AppModel) viewDashboard() string {
 			b.WriteString(fmt.Sprintf("  (%.1f MB, %s)", float64(m.currentVideoOriginalSize)/(1024*1024), m.currentVideoResolution))
 		}
 		b.WriteString("\n")
-		if m.speed != "" {
-			b.WriteString(fmt.Sprintf("                 Speed: %s  |  FPS: %.1f\n", styles.Value.Render(m.speed), m.fps))
+		var parts []string
+		if m.currentTranscodeTime != "" {
+			parts = append(parts, fmt.Sprintf("Time: %s", styles.Value.Render(m.currentTranscodeTime)))
 		}
+		if m.speed != "" {
+			parts = append(parts, fmt.Sprintf("Speed: %s", styles.Value.Render(m.speed)))
+		}
+		if m.fps > 0 {
+			parts = append(parts, fmt.Sprintf("FPS: %.1f", m.fps))
+		}
+		if len(parts) > 0 {
+			b.WriteString(fmt.Sprintf("                 %s  ● Encoding\n", strings.Join(parts, "  |  ")))
+		}
+	} else if m.currentMetadataName != "" {
+		b.WriteString(fmt.Sprintf("  🏷️ Metadata:    %s  %s\n",
+			styles.Value.Render(m.currentMetadataName),
+			styles.Subtext.Render("(copying GPS, timestamps & tags via ExifTool...)"),
+		))
 	} else {
-		b.WriteString("  ⚙ Transcoding: idle / preparing...\n")
+		b.WriteString("  ⚙ Transcoding: idle\n")
 	}
 
 	if m.cfg.EnablePrefetch {
@@ -694,7 +709,15 @@ func (m *AppModel) viewDashboard() string {
 	}
 
 	if m.currentUploadName != "" {
-		b.WriteString(fmt.Sprintf("  ↑ Uploading:   %s\n", styles.Value.Render(m.currentUploadName)))
+		b.WriteString(fmt.Sprintf("  ↑ Uploading:   %s  %s\n",
+			styles.Value.Render(m.currentUploadName),
+			styles.Subtext.Render("(streaming replacement to Immich server...)"),
+		))
+	} else if m.currentFinalizeName != "" {
+		b.WriteString(fmt.Sprintf("  ✓ Finalizing:  %s  %s\n",
+			styles.Value.Render(m.currentFinalizeName),
+			styles.Subtext.Render("(replacing original asset on Immich server...)"),
+		))
 	} else {
 		b.WriteString("  ↑ Uploading:   idle\n")
 	}

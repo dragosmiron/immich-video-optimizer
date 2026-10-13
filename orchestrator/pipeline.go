@@ -318,6 +318,8 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 					continue
 				}
 
+				ch <- PipelineStageMsg{Stage: "metadata", VideoName: item.Asset.OriginalFileName}
+
 				if err := engine.CopyMetadata(ctx, p.binaries.ExifToolPath, item.OrigPath, transcodedPath); err != nil {
 					item.Cleanup()
 					if ctx.Err() != nil {
@@ -407,6 +409,8 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		if albumID != "" {
 			_ = p.client.AddAssetsToAlbum(albumID, []string{newAsset.ID})
 		}
+
+		ch <- PipelineStageMsg{Stage: "finalizing", VideoName: item.Asset.OriginalFileName}
 
 		if err := p.client.DeleteAssetWithContext(ctx, item.Asset.ID); err != nil {
 			item.Cleanup()

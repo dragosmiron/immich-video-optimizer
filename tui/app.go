@@ -144,7 +144,10 @@ type AppModel struct {
 	currentVideoResolution  string
 	currentDownloadName     string
 	currentTranscodeName    string
+	currentMetadataName     string
 	currentUploadName       string
+	currentFinalizeName     string
+	currentTranscodeTime    string
 	probingStatus           string
 	fps                     float64
 	speed                   string
@@ -417,23 +420,49 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentDownloadName = msg.VideoName
 		case "transcoding":
 			m.currentTranscodeName = msg.VideoName
+			m.currentMetadataName = ""
+			m.currentFinalizeName = ""
 			// Download is done for this item — clear the prefetch lane
 			if m.currentDownloadName == msg.VideoName {
 				m.currentDownloadName = ""
 			}
+		case "metadata":
+			m.currentMetadataName = msg.VideoName
+			m.currentTranscodeName = ""
+			m.speed = ""
+			m.fps = 0
+			m.currentTranscodeTime = ""
+			m.addLog(fmt.Sprintf("%s - Preserving metadata for %s (ExifTool)", time.Now().Format("15:04:05"), msg.VideoName))
 		case "uploading":
 			m.currentUploadName = msg.VideoName
+			m.currentMetadataName = ""
+			m.currentTranscodeName = ""
+			m.speed = ""
+			m.fps = 0
+			m.currentTranscodeTime = ""
+			m.addLog(fmt.Sprintf("%s - Uploading replacement for %s", time.Now().Format("15:04:05"), msg.VideoName))
+		case "finalizing":
+			m.currentFinalizeName = msg.VideoName
+			m.currentUploadName = ""
 		case "idle":
 			m.currentDownloadName = ""
 			m.currentTranscodeName = ""
+			m.currentMetadataName = ""
 			m.currentUploadName = ""
+			m.currentFinalizeName = ""
 			m.probingStatus = ""
+			m.speed = ""
+			m.fps = 0
+			m.currentTranscodeTime = ""
 		}
 		return m, waitForPipeline(m.pipelineChan)
 
 	case orchestrator.PipelineProgressMsg:
 		m.fps = msg.EngineProgress.FPS
 		m.speed = msg.EngineProgress.Speed
+		if msg.EngineProgress.Time != "" {
+			m.currentTranscodeTime = msg.EngineProgress.Time
+		}
 		return m, waitForPipeline(m.pipelineChan)
 
 	case progress.FrameMsg:
@@ -444,9 +473,13 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case orchestrator.PipelineVideoCompleteMsg:
 		m.processedVideos++
 		m.totalSavedBytes += msg.SavedBytes
-		if m.currentUploadName != "" {
-			m.currentUploadName = ""
-		}
+		m.currentUploadName = ""
+		m.currentFinalizeName = ""
+		m.currentMetadataName = ""
+		m.currentTranscodeName = ""
+		m.speed = ""
+		m.fps = 0
+		m.currentTranscodeTime = ""
 
 		timeStr := time.Now().Format("15:04:05")
 		completedName := msg.VideoName
