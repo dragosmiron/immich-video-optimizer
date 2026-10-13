@@ -372,3 +372,186 @@ exit 0
 	})
 }
 
+func TestPipeline_DuplicateAssetGuard(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	var deleteCalled bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && r.URL.Path == "/api/assets/asset-dup/original" {
+			w.Write([]byte("dummy video"))
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/api/search/metadata" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"assets": {"items": [{"id": "asset-dup", "type": "VIDEO", "originalFileName": "dup.mp4", "exifInfo": {"fileSizeInByte": 1000}}]}}`))
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/api/albums" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "album-1"}`))
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/api/assets" {
+			// Returns identical asset ID
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "asset-dup", "type": "VIDEO"}`))
+			return
+		}
+		if r.Method == "DELETE" && r.URL.Path == "/api/assets" {
+			deleteCalled = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	fakeFFmpeg := filepath.Join(tempHome, "fake_ffmpeg")
+	script := "#!/bin/sh\nfor arg do last_arg=\"$arg\"; done\necho 'small' > \"$last_arg\"\nexit 0\n"
+	_ = os.WriteFile(fakeFFmpeg, []byte(script), 0755)
+	fakeExifTool := filepath.Join(tempHome, "fake_exiftool")
+	_ = os.WriteFile(fakeExifTool, []byte("#!/bin/sh\nexit 0\n"), 0755)
+
+	cfg := &config.Config{
+		URL:           ts.URL,
+		APIKey:        "test-key",
+		SizeThreshold: "0",
+	}
+
+	binaries := &engine.BinaryManager{
+		FFmpegPath:   fakeFFmpeg,
+		ExifToolPath: fakeExifTool,
+	}
+
+	p, err := NewPipelineWithBinaries(cfg, binaries)
+	if err != nil {
+		t.Fatalf("Failed to create pipeline: %v", err)
+	}
+	p.Client().SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: ts.Config.Handler},
+	})
+
+	videos, err := p.QueryVideos(0)
+	if err != nil {
+		t.Fatalf("Failed to query videos: %v", err)
+	}
+
+	ch := make(chan interface{}, 10)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	p.Run(ctx, videos, ch)
+
+	var gotError bool
+	for msg := range ch {
+		if cmsg, ok := msg.(PipelineVideoCompleteMsg); ok {
+			if cmsg.Err != nil {
+				gotError = true
+			}
+		}
+	}
+
+	if !gotError {
+		t.Errorf("Expected pipeline to report error when duplicate asset ID is returned")
+	}
+	if deleteCalled {
+		t.Errorf("Expected original asset NOT to be deleted when duplicate asset ID is returned")
+	}
+}
+
+func TestPipeline_DeleteFailureHandling(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && r.URL.Path == "/api/assets/asset-del/original" {
+			w.Write([]byte("dummy video"))
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/api/search/metadata" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"assets": {"items": [{"id": "asset-del", "type": "VIDEO", "originalFileName": "del.mp4", "exifInfo": {"fileSizeInByte": 1000}}]}}`))
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/api/albums" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "album-1"}`))
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/api/assets" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "new-asset-id", "type": "VIDEO"}`))
+			return
+		}
+		if r.Method == "PUT" && r.URL.Path == "/api/albums/album-1/assets" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == "DELETE" && r.URL.Path == "/api/assets" {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error": "delete failed"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	fakeFFmpeg := filepath.Join(tempHome, "fake_ffmpeg")
+	script := "#!/bin/sh\nfor arg do last_arg=\"$arg\"; done\necho 'small' > \"$last_arg\"\nexit 0\n"
+	_ = os.WriteFile(fakeFFmpeg, []byte(script), 0755)
+	fakeExifTool := filepath.Join(tempHome, "fake_exiftool")
+	_ = os.WriteFile(fakeExifTool, []byte("#!/bin/sh\nexit 0\n"), 0755)
+
+	cfg := &config.Config{
+		URL:           ts.URL,
+		APIKey:        "test-key",
+		SizeThreshold: "0",
+	}
+
+	binaries := &engine.BinaryManager{
+		FFmpegPath:   fakeFFmpeg,
+		ExifToolPath: fakeExifTool,
+	}
+
+	p, err := NewPipelineWithBinaries(cfg, binaries)
+	if err != nil {
+		t.Fatalf("Failed to create pipeline: %v", err)
+	}
+	p.Client().SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: ts.Config.Handler},
+	})
+
+	videos, err := p.QueryVideos(0)
+	if err != nil {
+		t.Fatalf("Failed to query videos: %v", err)
+	}
+
+	ch := make(chan interface{}, 10)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	p.Run(ctx, videos, ch)
+
+	var gotError bool
+	var totalSaved int64
+	for msg := range ch {
+		if cmsg, ok := msg.(PipelineVideoCompleteMsg); ok {
+			if cmsg.Err != nil {
+				gotError = true
+			}
+		}
+		if dmsg, ok := msg.(PipelineDoneMsg); ok {
+			totalSaved = dmsg.TotalSavedBytes
+		}
+	}
+
+	if !gotError {
+		t.Errorf("Expected error when DeleteAsset fails")
+	}
+	if totalSaved != 0 {
+		t.Errorf("Expected 0 saved bytes when deletion fails, got %d", totalSaved)
+	}
+}
+
+

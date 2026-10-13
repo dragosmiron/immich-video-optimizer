@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -386,11 +387,31 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 			continue
 		}
 
-		if newAsset != nil && newAsset.ID != "" && albumID != "" {
+		if newAsset == nil || newAsset.ID == "" || newAsset.ID == item.Asset.ID {
+			item.Cleanup()
+			errMsg := "upload returned invalid or duplicate asset ID"
+			if newAsset != nil && newAsset.ID == item.Asset.ID {
+				errMsg = fmt.Sprintf("upload returned identical asset ID %s (potential duplicate collision)", item.Asset.ID)
+			}
+			logger.Error("Safety guard triggered for %s: %s; aborting deletion of original", item.Asset.OriginalFileName, errMsg)
+			sess.MarkFailed(item.Asset.ID, errMsg)
+			_ = state.SaveSession(sess)
+			ch <- PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: errors.New(errMsg)}
+			continue
+		}
+
+		if albumID != "" {
 			_ = p.client.AddAssetsToAlbum(albumID, []string{newAsset.ID})
 		}
 
-		_ = p.client.DeleteAsset(item.Asset.ID)
+		if err := p.client.DeleteAsset(item.Asset.ID); err != nil {
+			item.Cleanup()
+			logger.Error("Failed to delete original asset %s (%s): %v", item.Asset.OriginalFileName, item.Asset.ID, err)
+			sess.MarkFailed(item.Asset.ID, fmt.Sprintf("failed to delete original asset: %v", err))
+			_ = state.SaveSession(sess)
+			ch <- PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: fmt.Errorf("failed to delete original asset: %w", err)}
+			continue
+		}
 
 		item.Cleanup()
 

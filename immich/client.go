@@ -397,14 +397,8 @@ func (c *Client) uploadReplacementAssetOnce(ctx context.Context, filePath string
 		return nil, err
 	}
 
-	deviceAssetID := orig.DeviceAssetID
-	if deviceAssetID == "" {
-		deviceAssetID = fmt.Sprintf("opt-%s-%d", orig.ID, time.Now().Unix())
-	}
-	deviceID := orig.DeviceID
-	if deviceID == "" {
-		deviceID = "immich-video-optimizer"
-	}
+	deviceAssetID := fmt.Sprintf("opt-%s-%d", orig.ID, time.Now().UnixNano())
+	deviceID := "immich-video-optimizer"
 	fileCreatedAt := orig.FileCreatedAt
 	if fileCreatedAt == "" {
 		fileCreatedAt = time.Now().UTC().Format(time.RFC3339)

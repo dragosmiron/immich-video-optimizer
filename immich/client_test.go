@@ -196,11 +196,11 @@ func TestUploadReplacementAsset(t *testing.T) {
 			t.Fatalf("ParseMultipartForm failed: %v", err)
 		}
 
-		if r.FormValue("deviceAssetId") != "dev-1" {
-			t.Errorf("Expected deviceAssetId=dev-1, got %s", r.FormValue("deviceAssetId"))
+		if !strings.HasPrefix(r.FormValue("deviceAssetId"), "opt-asset-1-") {
+			t.Errorf("Expected deviceAssetId starting with 'opt-asset-1-', got %s", r.FormValue("deviceAssetId"))
 		}
-		if r.FormValue("deviceId") != "dev-id" {
-			t.Errorf("Expected deviceId=dev-id, got %s", r.FormValue("deviceId"))
+		if r.FormValue("deviceId") != "immich-video-optimizer" {
+			t.Errorf("Expected deviceId=immich-video-optimizer, got %s", r.FormValue("deviceId"))
 		}
 
 		file, _, err := r.FormFile("assetData")
@@ -224,7 +224,7 @@ func TestUploadReplacementAsset(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "dummy.mp4")
 	os.WriteFile(tmpFile, []byte("dummy file"), 0644)
 
-	orig := Asset{DeviceAssetID: "dev-1", DeviceID: "dev-id"}
+	orig := Asset{ID: "asset-1", DeviceAssetID: "dev-1", DeviceID: "dev-id"}
 	asset, err := client.UploadReplacementAsset(tmpFile, orig)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
