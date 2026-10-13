@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -42,6 +43,7 @@ type ConnectionTestedMsg struct {
 }
 
 type ScanCompleteMsg struct {
+	Seq    int
 	Result *immich.QueryResult
 	Err    error
 }
@@ -53,10 +55,10 @@ func testConnectionCmd(pipeline *orchestrator.Pipeline) tea.Cmd {
 	}
 }
 
-func scanVideosCmd(pipeline *orchestrator.Pipeline, thresholdBytes int64) tea.Cmd {
+func scanVideosCmd(ctx context.Context, pipeline *orchestrator.Pipeline, thresholdBytes int64, seq int) tea.Cmd {
 	return func() tea.Msg {
-		res, err := pipeline.ScanVideos(thresholdBytes)
-		return ScanCompleteMsg{Result: res, Err: err}
+		res, err := pipeline.ScanVideosWithContext(ctx, thresholdBytes)
+		return ScanCompleteMsg{Seq: seq, Result: res, Err: err}
 	}
 }
 
@@ -147,6 +149,10 @@ type AppModel struct {
 	speed                   string
 	failedVideos            []failureEntry // tracks each failed video with its error message
 	skippedVideos           []skippedVideo // tracks each skipped video with its reason
+
+	// Scan
+	scanCancel        context.CancelFunc
+	scanSeq           int
 
 	// Dry Run
 	dryRunChan        chan interface{}
@@ -317,7 +323,16 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.state != ViewScanning {
 			return m, nil
 		}
+		if msg.Seq != 0 && msg.Seq != m.scanSeq {
+			return m, nil
+		}
+		if m.scanCancel != nil {
+			m.scanCancel = nil
+		}
 		if msg.Err != nil {
+			if errors.Is(msg.Err, context.Canceled) {
+				return m, nil
+			}
 			m.scanError = fmt.Sprintf("Scan failed: %v", msg.Err)
 			m.state = ViewScanPrompt
 			return m, nil
@@ -492,6 +507,10 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateScanPrompt(msg)
 		case ViewScanning:
 			if msg.String() == "q" || msg.String() == "esc" {
+				if m.scanCancel != nil {
+					m.scanCancel()
+					m.scanCancel = nil
+				}
 				m.state = ViewScanPrompt
 				return m, nil
 			}
@@ -601,7 +620,11 @@ func (m *AppModel) updateScanPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			thresholdMB = 500
 		}
 		thresholdBytes := thresholdMB * 1024 * 1024
-		return m, scanVideosCmd(m.pipeline, thresholdBytes)
+		m.scanSeq++
+		seq := m.scanSeq
+		var ctx context.Context
+		ctx, m.scanCancel = context.WithCancel(context.Background())
+		return m, scanVideosCmd(ctx, m.pipeline, thresholdBytes, seq)
 
 	case "s", "S":
 		m.state = ViewSettings
@@ -639,6 +662,7 @@ func (m *AppModel) updateResumePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			toProcess = append(toProcess, a)
 		}
 		if len(toProcess) > 0 {
+			m.videos = toProcess
 			m.state = ViewDashboard
 			m.totalVideos = len(toProcess)
 			m.processedVideos = 0
@@ -1064,6 +1088,7 @@ func (m *AppModel) updateSummary(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if len(toRetry) > 0 {
+				m.videos = toRetry
 				m.state = ViewDashboard
 				m.totalVideos = len(toRetry)
 				m.processedVideos = 0

@@ -859,5 +859,126 @@ func TestAppModel_ScanCancellation(t *testing.T) {
 	}
 }
 
+func TestAppModel_ResumeRetryFailed(t *testing.T) {
+	cfg := &config.Config{URL: "http://localhost:2283", APIKey: "key"}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+
+	sess := &state.Session{
+		SessionID: "sess-1",
+		Videos: map[string]*state.VideoState{
+			"v-resumed": {
+				ID:           "v-resumed",
+				OriginalName: "resumed.mp4",
+				OriginalSize: 50 * 1024 * 1024,
+				Status:       state.StatusPending,
+			},
+		},
+	}
+	m.session = sess
+	m.state = ViewResumePrompt
+
+	// Resume by pressing 'r'
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model := newM.(*AppModel)
+
+	if model.state != ViewDashboard {
+		t.Fatalf("expected ViewDashboard after resume, got %v", model.state)
+	}
+	if len(model.videos) != 1 || model.videos[0].ID != "v-resumed" {
+		t.Fatalf("expected m.videos to be populated with resumed video, got %+v", model.videos)
+	}
+	if model.cancelCtx != nil {
+		model.cancelCtx()
+	}
+
+	// Resumed video fails
+	newM2, _ := model.Update(orchestrator.PipelineVideoCompleteMsg{
+		VideoID:   "v-resumed",
+		VideoName: "resumed.mp4",
+		Err:       errors.New("failed during transcode"),
+	})
+	model2 := newM2.(*AppModel)
+
+	// Move to summary
+	model2.state = ViewSummary
+
+	// Press 'r' to retry failed videos
+	newM3, _ := model2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model3 := newM3.(*AppModel)
+
+	if model3.state != ViewDashboard {
+		t.Fatalf("expected state to transition to ViewDashboard on retry, got: %v", model3.state)
+	}
+	if model3.totalVideos != 1 {
+		t.Fatalf("expected 1 retried video, got: %d", model3.totalVideos)
+	}
+	if model3.cancelCtx != nil {
+		model3.cancelCtx()
+	}
+}
+
+func TestAppModel_ScanStaleSequenceDiscarded(t *testing.T) {
+	cfg := &config.Config{URL: "http://localhost:2283", APIKey: "key"}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+
+	m.state = ViewScanPrompt
+
+	// Start first scan (seq = 1)
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model := newM.(*AppModel)
+	if model.scanSeq != 1 || model.state != ViewScanning {
+		t.Fatalf("expected scanSeq 1 and ViewScanning, got seq=%d state=%v", model.scanSeq, model.state)
+	}
+
+	// User cancels scan
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = newM.(*AppModel)
+	if model.state != ViewScanPrompt {
+		t.Fatalf("expected ViewScanPrompt after cancel, got %v", model.state)
+	}
+
+	// User starts second scan (seq = 2)
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(*AppModel)
+	if model.scanSeq != 2 || model.state != ViewScanning {
+		t.Fatalf("expected scanSeq 2 and ViewScanning, got seq=%d state=%v", model.scanSeq, model.state)
+	}
+
+	// Stale ScanCompleteMsg from seq = 1 arrives
+	staleRes := &immich.QueryResult{
+		Videos: []immich.Asset{
+			{ID: "stale-vid", OriginalFileName: "stale.mp4"},
+		},
+	}
+	newM, _ = model.Update(ScanCompleteMsg{Seq: 1, Result: staleRes, Err: nil})
+	model = newM.(*AppModel)
+
+	// It must NOT have transitioned to ViewBrowser or set m.videos
+	if model.state != ViewScanning {
+		t.Errorf("expected state to remain ViewScanning, but it changed to: %v", model.state)
+	}
+	if len(model.videos) != 0 {
+		t.Errorf("expected m.videos not to be overwritten by stale scan, got: %+v", model.videos)
+	}
+
+	// Valid ScanCompleteMsg from seq = 2 arrives
+	validRes := &immich.QueryResult{
+		Videos: []immich.Asset{
+			{ID: "valid-vid", OriginalFileName: "valid.mp4"},
+		},
+	}
+	newM, _ = model.Update(ScanCompleteMsg{Seq: 2, Result: validRes, Err: nil})
+	model = newM.(*AppModel)
+
+	if model.state != ViewBrowser {
+		t.Errorf("expected state to transition to ViewBrowser on valid scan, got: %v", model.state)
+	}
+	if len(model.videos) != 1 || model.videos[0].ID != "valid-vid" {
+		t.Errorf("expected m.videos to contain valid-vid, got: %+v", model.videos)
+	}
+}
+
 
 
