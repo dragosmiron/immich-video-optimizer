@@ -487,18 +487,25 @@ func TestAppModel_PipelineSettings(t *testing.T) {
 		t.Errorf("expected ConcurrentEncoders 2, got %d", model.cfg.ConcurrentEncoders)
 	}
 
-	// Move down to index 6 (Size Threshold)
+	// Move down to index 6 (Threshold Mode)
 	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	model = newM.(*AppModel)
 	if model.settingCursor != 6 {
 		t.Fatalf("expected settingCursor 6, got %d", model.settingCursor)
 	}
 
-	// Move down to index 7 (Logging Level)
+	// Move down to index 7 (Threshold Value)
 	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	model = newM.(*AppModel)
 	if model.settingCursor != 7 {
 		t.Fatalf("expected settingCursor 7, got %d", model.settingCursor)
+	}
+
+	// Move down to index 8 (Logging Level)
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = newM.(*AppModel)
+	if model.settingCursor != 8 {
+		t.Fatalf("expected settingCursor 8, got %d", model.settingCursor)
 	}
 
 	// Initial is "info" (or empty default), toggle with Space to "debug"
@@ -522,11 +529,11 @@ func TestAppModel_PipelineSettings(t *testing.T) {
 		t.Errorf("expected LogLevel debug, got %s", model.cfg.LogLevel)
 	}
 
-	// Move down to index 8 (Network Retries)
+	// Move down to index 9 (Network Retries)
 	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	model = newM.(*AppModel)
-	if model.settingCursor != 8 {
-		t.Fatalf("expected settingCursor 8, got %d", model.settingCursor)
+	if model.settingCursor != 9 {
+		t.Fatalf("expected settingCursor 9, got %d", model.settingCursor)
 	}
 
 	// Default is 3, cycling with Right should change to 5
@@ -1255,8 +1262,8 @@ func TestAppModel_MBPerMinDisplayAndSettings(t *testing.T) {
 		t.Errorf("expected settings to contain '100 MB/min', got %s", renderedSettings)
 	}
 
-	// 3. Edit Threshold in Settings
-	m.settingCursor = 6
+	// 3. Edit Threshold in Settings (row 7)
+	m.settingCursor = 7
 	// Press Enter to focus threshold input
 	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = newM.(*AppModel)
@@ -1271,6 +1278,118 @@ func TestAppModel_MBPerMinDisplayAndSettings(t *testing.T) {
 	m = newM.(*AppModel)
 	if m.cfg.SizeThreshold != "150" {
 		t.Errorf("expected cfg.SizeThreshold to be updated to 150, got %s", m.cfg.SizeThreshold)
+	}
+}
+
+func TestAppModel_ThresholdModesAndToggle(t *testing.T) {
+	cfg := &config.Config{
+		URL:           "http://localhost:2283",
+		APIKey:        "test-key",
+		ThresholdMode: "MB/min",
+		SizeThreshold: "100",
+		MaxRetries:    2,
+	}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+
+	// Verify scan prompt in default MB/min mode
+	m.state = ViewScanPrompt
+	promptView := m.viewScanPrompt()
+	if !strings.Contains(promptView, "• Threshold:      100 MB/min") {
+		t.Errorf("expected scan prompt to show 100 MB/min, got: %s", promptView)
+	}
+
+	// Go to Settings
+	m.state = ViewSettings
+	settingsView := m.viewSettings()
+	if !strings.Contains(settingsView, "Threshold Mode:") || !strings.Contains(settingsView, "MB/min") {
+		t.Errorf("expected settings to show Threshold Mode MB/min, got: %s", settingsView)
+	}
+	if !strings.Contains(settingsView, "Threshold (MB/min):") || !strings.Contains(settingsView, "100 MB/min") {
+		t.Errorf("expected settings to show 100 MB/min, got: %s", settingsView)
+	}
+
+	// Cursor at row 6 (Threshold Mode) - Toggle with Space -> Total MB
+	m.settingCursor = 6
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = newM.(*AppModel)
+	if m.cfg.ThresholdMode != "Total MB" {
+		t.Fatalf("expected ThresholdMode Total MB after Space, got: %s", m.cfg.ThresholdMode)
+	}
+
+	settingsView = m.viewSettings()
+	if !strings.Contains(settingsView, "Threshold (Total MB):") || !strings.Contains(settingsView, "100 MB") {
+		t.Errorf("expected settings to show Threshold (Total MB): 100 MB, got: %s", settingsView)
+	}
+
+	// Check Scan Prompt in Total MB mode
+	m.state = ViewScanPrompt
+	promptView = m.viewScanPrompt()
+	if !strings.Contains(promptView, "100 MB (Total File Size)") {
+		t.Errorf("expected scan prompt to show 100 MB (Total File Size), got: %s", promptView)
+	}
+
+	// Go back to settings, toggle with Enter -> Disabled
+	m.state = ViewSettings
+	m.settingCursor = 6
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newM.(*AppModel)
+	if m.cfg.ThresholdMode != "Disabled" {
+		t.Fatalf("expected ThresholdMode Disabled after Enter, got: %s", m.cfg.ThresholdMode)
+	}
+
+	settingsView = m.viewSettings()
+	if !strings.Contains(settingsView, "Disabled (All videos scanned)") {
+		t.Errorf("expected settings to show Disabled (All videos scanned), got: %s", settingsView)
+	}
+
+	// Check Scan Prompt in Disabled mode
+	m.state = ViewScanPrompt
+	promptView = m.viewScanPrompt()
+	if !strings.Contains(promptView, "Disabled (All videos)") {
+		t.Errorf("expected scan prompt to show Disabled (All videos), got: %s", promptView)
+	}
+
+	// When Disabled, pressing Enter on row 7 should NOT focus the thresholdInput
+	m.state = ViewSettings
+	m.settingCursor = 7
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newM.(*AppModel)
+	if m.thresholdInput.Focused() {
+		t.Errorf("threshold input should not be focused when ThresholdMode is Disabled")
+	}
+
+	// Row 6: Cycle with Left arrow: Disabled -> Total MB -> MB/min
+	m.settingCursor = 6
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	m = newM.(*AppModel)
+	if m.cfg.ThresholdMode != "Total MB" {
+		t.Errorf("expected Total MB on Left, got: %s", m.cfg.ThresholdMode)
+	}
+
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	m = newM.(*AppModel)
+	if m.cfg.ThresholdMode != "MB/min" {
+		t.Errorf("expected MB/min on Left, got: %s", m.cfg.ThresholdMode)
+	}
+
+	// Row 6: Cycle with Right arrow: MB/min -> Total MB -> Disabled -> MB/min
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = newM.(*AppModel)
+	if m.cfg.ThresholdMode != "Total MB" {
+		t.Errorf("expected Total MB on Right, got: %s", m.cfg.ThresholdMode)
+	}
+
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = newM.(*AppModel)
+	if m.cfg.ThresholdMode != "Disabled" {
+		t.Errorf("expected Disabled on Right, got: %s", m.cfg.ThresholdMode)
+	}
+
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = newM.(*AppModel)
+	if m.cfg.ThresholdMode != "MB/min" {
+		t.Errorf("expected wrap-around to MB/min on Right, got: %s", m.cfg.ThresholdMode)
 	}
 }
 

@@ -72,12 +72,12 @@ func (p *Pipeline) QueryVideos(thresholdBytes int64) ([]immich.Asset, error) {
 	return p.client.QueryVideoAssets(thresholdBytes)
 }
 
-func (p *Pipeline) ScanVideos(thresholdMBPerMin float64) (*immich.QueryResult, error) {
-	return p.ScanVideosWithContext(context.Background(), thresholdMBPerMin)
+func (p *Pipeline) ScanVideos(mode string, threshold float64) (*immich.QueryResult, error) {
+	return p.ScanVideosWithContext(context.Background(), mode, threshold)
 }
 
-func (p *Pipeline) ScanVideosWithContext(ctx context.Context, thresholdMBPerMin float64) (*immich.QueryResult, error) {
-	return p.client.ScanVideosWithContext(ctx, thresholdMBPerMin)
+func (p *Pipeline) ScanVideosWithContext(ctx context.Context, mode string, threshold float64) (*immich.QueryResult, error) {
+	return p.client.ScanVideosWithContext(ctx, mode, threshold)
 }
 
 func (p *Pipeline) ValidateConnection() error {

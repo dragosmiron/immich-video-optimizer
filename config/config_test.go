@@ -19,6 +19,7 @@ func TestSaveAndLoadConfig(t *testing.T) {
 	cfg := &Config{
 		URL:                "http://localhost:8080",
 		APIKey:             "secret-key",
+		ThresholdMode:      ThresholdModeTotalMB,
 		SizeThreshold:      "1024",
 		SkipHEVC:           true,
 		ConcurrentEncoders: 2,
@@ -45,7 +46,7 @@ func TestSaveAndLoadConfig(t *testing.T) {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
 
-	if loaded.URL != cfg.URL || loaded.APIKey != cfg.APIKey || loaded.SizeThreshold != cfg.SizeThreshold || loaded.SkipHEVC != cfg.SkipHEVC || loaded.ConcurrentEncoders != cfg.ConcurrentEncoders || loaded.EnablePrefetch != cfg.EnablePrefetch || loaded.LogLevel != cfg.LogLevel || loaded.MaxRetries != cfg.MaxRetries {
+	if loaded.URL != cfg.URL || loaded.APIKey != cfg.APIKey || loaded.ThresholdMode != cfg.ThresholdMode || loaded.SizeThreshold != cfg.SizeThreshold || loaded.SkipHEVC != cfg.SkipHEVC || loaded.ConcurrentEncoders != cfg.ConcurrentEncoders || loaded.EnablePrefetch != cfg.EnablePrefetch || loaded.LogLevel != cfg.LogLevel || loaded.MaxRetries != cfg.MaxRetries {
 		t.Errorf("Loaded config mismatch: got %v, expected %v", loaded, cfg)
 	}
 	if !loaded.IsDebug() {
@@ -149,6 +150,9 @@ func TestConfig_SizeThresholdMBPerMin(t *testing.T) {
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
+	if cfg.ThresholdMode != ThresholdModeMBPerMin {
+		t.Errorf("expected default ThresholdMode %q, got %q", ThresholdModeMBPerMin, cfg.ThresholdMode)
+	}
 	if !cfg.SizeGuard {
 		t.Errorf("expected default SizeGuard true")
 	}
@@ -163,6 +167,48 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.SizeThreshold != "100" {
 		t.Errorf("expected default SizeThreshold 100, got %s", cfg.SizeThreshold)
+	}
+}
+
+func TestConfig_ThresholdModes(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+
+	for _, mode := range []string{ThresholdModeMBPerMin, ThresholdModeTotalMB, ThresholdModeDisabled} {
+		cfg := &Config{
+			URL:           "http://localhost:8080",
+			APIKey:        "key",
+			ThresholdMode: mode,
+			SizeThreshold: "250",
+		}
+		if err := SaveConfig(cfg); err != nil {
+			t.Fatalf("SaveConfig failed for mode %s: %v", mode, err)
+		}
+		loaded, err := LoadConfig()
+		if err != nil {
+			t.Fatalf("LoadConfig failed for mode %s: %v", mode, err)
+		}
+		if loaded.ThresholdMode != mode {
+			t.Errorf("expected ThresholdMode %s, got %s", mode, loaded.ThresholdMode)
+		}
+	}
+
+	// Test invalid mode falls back to MB/min
+	invalidCfg := &Config{
+		URL:           "http://localhost:8080",
+		APIKey:        "key",
+		ThresholdMode: "InvalidMode",
+		SizeThreshold: "100",
+	}
+	if err := SaveConfig(invalidCfg); err != nil {
+		t.Fatalf("SaveConfig failed: %v", err)
+	}
+	loaded, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if loaded.ThresholdMode != ThresholdModeMBPerMin {
+		t.Errorf("expected fallback to %s on invalid mode, got %s", ThresholdModeMBPerMin, loaded.ThresholdMode)
 	}
 }
 

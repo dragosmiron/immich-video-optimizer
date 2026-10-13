@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 
+	"immich-video-optimizer/config"
 	"immich-video-optimizer/engine"
 	"immich-video-optimizer/tui/styles"
 )
@@ -114,7 +115,16 @@ func (m *AppModel) viewScanPrompt() string {
 
 	b.WriteString(styles.SectionHeader.Render("Server Status:"))
 	b.WriteString(fmt.Sprintf("\n  • Immich Server:  %s  %s\n", styles.Value.Render(m.cfg.URL), styles.SuccessText.Render("[Connected ✓]")))
-	b.WriteString(fmt.Sprintf("  • MB/Min Threshold: %s (Videos denser than this will be scanned)\n", styles.Value.Render(m.cfg.SizeThreshold+" MB/min")))
+	var threshDesc string
+	switch m.cfg.ThresholdMode {
+	case config.ThresholdModeDisabled:
+		threshDesc = "Disabled (All videos)"
+	case config.ThresholdModeTotalMB:
+		threshDesc = fmt.Sprintf("%s MB (Total File Size)", m.cfg.SizeThreshold)
+	default:
+		threshDesc = fmt.Sprintf("%s MB/min", m.cfg.SizeThreshold)
+	}
+	b.WriteString(fmt.Sprintf("  • Threshold:      %s\n", styles.Value.Render(threshDesc)))
 	b.WriteString(fmt.Sprintf("  • Resolution:     %s\n", styles.Value.Render(m.cfg.Resolution)))
 	b.WriteString(fmt.Sprintf("  • Transcode Speed:%s\n", styles.Value.Render(m.cfg.Preset)))
 	sgText := "Enabled (skips replacement if transcoded is larger)"
@@ -150,7 +160,14 @@ func (m *AppModel) viewScanning() string {
 	b.WriteString(styles.SectionHeader.Render("🔍 Scanning Immich Library..."))
 	b.WriteString("\n\n")
 	b.WriteString(fmt.Sprintf("  Querying assets on %s\n", styles.Value.Render(m.cfg.URL)))
-	b.WriteString(fmt.Sprintf("  Inspecting videos exceeding %s MB/min...\n\n", styles.Value.Render(m.cfg.SizeThreshold)))
+	switch m.cfg.ThresholdMode {
+	case config.ThresholdModeDisabled:
+		b.WriteString("  Inspecting all videos (threshold filtering disabled)...\n\n")
+	case config.ThresholdModeTotalMB:
+		b.WriteString(fmt.Sprintf("  Inspecting videos exceeding %s MB...\n\n", styles.Value.Render(m.cfg.SizeThreshold)))
+	default:
+		b.WriteString(fmt.Sprintf("  Inspecting videos exceeding %s MB/min...\n\n", styles.Value.Render(m.cfg.SizeThreshold)))
+	}
 	b.WriteString(styles.Subtext.Render("Please wait, this may take a moment for large libraries..."))
 	return b.String()
 }
@@ -165,7 +182,16 @@ func (m *AppModel) renderScanSummary() string {
 	b.WriteString("\n")
 	b.WriteString(fmt.Sprintf("  • Total assets inspected in library: %d\n", r.TotalAssetsScanned))
 	b.WriteString(fmt.Sprintf("  • Non-video assets skipped:          %d (photos, RAW, etc.)\n", r.SkippedNonVideo))
-	b.WriteString(fmt.Sprintf("  • Videos skipped (below %s MB/min):   %d\n", m.cfg.SizeThreshold, r.SkippedBelowSize))
+	var skippedLabel string
+	switch m.cfg.ThresholdMode {
+	case config.ThresholdModeDisabled:
+		skippedLabel = "  • Videos skipped (threshold disabled):"
+	case config.ThresholdModeTotalMB:
+		skippedLabel = fmt.Sprintf("  • Videos skipped (below %s MB):      ", m.cfg.SizeThreshold)
+	default:
+		skippedLabel = fmt.Sprintf("  • Videos skipped (below %s MB/min):   ", m.cfg.SizeThreshold)
+	}
+	b.WriteString(fmt.Sprintf("%s%d\n", skippedLabel, r.SkippedBelowSize))
 	b.WriteString(fmt.Sprintf("  • Eligible videos found:             %s\n", styles.SuccessText.Render(fmt.Sprintf("%d", len(m.videos)))))
 	return styles.SummaryBox.Render(b.String())
 }
@@ -179,10 +205,19 @@ func (m *AppModel) viewBrowser() string {
 	b.WriteString("\n")
 
 	if len(m.videos) == 0 {
-		b.WriteString(styles.WarningText.Render("ℹ No videos found exceeding the " + m.cfg.SizeThreshold + " MB/min threshold."))
+		var noVideosMsg string
+		switch m.cfg.ThresholdMode {
+		case config.ThresholdModeDisabled:
+			noVideosMsg = "ℹ No videos found in your library."
+		case config.ThresholdModeTotalMB:
+			noVideosMsg = fmt.Sprintf("ℹ No videos found exceeding the %s MB threshold.", m.cfg.SizeThreshold)
+		default:
+			noVideosMsg = fmt.Sprintf("ℹ No videos found exceeding the %s MB/min threshold.", m.cfg.SizeThreshold)
+		}
+		b.WriteString(styles.WarningText.Render(noVideosMsg))
 		b.WriteString("\n\nAll videos in your library are already within the target size limit.\n\n")
 		b.WriteString("Actions:\n")
-		b.WriteString("  [ S ] Adjust MB/min Threshold in Settings\n")
+		b.WriteString("  [ S ] Adjust Threshold in Settings\n")
 		b.WriteString("  [ R ] Rescan Library\n")
 		b.WriteString("  [ E ] Edit Server Credentials\n")
 		b.WriteString("  [ Q ] Quit\n")
@@ -285,9 +320,18 @@ func (m *AppModel) viewDryRun() string {
 
 	// Row: below-threshold (filtered at scan time — not in the selection)
 	if belowThreshold > 0 {
-		b.WriteString(fmt.Sprintf("  • Skipped at scan (below %s MB/min): %s  (never shown in browser)\n",
-			m.cfg.SizeThreshold,
-			styles.WarningText.Render(fmt.Sprintf("%d", belowThreshold))))
+		var belowText string
+		switch m.cfg.ThresholdMode {
+		case config.ThresholdModeTotalMB:
+			belowText = fmt.Sprintf("  • Skipped at scan (below %s MB):     %s  (never shown in browser)\n",
+				m.cfg.SizeThreshold,
+				styles.WarningText.Render(fmt.Sprintf("%d", belowThreshold)))
+		default:
+			belowText = fmt.Sprintf("  • Skipped at scan (below %s MB/min): %s  (never shown in browser)\n",
+				m.cfg.SizeThreshold,
+				styles.WarningText.Render(fmt.Sprintf("%d", belowThreshold)))
+		}
+		b.WriteString(belowText)
 	}
 
 	// Row: already HEVC — skipped by probe
@@ -515,15 +559,30 @@ func (m *AppModel) viewSettings() string {
 		"Controls how many ffmpeg instances encode simultaneously.\n" +
 			"  • 1 — Default. Best for hardware encoders (VideoToolbox / NVENC) and CPU thermals\n" +
 			"  • 2 — Parallel encoding. High throughput on multi-core systems",
-		// 6 — Threshold (MB/min)
-		"Minimum size per minute of video (MB/min). Videos with a bitrate density below\n" +
-			"  this threshold are skipped entirely (e.g. 100 MB/min).\n" +
-			"  Filters out low-bitrate videos regardless of video duration.",
-		// 7 — Log Level
+		// 6 — Threshold Mode
+		"Strategy used to filter videos before optimization.\n" +
+			"  • MB/min   — Filters videos by bitrate density (skips low-bitrate videos)\n" +
+			"  • Total MB — Filters videos by total file size threshold\n" +
+			"  • Disabled — Includes all videos without any size/density filtering",
+		// 7 — Threshold Value
+		func() string {
+			switch m.cfg.ThresholdMode {
+			case config.ThresholdModeDisabled:
+				return "Threshold filtering is disabled. All video assets in your library will be scanned."
+			case config.ThresholdModeTotalMB:
+				return "Minimum total file size in megabytes (MB). Videos smaller than this\n" +
+					"  threshold are skipped entirely (e.g. 500 MB)."
+			default:
+				return "Minimum size per minute of video (MB/min). Videos with a bitrate density below\n" +
+					"  this threshold are skipped entirely (e.g. 100 MB/min).\n" +
+					"  Filters out low-bitrate videos regardless of video duration."
+			}
+		}(),
+		// 8 — Log Level
 		"Controls detail of output logs. Set to Debug for full FFmpeg & ExifTool command lines,\n" +
 			"  stderr outputs, and diagnostic traces to identify error root causes.\n" +
 			"  Logs written to: ~/.config/immich-video-optimizer/optimizer.log",
-		// 8 — Network Retries
+		// 9 — Network Retries
 		"Number of automatic retry attempts with backoff for failed downloads and uploads.\n" +
 			"  • 0 — Disabled. Fails immediately on first error\n" +
 			"  • 1 to 5 — Retries automatically with exponential backoff on transient network drops",
@@ -598,35 +657,64 @@ func (m *AppModel) viewSettings() string {
 		fmt.Sprintf("%d  ← / → to change  [1, 2]", encCount),
 	)
 
-	// Row 6 — Threshold (MB/min) (typeable)
-	b.WriteString(cursor(6) + "Threshold (MB/min):  ")
-	if isFocused(6) && m.thresholdInput.Focused() {
+	// Row 6 — Threshold Mode
+	modeStr := m.cfg.ThresholdMode
+	if modeStr == "" {
+		modeStr = config.ThresholdModeMBPerMin
+	}
+	writeRow(6,
+		"Threshold Mode:      ",
+		modeStr+"  ← / → / [Space / Enter] to change  [MB/min, Total MB, Disabled]",
+	)
+
+	// Row 7 — Threshold Value
+	thresholdLabel := "Threshold (MB/min):  "
+	thresholdDisplay := m.cfg.SizeThreshold + " MB/min"
+	switch m.cfg.ThresholdMode {
+	case config.ThresholdModeDisabled:
+		thresholdLabel = "Threshold:           "
+		thresholdDisplay = "Disabled (All videos scanned)"
+	case config.ThresholdModeTotalMB:
+		thresholdLabel = "Threshold (Total MB): "
+		thresholdDisplay = m.cfg.SizeThreshold + " MB"
+	default:
+		thresholdLabel = "Threshold (MB/min):  "
+		thresholdDisplay = m.cfg.SizeThreshold + " MB/min"
+	}
+
+	b.WriteString(cursor(7) + thresholdLabel)
+	if m.cfg.ThresholdMode == config.ThresholdModeDisabled {
+		b.WriteString(styles.Value.Render(thresholdDisplay) + "\n")
+		if isFocused(7) {
+			b.WriteString(styles.Subtext.Render("    └ "+descriptions[7]) + "\n")
+		}
+	} else if isFocused(7) && m.thresholdInput.Focused() {
 		b.WriteString(m.thresholdInput.View() + "  " + styles.Subtext.Render("[Enter] to confirm") + "\n")
-		b.WriteString(styles.Subtext.Render("    └ "+descriptions[6]) + "\n")
-	} else if isFocused(6) {
-		b.WriteString(styles.Value.Render(m.cfg.SizeThreshold+" MB/min") + "  " + styles.Subtext.Render("[Enter] to edit") + "\n")
-		b.WriteString(styles.Subtext.Render("    └ "+descriptions[6]) + "\n")
+		b.WriteString(styles.Subtext.Render("    └ "+descriptions[7]) + "\n")
+	} else if isFocused(7) {
+		b.WriteString(styles.Value.Render(thresholdDisplay) + "  " + styles.Subtext.Render("[Enter] to edit") + "\n")
+		b.WriteString(styles.Subtext.Render("    └ "+descriptions[7]) + "\n")
 	} else {
-		b.WriteString(styles.Value.Render(m.cfg.SizeThreshold+" MB/min") + "\n")
+		b.WriteString(styles.Value.Render(thresholdDisplay) + "\n")
 	}
 	b.WriteString("\n")
 
-	// Row 7 — Log Level
+	// Row 8 — Log Level
 	logLevelStr := "INFO"
 	if m.cfg.IsDebug() {
 		logLevelStr = "DEBUG"
 	}
-	writeRow(7,
+	writeRow(8,
 		"Logging Level:       ",
 		logLevelStr+"  ← / → / [Space / Enter] to toggle  [Info, Debug]",
 	)
 
-	// Row 8 — Network Retries
+	// Row 9 — Network Retries
 	retryStr := fmt.Sprintf("%d", m.cfg.MaxRetries)
 	if m.cfg.MaxRetries == 0 {
 		retryStr = "0 (Disabled)"
 	}
-	writeRow(8,
+	writeRow(9,
 		"Network Retries:     ",
 		retryStr+"  ← / → / [Space / Enter] to change  [0, 1, 2, 3, 5]",
 	)

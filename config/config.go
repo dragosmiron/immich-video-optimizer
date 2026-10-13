@@ -11,9 +11,16 @@ import (
 
 var userHomeDir = os.UserHomeDir
 
+const (
+	ThresholdModeMBPerMin = "MB/min"
+	ThresholdModeTotalMB  = "Total MB"
+	ThresholdModeDisabled = "Disabled"
+)
+
 type Config struct {
 	URL                string `mapstructure:"url"`
 	APIKey             string `mapstructure:"api_key"`
+	ThresholdMode      string `mapstructure:"threshold_mode"`
 	SizeThreshold      string `mapstructure:"size_threshold"`
 	Resolution         string `mapstructure:"resolution"`
 	Preset             string `mapstructure:"preset"`
@@ -59,6 +66,7 @@ func (c *Config) SizeThresholdMBPerMin() float64 {
 
 func DefaultConfig() *Config {
 	return &Config{
+		ThresholdMode:      ThresholdModeMBPerMin,
 		SizeThreshold:      "100",
 		Resolution:         "Original",
 		Preset:             "Medium",
@@ -81,6 +89,7 @@ func LoadConfig() (*Config, error) {
 		v.AddConfigPath(filepath.Join(home, ".config", "immich-video-optimizer"))
 	}
 
+	v.SetDefault("threshold_mode", ThresholdModeMBPerMin)
 	v.SetDefault("size_threshold", "100")
 	v.SetDefault("resolution", "Original")
 	v.SetDefault("preset", "Medium")
@@ -98,6 +107,11 @@ func LoadConfig() (*Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return DefaultConfig(), err
+	}
+	switch cfg.ThresholdMode {
+	case ThresholdModeMBPerMin, ThresholdModeTotalMB, ThresholdModeDisabled:
+	default:
+		cfg.ThresholdMode = ThresholdModeMBPerMin
 	}
 	if cfg.ConcurrentEncoders <= 0 {
 		cfg.ConcurrentEncoders = 1
@@ -117,6 +131,11 @@ func LoadConfig() (*Config, error) {
 func SaveConfig(cfg *Config) error {
 	cfg.URL = strings.TrimSpace(cfg.URL)
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
+	switch cfg.ThresholdMode {
+	case ThresholdModeMBPerMin, ThresholdModeTotalMB, ThresholdModeDisabled:
+	default:
+		cfg.ThresholdMode = ThresholdModeMBPerMin
+	}
 	cfg.SizeThreshold = strings.TrimSpace(cfg.SizeThreshold)
 	if cfg.Resolution == "" {
 		cfg.Resolution = "Original"
@@ -139,6 +158,7 @@ func SaveConfig(cfg *Config) error {
 	v.SetConfigType("yaml")
 	v.Set("url", cfg.URL)
 	v.Set("api_key", cfg.APIKey)
+	v.Set("threshold_mode", cfg.ThresholdMode)
 	v.Set("size_threshold", cfg.SizeThreshold)
 	v.Set("resolution", cfg.Resolution)
 	v.Set("preset", cfg.Preset)

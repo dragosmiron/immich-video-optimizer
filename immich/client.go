@@ -366,13 +366,13 @@ func (c *Client) doRequest(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-// ScanVideos returns videos exceeding thresholdMBPerMin along with bulk stats on excluded assets
-func (c *Client) ScanVideos(thresholdMBPerMin float64) (*QueryResult, error) {
-	return c.ScanVideosWithContext(context.Background(), thresholdMBPerMin)
+// ScanVideos returns videos filtered by threshold and mode ("MB/min", "Total MB", "Disabled") along with bulk stats on excluded assets
+func (c *Client) ScanVideos(mode string, threshold float64) (*QueryResult, error) {
+	return c.ScanVideosWithContext(context.Background(), mode, threshold)
 }
 
-// ScanVideosWithContext returns videos exceeding thresholdMBPerMin along with bulk stats on excluded assets, supporting context cancellation
-func (c *Client) ScanVideosWithContext(ctx context.Context, thresholdMBPerMin float64) (*QueryResult, error) {
+// ScanVideosWithContext returns videos filtered by threshold and mode ("MB/min", "Total MB", "Disabled") along with bulk stats on excluded assets, supporting context cancellation
+func (c *Client) ScanVideosWithContext(ctx context.Context, mode string, threshold float64) (*QueryResult, error) {
 	res := &QueryResult{}
 	page := 1
 	size := 1000
@@ -421,7 +421,26 @@ func (c *Client) ScanVideosWithContext(ctx context.Context, thresholdMBPerMin fl
 		for _, a := range searchResp.Assets.Items {
 			if a.Type != "VIDEO" {
 				res.SkippedNonVideo++
-			} else if thresholdMBPerMin > 0 && a.MBPerMin() < thresholdMBPerMin {
+				continue
+			}
+
+			var skipBelow bool
+			switch mode {
+			case "Disabled":
+				skipBelow = false
+			case "Total MB":
+				if threshold > 0 && float64(a.GetSize())/(1024*1024) < threshold {
+					skipBelow = true
+				}
+			case "MB/min":
+				fallthrough
+			default:
+				if threshold > 0 && a.MBPerMin() < threshold {
+					skipBelow = true
+				}
+			}
+
+			if skipBelow {
 				res.SkippedBelowSize++
 			} else {
 				res.Videos = append(res.Videos, a)

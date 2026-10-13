@@ -558,7 +558,7 @@ func TestScanVideos_MBPerMinFilter(t *testing.T) {
 	client := newTestClient(server, "secret")
 
 	// Scan with 100 MB/min threshold
-	res, err := client.ScanVideos(100.0)
+	res, err := client.ScanVideos("MB/min", 100.0)
 	if err != nil {
 		t.Fatalf("ScanVideos failed: %v", err)
 	}
@@ -577,5 +577,44 @@ func TestScanVideos_MBPerMinFilter(t *testing.T) {
 	}
 	if res.Videos[0].ID != "v-dense" || res.Videos[1].ID != "v-short" {
 		t.Errorf("unexpected videos returned: %+v", res.Videos)
+	}
+
+	// Scan with Total MB threshold (e.g. 100 MB flat: v-dense (500MB) and v-lean (500MB) included, v-short (30MB) skipped)
+	resMB, err := client.ScanVideos("Total MB", 100.0)
+	if err != nil {
+		t.Fatalf("ScanVideos Total MB failed: %v", err)
+	}
+	if resMB.TotalAssetsScanned != 4 {
+		t.Errorf("expected 4 scanned, got %d", resMB.TotalAssetsScanned)
+	}
+	if resMB.SkippedNonVideo != 1 {
+		t.Errorf("expected 1 non-video skipped, got %d", resMB.SkippedNonVideo)
+	}
+	if resMB.SkippedBelowSize != 1 {
+		t.Errorf("expected 1 video skipped below total size, got %d", resMB.SkippedBelowSize)
+	}
+	if len(resMB.Videos) != 2 {
+		t.Fatalf("expected 2 videos included, got %d", len(resMB.Videos))
+	}
+	if resMB.Videos[0].ID != "v-dense" || resMB.Videos[1].ID != "v-lean" {
+		t.Errorf("unexpected videos returned for Total MB: %+v", resMB.Videos)
+	}
+
+	// Scan with Disabled mode (all 3 videos included, 0 skipped below size)
+	resDis, err := client.ScanVideos("Disabled", 0)
+	if err != nil {
+		t.Fatalf("ScanVideos Disabled failed: %v", err)
+	}
+	if resDis.TotalAssetsScanned != 4 {
+		t.Errorf("expected 4 scanned, got %d", resDis.TotalAssetsScanned)
+	}
+	if resDis.SkippedNonVideo != 1 {
+		t.Errorf("expected 1 non-video skipped, got %d", resDis.SkippedNonVideo)
+	}
+	if resDis.SkippedBelowSize != 0 {
+		t.Errorf("expected 0 videos skipped below size when disabled, got %d", resDis.SkippedBelowSize)
+	}
+	if len(resDis.Videos) != 3 {
+		t.Fatalf("expected 3 videos included when disabled, got %d", len(resDis.Videos))
 	}
 }

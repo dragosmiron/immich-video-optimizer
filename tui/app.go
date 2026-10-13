@@ -56,9 +56,9 @@ func testConnectionCmd(pipeline *orchestrator.Pipeline) tea.Cmd {
 	}
 }
 
-func scanVideosCmd(ctx context.Context, pipeline *orchestrator.Pipeline, thresholdMBPerMin float64, seq int) tea.Cmd {
+func scanVideosCmd(ctx context.Context, pipeline *orchestrator.Pipeline, mode string, threshold float64, seq int) tea.Cmd {
 	return func() tea.Msg {
-		res, err := pipeline.ScanVideosWithContext(ctx, thresholdMBPerMin)
+		res, err := pipeline.ScanVideosWithContext(ctx, mode, threshold)
 		return ScanCompleteMsg{Seq: seq, Result: res, Err: err}
 	}
 }
@@ -692,15 +692,15 @@ func (m *AppModel) updateScanPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		m.state = ViewScanning
 		threshStr := strings.TrimSpace(m.cfg.SizeThreshold)
-		threshMBMin, err := strconv.ParseFloat(threshStr, 64)
-		if err != nil || threshMBMin < 0 || threshStr == "" {
-			threshMBMin = 100
+		threshVal, err := strconv.ParseFloat(threshStr, 64)
+		if err != nil || threshVal < 0 || threshStr == "" {
+			threshVal = 100
 		}
 		m.scanSeq++
 		seq := m.scanSeq
 		var ctx context.Context
 		ctx, m.scanCancel = context.WithCancel(context.Background())
-		return m, scanVideosCmd(ctx, m.pipeline, threshMBMin, seq)
+		return m, scanVideosCmd(ctx, m.pipeline, m.cfg.ThresholdMode, threshVal, seq)
 
 	case "s", "S":
 		m.state = ViewSettings
@@ -1025,9 +1025,9 @@ func (m *AppModel) updateDryRun(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
-	// When the threshold row (index 6) is focused and user is typing into it,
+	// When the threshold row (index 7) is focused and user is typing into it,
 	// Enter confirms the value; everything else feeds the input.
-	if m.settingCursor == 6 && m.thresholdInput.Focused() {
+	if m.settingCursor == 7 && m.thresholdInput.Focused() {
 		if msg.String() == "enter" {
 			m.thresholdInput.Blur()
 			thresh := strings.TrimSpace(m.thresholdInput.Value())
@@ -1059,11 +1059,12 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "down", "j":
-		if m.settingCursor < 8 {
+		if m.settingCursor < 9 {
 			m.settingCursor++
 		}
 
 	case "left", "h":
+		thresholdModes := []string{config.ThresholdModeMBPerMin, config.ThresholdModeTotalMB, config.ThresholdModeDisabled}
 		retryOptions := []int{0, 1, 2, 3, 5}
 		if m.settingCursor == 0 {
 			for i, r := range m.resolutions {
@@ -1089,10 +1090,19 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.cfg.ConcurrentEncoders > 1 {
 				m.cfg.ConcurrentEncoders = 1
 			}
-		} else if m.settingCursor == 7 {
+		} else if m.settingCursor == 6 {
+			currIdx := 0
+			for i, mode := range thresholdModes {
+				if mode == m.cfg.ThresholdMode {
+					currIdx = i
+					break
+				}
+			}
+			m.cfg.ThresholdMode = thresholdModes[(currIdx-1+len(thresholdModes))%len(thresholdModes)]
+		} else if m.settingCursor == 8 {
 			m.cfg.LogLevel = "info"
 			logger.SetLevelString(m.cfg.LogLevel)
-		} else if m.settingCursor == 8 {
+		} else if m.settingCursor == 9 {
 			for i, val := range retryOptions {
 				if val == m.cfg.MaxRetries && i > 0 {
 					m.cfg.MaxRetries = retryOptions[i-1]
@@ -1103,6 +1113,7 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "right", "l":
+		thresholdModes := []string{config.ThresholdModeMBPerMin, config.ThresholdModeTotalMB, config.ThresholdModeDisabled}
 		retryOptions := []int{0, 1, 2, 3, 5}
 		if m.settingCursor == 0 {
 			for i, r := range m.resolutions {
@@ -1128,10 +1139,19 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.cfg.ConcurrentEncoders < 2 {
 				m.cfg.ConcurrentEncoders = 2
 			}
-		} else if m.settingCursor == 7 {
+		} else if m.settingCursor == 6 {
+			currIdx := 0
+			for i, mode := range thresholdModes {
+				if mode == m.cfg.ThresholdMode {
+					currIdx = i
+					break
+				}
+			}
+			m.cfg.ThresholdMode = thresholdModes[(currIdx+1)%len(thresholdModes)]
+		} else if m.settingCursor == 8 {
 			m.cfg.LogLevel = "debug"
 			logger.SetLevelString(m.cfg.LogLevel)
-		} else if m.settingCursor == 8 {
+		} else if m.settingCursor == 9 {
 			for i, val := range retryOptions {
 				if val == m.cfg.MaxRetries && i < len(retryOptions)-1 {
 					m.cfg.MaxRetries = retryOptions[i+1]
@@ -1155,16 +1175,28 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.cfg.ConcurrentEncoders = 1
 			}
 		} else if m.settingCursor == 6 {
-			// Activate the threshold text input
-			return m, m.thresholdInput.Focus()
+			thresholdModes := []string{config.ThresholdModeMBPerMin, config.ThresholdModeTotalMB, config.ThresholdModeDisabled}
+			currIdx := 0
+			for i, mode := range thresholdModes {
+				if mode == m.cfg.ThresholdMode {
+					currIdx = i
+					break
+				}
+			}
+			m.cfg.ThresholdMode = thresholdModes[(currIdx+1)%len(thresholdModes)]
 		} else if m.settingCursor == 7 {
+			if m.cfg.ThresholdMode != config.ThresholdModeDisabled {
+				// Activate the threshold text input
+				return m, m.thresholdInput.Focus()
+			}
+		} else if m.settingCursor == 8 {
 			if m.cfg.IsDebug() {
 				m.cfg.LogLevel = "info"
 			} else {
 				m.cfg.LogLevel = "debug"
 			}
 			logger.SetLevelString(m.cfg.LogLevel)
-		} else if m.settingCursor == 8 {
+		} else if m.settingCursor == 9 {
 			retryOptions := []int{0, 1, 2, 3, 5}
 			currIdx := 0
 			for i, val := range retryOptions {
