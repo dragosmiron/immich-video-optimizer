@@ -1391,6 +1391,23 @@ func TestAppModel_ThresholdModesAndToggle(t *testing.T) {
 	if m.cfg.ThresholdMode != "MB/min" {
 		t.Errorf("expected wrap-around to MB/min on Right, got: %s", m.cfg.ThresholdMode)
 	}
+
+	// Test renderScanSummary and viewBrowser in Disabled mode
+	m.cfg.ThresholdMode = config.ThresholdModeDisabled
+	m.scanResult = &immich.QueryResult{
+		TotalAssetsScanned: 10,
+		SkippedNonVideo:    2,
+		SkippedBelowSize:   0,
+	}
+	m.videos = nil
+	m.state = ViewBrowser
+	browserView := m.viewBrowser()
+	if !strings.Contains(browserView, "Videos skipped (threshold disabled): 0") {
+		t.Errorf("expected summary to contain properly formatted disabled skipped count, got: %s", browserView)
+	}
+	if !strings.Contains(browserView, "No video assets were discovered on the Immich server.") {
+		t.Errorf("expected empty browser view in disabled mode to mention no video assets discovered, got: %s", browserView)
+	}
 }
 
 

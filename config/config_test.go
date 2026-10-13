@@ -210,5 +210,36 @@ func TestConfig_ThresholdModes(t *testing.T) {
 	if loaded.ThresholdMode != ThresholdModeMBPerMin {
 		t.Errorf("expected fallback to %s on invalid mode, got %s", ThresholdModeMBPerMin, loaded.ThresholdMode)
 	}
+
+	// Test case-insensitive normalization
+	cases := []struct {
+		input    string
+		expected string
+	}{
+		{"disabled", ThresholdModeDisabled},
+		{"DISABLED", ThresholdModeDisabled},
+		{"total mb", ThresholdModeTotalMB,},
+		{"TOTAL MB", ThresholdModeTotalMB},
+		{"mb/min", ThresholdModeMBPerMin},
+		{"MB/MIN", ThresholdModeMBPerMin},
+	}
+	for _, tc := range cases {
+		c := &Config{
+			URL:           "http://localhost:8080",
+			APIKey:        "key",
+			ThresholdMode: tc.input,
+			SizeThreshold: "100",
+		}
+		if err := SaveConfig(c); err != nil {
+			t.Fatalf("SaveConfig failed for %q: %v", tc.input, err)
+		}
+		loaded, err := LoadConfig()
+		if err != nil {
+			t.Fatalf("LoadConfig failed for %q: %v", tc.input, err)
+		}
+		if loaded.ThresholdMode != tc.expected {
+			t.Errorf("expected normalized mode %q for input %q, got %q", tc.expected, tc.input, loaded.ThresholdMode)
+		}
+	}
 }
 

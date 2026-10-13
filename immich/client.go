@@ -425,16 +425,14 @@ func (c *Client) ScanVideosWithContext(ctx context.Context, mode string, thresho
 			}
 
 			var skipBelow bool
-			switch mode {
-			case "Disabled":
+			switch strings.ToLower(strings.TrimSpace(mode)) {
+			case "disabled", "disable", "off", "none":
 				skipBelow = false
-			case "Total MB":
+			case "total mb", "totalmb", "total_mb":
 				if threshold > 0 && float64(a.GetSize())/(1024*1024) < threshold {
 					skipBelow = true
 				}
-			case "MB/min":
-				fallthrough
-			default:
+			default: // MB/min
 				if threshold > 0 && a.MBPerMin() < threshold {
 					skipBelow = true
 				}

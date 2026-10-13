@@ -185,7 +185,7 @@ func (m *AppModel) renderScanSummary() string {
 	var skippedLabel string
 	switch m.cfg.ThresholdMode {
 	case config.ThresholdModeDisabled:
-		skippedLabel = "  • Videos skipped (threshold disabled):"
+		skippedLabel = "  • Videos skipped (threshold disabled): "
 	case config.ThresholdModeTotalMB:
 		skippedLabel = fmt.Sprintf("  • Videos skipped (below %s MB):      ", m.cfg.SizeThreshold)
 	default:
@@ -206,16 +206,20 @@ func (m *AppModel) viewBrowser() string {
 
 	if len(m.videos) == 0 {
 		var noVideosMsg string
+		var subMsg string
 		switch m.cfg.ThresholdMode {
 		case config.ThresholdModeDisabled:
 			noVideosMsg = "ℹ No videos found in your library."
+			subMsg = "No video assets were discovered on the Immich server."
 		case config.ThresholdModeTotalMB:
 			noVideosMsg = fmt.Sprintf("ℹ No videos found exceeding the %s MB threshold.", m.cfg.SizeThreshold)
+			subMsg = "All videos in your library are already within the target size limit."
 		default:
 			noVideosMsg = fmt.Sprintf("ℹ No videos found exceeding the %s MB/min threshold.", m.cfg.SizeThreshold)
+			subMsg = "All videos in your library are already within the target size limit."
 		}
 		b.WriteString(styles.WarningText.Render(noVideosMsg))
-		b.WriteString("\n\nAll videos in your library are already within the target size limit.\n\n")
+		b.WriteString("\n\n" + subMsg + "\n\n")
 		b.WriteString("Actions:\n")
 		b.WriteString("  [ S ] Adjust Threshold in Settings\n")
 		b.WriteString("  [ R ] Rescan Library\n")

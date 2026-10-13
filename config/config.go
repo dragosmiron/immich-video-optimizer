@@ -79,6 +79,18 @@ func DefaultConfig() *Config {
 	}
 }
 
+// NormalizeThresholdMode standardizes threshold mode string handling case-insensitively.
+func NormalizeThresholdMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "total mb", "totalmb", "total_mb":
+		return ThresholdModeTotalMB
+	case "disabled", "disable", "off", "none":
+		return ThresholdModeDisabled
+	default:
+		return ThresholdModeMBPerMin
+	}
+}
+
 func LoadConfig() (*Config, error) {
 	v := viper.New()
 	v.SetConfigName("config")
@@ -108,11 +120,7 @@ func LoadConfig() (*Config, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return DefaultConfig(), err
 	}
-	switch cfg.ThresholdMode {
-	case ThresholdModeMBPerMin, ThresholdModeTotalMB, ThresholdModeDisabled:
-	default:
-		cfg.ThresholdMode = ThresholdModeMBPerMin
-	}
+	cfg.ThresholdMode = NormalizeThresholdMode(cfg.ThresholdMode)
 	if cfg.ConcurrentEncoders <= 0 {
 		cfg.ConcurrentEncoders = 1
 	}
@@ -131,11 +139,7 @@ func LoadConfig() (*Config, error) {
 func SaveConfig(cfg *Config) error {
 	cfg.URL = strings.TrimSpace(cfg.URL)
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
-	switch cfg.ThresholdMode {
-	case ThresholdModeMBPerMin, ThresholdModeTotalMB, ThresholdModeDisabled:
-	default:
-		cfg.ThresholdMode = ThresholdModeMBPerMin
-	}
+	cfg.ThresholdMode = NormalizeThresholdMode(cfg.ThresholdMode)
 	cfg.SizeThreshold = strings.TrimSpace(cfg.SizeThreshold)
 	if cfg.Resolution == "" {
 		cfg.Resolution = "Original"

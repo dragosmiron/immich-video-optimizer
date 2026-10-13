@@ -617,4 +617,15 @@ func TestScanVideos_MBPerMinFilter(t *testing.T) {
 	if len(resDis.Videos) != 3 {
 		t.Fatalf("expected 3 videos included when disabled, got %d", len(resDis.Videos))
 	}
+
+	// Case-insensitive checks
+	resDisLower, err := client.ScanVideos("disabled", 0)
+	if err != nil || len(resDisLower.Videos) != 3 {
+		t.Fatalf("expected 3 videos for lowercase 'disabled', got %d (err: %v)", len(resDisLower.Videos), err)
+	}
+
+	resMBLower, err := client.ScanVideos("total mb", 100.0)
+	if err != nil || len(resMBLower.Videos) != 2 {
+		t.Fatalf("expected 2 videos for lowercase 'total mb', got %d (err: %v)", len(resMBLower.Videos), err)
+	}
 }
