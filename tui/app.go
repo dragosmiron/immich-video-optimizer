@@ -1214,13 +1214,12 @@ func (m *AppModel) switchSettingsTab(newTab int) {
 	} else if newTab > 2 {
 		newTab = 2
 	}
-	m.settingsTab = newTab
-	if m.thresholdInput.Focused() {
-		m.thresholdInput.Blur()
-	}
-	max := m.settingsMaxCursor()
-	if m.settingCursor > max {
-		m.settingCursor = max
+	if m.settingsTab != newTab {
+		m.settingsTab = newTab
+		m.settingCursor = 0
+		if m.thresholdInput.Focused() {
+			m.thresholdInput.Blur()
+		}
 	}
 }
 

@@ -1916,14 +1916,14 @@ func TestAppModel_SettingsTabsNavigation(t *testing.T) {
 		t.Errorf("expected tab 0 after pressing '1', got %d", m.settingsTab)
 	}
 
-	// 4. Cursor clamping when switching to a tab with fewer items
+	// 4. Cursor resets to 0 when switching tabs
 	// In Tab 0, set cursor to 3 (Skip HEVC)
 	m.settingCursor = 3
-	// Switch to Tab 1 (Filtering), which only has 3 items (max index 2)
+	// Switch to Tab 1 (Filtering)
 	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	m = newM.(*AppModel)
-	if m.settingCursor != 2 {
-		t.Errorf("expected cursor clamped to 2 in Tab 1, got %d", m.settingCursor)
+	if m.settingCursor != 0 {
+		t.Errorf("expected cursor reset to 0 in Tab 1, got %d", m.settingCursor)
 	}
 
 	// 5. When threshold input is focused, typing numbers feeds the input, does NOT switch tabs
