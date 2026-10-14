@@ -1133,7 +1133,9 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			for i, val := range retryOptions {
 				if val == m.cfg.MaxRetries && i > 0 {
 					m.cfg.MaxRetries = retryOptions[i-1]
-					m.pipeline.Client().SetMaxRetries(m.cfg.MaxRetries)
+					if m.pipeline != nil && m.pipeline.Client() != nil {
+						m.pipeline.Client().SetMaxRetries(m.cfg.MaxRetries)
+					}
 					break
 				}
 			}
@@ -1188,7 +1190,9 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			for i, val := range retryOptions {
 				if val == m.cfg.MaxRetries && i < len(retryOptions)-1 {
 					m.cfg.MaxRetries = retryOptions[i+1]
-					m.pipeline.Client().SetMaxRetries(m.cfg.MaxRetries)
+					if m.pipeline != nil && m.pipeline.Client() != nil {
+						m.pipeline.Client().SetMaxRetries(m.cfg.MaxRetries)
+					}
 					break
 				}
 			}
@@ -1245,7 +1249,9 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.cfg.MaxRetries = retryOptions[(currIdx+1)%len(retryOptions)]
-			m.pipeline.Client().SetMaxRetries(m.cfg.MaxRetries)
+			if m.pipeline != nil && m.pipeline.Client() != nil {
+				m.pipeline.Client().SetMaxRetries(m.cfg.MaxRetries)
+			}
 		} else if m.settingCursor == 10 {
 			q := m.cfg.Quality() + 1
 			if q > 10 {
