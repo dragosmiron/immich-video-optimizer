@@ -1583,6 +1583,103 @@ func TestAppModel_DryRunSummary_PotentiallyMinimalSavings(t *testing.T) {
 	}
 }
 
+func TestAppModel_VideoQualitySettings(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+
+	cfg := config.DefaultConfig()
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+
+	// 1. Check Scan Prompt displays Video Quality
+	m.state = ViewScanPrompt
+	prompt := m.viewScanPrompt()
+	if !strings.Contains(prompt, "• Video Quality:") || !strings.Contains(prompt, "Level 6 (Balanced)") {
+		t.Errorf("expected scan prompt to show '• Video Quality:  Level 6 (Balanced)', got: %s", prompt)
+	}
+
+	// 2. Open Settings and navigate to Video Quality (index 10)
+	m.state = ViewSettings
+	m.settingCursor = 10
+	view := m.viewSettings()
+	if !strings.Contains(view, "Video Quality:") || !strings.Contains(view, "[6] Balanced") {
+		t.Errorf("expected settings view to show '[6] Balanced', got: %s", view)
+	}
+	if !strings.Contains(view, "[1: Max Savings ➔ 10: Max Quality]") {
+		t.Errorf("expected settings view to show slider hint '[1: Max Savings ➔ 10: Max Quality]', got: %s", view)
+	}
+	if !strings.Contains(view, "Balanced (Default, ~40-50% savings, imperceptible quality loss)") {
+		t.Errorf("expected settings view to show balanced description, got: %s", view)
+	}
+
+	// 3. Navigate Left (decrease quality) down to 1
+	for i := 0; i < 10; i++ {
+		newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+		m = newM.(*AppModel)
+	}
+	if m.cfg.Quality() != 1 {
+		t.Errorf("expected quality clamped to 1 after multiple Left presses, got %d", m.cfg.Quality())
+	}
+
+	view = m.viewSettings()
+	if !strings.Contains(view, "[1] Max Savings") {
+		t.Errorf("expected settings view to show '[1] Max Savings', got: %s", view)
+	}
+	if !strings.Contains(view, "High Compression (~70-80% space savings, noticeable softening for surveillance/dashcams)") {
+		t.Errorf("expected settings view to show high compression description at level 1, got: %s", view)
+	}
+
+	// 4. Navigate Right to Level 7 (High Quality)
+	for i := 0; i < 6; i++ {
+		newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+		m = newM.(*AppModel)
+	}
+	if m.cfg.Quality() != 7 {
+		t.Errorf("expected quality 7, got %d", m.cfg.Quality())
+	}
+	view = m.viewSettings()
+	if !strings.Contains(view, "[7] High Quality") {
+		t.Errorf("expected settings view to show '[7] High Quality', got: %s", view)
+	}
+	if !strings.Contains(view, "High Quality (~25-35% savings, preserves fine film grain and high-motion details)") {
+		t.Errorf("expected settings view to show high quality description, got: %s", view)
+	}
+
+	// 5. Navigate Right to Level 10 (Visually Lossless) and verify clamp
+	for i := 0; i < 10; i++ {
+		newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+		m = newM.(*AppModel)
+	}
+	if m.cfg.Quality() != 10 {
+		t.Errorf("expected quality clamped to 10, got %d", m.cfg.Quality())
+	}
+	view = m.viewSettings()
+	if !strings.Contains(view, "[10] Visually Lossless") {
+		t.Errorf("expected settings view to show '[10] Visually Lossless', got: %s", view)
+	}
+	if !strings.Contains(view, "Visually Lossless (~15-20% savings, archival preservation)") {
+		t.Errorf("expected settings view to show visually lossless description, got: %s", view)
+	}
+
+	// 6. Space cycles from 10 to 1
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = newM.(*AppModel)
+	if m.cfg.Quality() != 1 {
+		t.Errorf("expected Space on level 10 to cycle to 1, got %d", m.cfg.Quality())
+	}
+
+	// 7. Test Esc saves config
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	loaded, err := config.LoadConfig()
+	if err != nil {
+		t.Fatalf("failed to load saved config: %v", err)
+	}
+	if loaded.VideoQuality != 1 {
+		t.Errorf("expected saved config to have VideoQuality 1, got %d", loaded.VideoQuality)
+	}
+}
+
+
 
 
 

@@ -17,13 +17,14 @@ import (
 
 // TranscodeOptions holds settings for transcoding
 type TranscodeOptions struct {
-	Input      string
-	Output     string
-	Encoder    string // hevc_videotoolbox, hevc_nvenc, hevc_vaapi, libx265
-	AudioCopy  bool   // true for '-c:a copy', false for aac
-	CRF        int    // CRF or bitrate equiv
-	Preset     string // Preset string, e.g., "medium", "slow"
-	Resolution string
+	Input               string
+	Output              string
+	Encoder             string // hevc_videotoolbox, hevc_nvenc, hevc_vaapi, libx265
+	AudioCopy           bool   // true for '-c:a copy', false for aac
+	CRF                 int    // CRF or bitrate equiv
+	VideoToolboxQuality int    // Explicit VideoToolbox -q:v quality override (1..100)
+	Preset              string // Preset string, e.g., "medium", "slow"
+	Resolution          string
 }
 
 // Progress represents the transcoding progress parsed from ffmpeg output
@@ -65,10 +66,14 @@ func BuildFFmpegArgs(opts TranscodeOptions) []string {
 		args = append(args, "-preset", strings.ToLower(opts.Preset))
 	}
 
-	if opts.CRF > 0 {
+	if opts.CRF > 0 || opts.VideoToolboxQuality > 0 {
 		switch opts.Encoder {
 		case "hevc_videotoolbox":
-			args = append(args, "-q:v", strconv.Itoa(VideoToolboxQuality(opts.CRF)))
+			vtQuality := opts.VideoToolboxQuality
+			if vtQuality <= 0 {
+				vtQuality = VideoToolboxQuality(opts.CRF)
+			}
+			args = append(args, "-q:v", strconv.Itoa(vtQuality))
 		case "hevc_vaapi":
 			args = append(args, "-qp", strconv.Itoa(opts.CRF))
 		case "hevc_nvenc":
@@ -292,4 +297,76 @@ func VideoToolboxQuality(crf int) int {
 		q = 100
 	}
 	return q
+}
+
+// QualityLevelToCRF maps quality levels 1-10 to CRF values.
+// Range: 1 (CRF 32) to 10 (CRF 18). Default (6): CRF 26.
+func QualityLevelToCRF(level int) int {
+	if level == 0 {
+		level = 6
+	} else if level < 1 {
+		level = 1
+	} else if level > 10 {
+		level = 10
+	}
+	switch level {
+	case 1:
+		return 32
+	case 2:
+		return 31
+	case 3:
+		return 30
+	case 4:
+		return 29
+	case 5:
+		return 28
+	case 6:
+		return 26
+	case 7:
+		return 24
+	case 8:
+		return 22
+	case 9:
+		return 20
+	case 10:
+		return 18
+	default:
+		return 26
+	}
+}
+
+// QualityLevelToVideoToolbox maps quality levels 1-10 to VideoToolbox -q:v values (1-100).
+// Range: 1 (VT 50) to 10 (VT 85). Default (6): VT 66.
+func QualityLevelToVideoToolbox(level int) int {
+	if level == 0 {
+		level = 6
+	} else if level < 1 {
+		level = 1
+	} else if level > 10 {
+		level = 10
+	}
+	switch level {
+	case 1:
+		return 50
+	case 2:
+		return 53
+	case 3:
+		return 56
+	case 4:
+		return 59
+	case 5:
+		return 62
+	case 6:
+		return 66
+	case 7:
+		return 72
+	case 8:
+		return 76
+	case 9:
+		return 80
+	case 10:
+		return 85
+	default:
+		return 66
+	}
 }

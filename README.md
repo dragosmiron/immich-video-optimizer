@@ -24,6 +24,8 @@ A terminal client for [Immich](https://immich.app/) that reduces storage usage b
   - Press `q` to pause at any point. Completed videos and pending items are saved atomically to `session.json` for later resume.
 - **Size Guard:**
   - Verifies that the transcoded file is smaller than the original. If a re-encoded file is larger, replacement is skipped and the original is kept intact.
+- **Adjustable Quality Control:**
+  - 1–10 quality slider with dynamic presets ranging from High Compression (~70–80% savings) to Visually Lossless (~15–20% savings). Maps automatically to standard CRF and Apple VideoToolbox quality scales.
 - **Dry Run Estimation:**
   - Pre-flight preview inspecting video codecs and providing realistic, conservative storage savings estimates before processing.
 
@@ -136,6 +138,11 @@ Review discovered videos exceeding your configured threshold (`MB/min`, `Total M
 - **Threshold Value:** Typeable value used by the active mode (`100 MB/min`, `500 MB`, or `Disabled (All videos scanned)`). Press `[Enter]` to edit when enabled.
 - **Logging Level:** `Info` (default) or `Debug` (logs FFmpeg/ExifTool command arguments and stderr).
 - **Network Retries:** Automatic retry count with exponential backoff on transient network drops (`0` to `5`, default `2`).
+- **Video Quality:** 1–10 quality slider (default: `[6] Balanced`), balancing space savings with visual fidelity:
+  - **Levels 1–3 (High Compression):** CRF 32–30, VideoToolbox 50–56. ~70–80% space savings, noticeable softening suitable for surveillance, dashcams, or casual recordings. (Level 1: Max Savings).
+  - **Levels 4–6 (Balanced):** CRF 29–26, VideoToolbox 59–66. ~40–50% space savings with imperceptible quality loss. (Level 6: Default).
+  - **Levels 7–8 (High Quality):** CRF 24–22, VideoToolbox 72–76. ~25–35% space savings, preserves fine film grain and high-motion details.
+  - **Levels 9–10 (Visually Lossless):** CRF 20–18, VideoToolbox 80–85. ~15–20% space savings for archival preservation.
 
 ### 4. Live Dashboard
 - **`⚙ Transcoding`**: Active file, resolution, file size, encoding speed, and FPS.

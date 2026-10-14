@@ -126,6 +126,7 @@ func (m *AppModel) viewScanPrompt() string {
 	}
 	b.WriteString(fmt.Sprintf("  • Threshold:      %s\n", styles.Value.Render(threshDesc)))
 	b.WriteString(fmt.Sprintf("  • Resolution:     %s\n", styles.Value.Render(m.cfg.Resolution)))
+	b.WriteString(fmt.Sprintf("  • Video Quality:  %s\n", styles.Value.Render(fmt.Sprintf("Level %d (%s)", m.cfg.Quality(), m.cfg.QualityLabel()))))
 	b.WriteString(fmt.Sprintf("  • Transcode Speed:%s\n", styles.Value.Render(m.cfg.Preset)))
 	sgText := "Enabled (skips replacement if transcoded is larger)"
 	if !m.cfg.SizeGuard {
@@ -613,6 +614,10 @@ func (m *AppModel) viewSettings() string {
 		"Number of automatic retry attempts with backoff for failed downloads and uploads.\n" +
 			"  • 0 — Disabled. Fails immediately on first error\n" +
 			"  • 1 to 5 — Retries automatically with exponential backoff on transient network drops",
+		// 10 — Video Quality
+		func() string {
+			return m.cfg.QualityDescription()
+		}(),
 	}
 
 	isFocused := func(idx int) bool { return m.settingCursor == idx }
@@ -744,6 +749,12 @@ func (m *AppModel) viewSettings() string {
 	writeRow(9,
 		"Network Retries:     ",
 		retryStr+"  ← / → / [Space / Enter] to change  [0, 1, 2, 3, 5]",
+	)
+
+	// Row 10 — Video Quality
+	writeRow(10,
+		"Video Quality:       ",
+		fmt.Sprintf("[%d] %s  ← / → to change  [1: Max Savings ➔ 10: Max Quality]", m.cfg.Quality(), m.cfg.QualityLabel()),
 	)
 
 	b.WriteString("\n")

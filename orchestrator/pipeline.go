@@ -310,13 +310,14 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 				item.TranscodedPath = transcodedPath
 
 				opts := engine.TranscodeOptions{
-					Input:      item.OrigPath,
-					Output:     transcodedPath,
-					Encoder:    p.encoder,
-					AudioCopy:  false,
-					CRF:        28,
-					Preset:     p.cfg.Preset,
-					Resolution: p.cfg.Resolution,
+					Input:               item.OrigPath,
+					Output:              transcodedPath,
+					Encoder:             p.encoder,
+					AudioCopy:           false,
+					CRF:                 p.cfg.QualityCRF(),
+					VideoToolboxQuality: p.cfg.QualityVideoToolbox(),
+					Preset:              p.cfg.Preset,
+					Resolution:          p.cfg.Resolution,
 				}
 
 				onProgress := func(prog engine.Progress) {

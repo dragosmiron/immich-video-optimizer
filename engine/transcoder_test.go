@@ -273,4 +273,70 @@ func TestVideoToolboxQuality(t *testing.T) {
 	}
 }
 
+func TestQualityLevelToCRF_And_VideoToolbox(t *testing.T) {
+	expectedCRF := map[int]int{
+		1: 32, 2: 31, 3: 30, 4: 29, 5: 28,
+		6: 26, 7: 24, 8: 22, 9: 20, 10: 18,
+	}
+	expectedVT := map[int]int{
+		1: 50, 2: 53, 3: 56, 4: 59, 5: 62,
+		6: 66, 7: 72, 8: 76, 9: 80, 10: 85,
+	}
+
+	for lvl := 1; lvl <= 10; lvl++ {
+		if got := QualityLevelToCRF(lvl); got != expectedCRF[lvl] {
+			t.Errorf("QualityLevelToCRF(%d) = %d, expected %d", lvl, got, expectedCRF[lvl])
+		}
+		if got := QualityLevelToVideoToolbox(lvl); got != expectedVT[lvl] {
+			t.Errorf("QualityLevelToVideoToolbox(%d) = %d, expected %d", lvl, got, expectedVT[lvl])
+		}
+	}
+
+	// Test boundary clamps
+	if got := QualityLevelToCRF(0); got != 26 {
+		t.Errorf("QualityLevelToCRF(0) = %d, expected default 26", got)
+	}
+	if got := QualityLevelToCRF(-2); got != 32 {
+		t.Errorf("QualityLevelToCRF(-2) = %d, expected 32 (level 1)", got)
+	}
+	if got := QualityLevelToCRF(99); got != 18 {
+		t.Errorf("QualityLevelToCRF(99) = %d, expected 18 (level 10)", got)
+	}
+
+	if got := QualityLevelToVideoToolbox(0); got != 66 {
+		t.Errorf("QualityLevelToVideoToolbox(0) = %d, expected default 66", got)
+	}
+	if got := QualityLevelToVideoToolbox(-2); got != 50 {
+		t.Errorf("QualityLevelToVideoToolbox(-2) = %d, expected 50 (level 1)", got)
+	}
+	if got := QualityLevelToVideoToolbox(99); got != 85 {
+		t.Errorf("QualityLevelToVideoToolbox(99) = %d, expected 85 (level 10)", got)
+	}
+}
+
+func TestBuildFFmpegArgs_VideoToolboxQualityOverride(t *testing.T) {
+	opts := TranscodeOptions{
+		Input:               "input.mp4",
+		Output:              "output.mp4",
+		Encoder:             "hevc_videotoolbox",
+		AudioCopy:           true,
+		CRF:                 26,
+		VideoToolboxQuality: 66,
+	}
+
+	args := BuildFFmpegArgs(opts)
+	foundQ := false
+	for i, a := range args {
+		if a == "-q:v" && i+1 < len(args) {
+			foundQ = true
+			if args[i+1] != "66" {
+				t.Errorf("expected -q:v 66, got %s", args[i+1])
+			}
+		}
+	}
+	if !foundQ {
+		t.Errorf("expected -q:v argument in FFmpeg args, got %v", args)
+	}
+}
+
 
