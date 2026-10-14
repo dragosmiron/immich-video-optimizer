@@ -126,23 +126,28 @@ func TestSizeGuard(t *testing.T) {
 		t.Fatalf("Failed to query videos: %v", err)
 	}
 
-	ch := make(chan interface{}, 10)
+	ch := make(chan interface{}, 100)
 	
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	pipeline.Run(ctx, videos, ch)
-
-	// Validate events
 	var skipped bool
-	for msg := range ch {
-		if cmsg, ok := msg.(PipelineVideoCompleteMsg); ok {
-			if cmsg.Err != nil {
-				t.Logf("Video error: %v", cmsg.Err)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for msg := range ch {
+			if cmsg, ok := msg.(PipelineVideoCompleteMsg); ok {
+				if cmsg.Err != nil {
+					t.Logf("Video error: %v", cmsg.Err)
+				}
+				skipped = cmsg.Skipped
 			}
-			skipped = cmsg.Skipped
 		}
-	}
+	}()
+
+	pipeline.Run(ctx, videos, ch)
+	wg.Wait()
 	
 	if !skipped {
 		t.Errorf("Expected video to be skipped due to size guard")
@@ -206,20 +211,26 @@ func TestPipeline_DownloadErrorShortCircuit(t *testing.T) {
 		t.Fatalf("Failed to query videos: %v", err)
 	}
 
-	ch := make(chan interface{}, 10)
+	ch := make(chan interface{}, 100)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	pipeline.Run(ctx, videos, ch)
-
 	var gotError bool
-	for msg := range ch {
-		if cmsg, ok := msg.(PipelineVideoCompleteMsg); ok {
-			if cmsg.Err != nil {
-				gotError = true
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for msg := range ch {
+			if cmsg, ok := msg.(PipelineVideoCompleteMsg); ok {
+				if cmsg.Err != nil {
+					gotError = true
+				}
 			}
 		}
-	}
+	}()
+
+	pipeline.Run(ctx, videos, ch)
+	wg.Wait()
 
 	if !gotError {
 		t.Errorf("Expected video error from failed download")
@@ -275,22 +286,28 @@ exit 0
 			t.Fatalf("NewPipelineWithBinaries error: %v", err)
 		}
 
-		ch := make(chan interface{}, 20)
+		ch := make(chan interface{}, 100)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
-		p.RunDryRun(ctx, videos, ch)
-
 		var completeMsg DryRunCompleteMsg
 		var videoMsgs []DryRunVideoMsg
-		for msg := range ch {
-			switch m := msg.(type) {
-			case DryRunVideoMsg:
-				videoMsgs = append(videoMsgs, m)
-			case DryRunCompleteMsg:
-				completeMsg = m
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for msg := range ch {
+				switch m := msg.(type) {
+				case DryRunVideoMsg:
+					videoMsgs = append(videoMsgs, m)
+				case DryRunCompleteMsg:
+					completeMsg = m
+				}
 			}
-		}
+		}()
+
+		p.RunDryRun(ctx, videos, ch)
+		wg.Wait()
 
 		if len(videoMsgs) != 3 {
 			t.Fatalf("expected 3 video messages, got %d", len(videoMsgs))
@@ -323,18 +340,24 @@ exit 0
 			t.Fatalf("NewPipelineWithBinaries error: %v", err)
 		}
 
-		ch := make(chan interface{}, 20)
+		ch := make(chan interface{}, 100)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
-		p.RunDryRun(ctx, videos, ch)
-
 		var completeMsg DryRunCompleteMsg
-		for msg := range ch {
-			if m, ok := msg.(DryRunCompleteMsg); ok {
-				completeMsg = m
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for msg := range ch {
+				if m, ok := msg.(DryRunCompleteMsg); ok {
+					completeMsg = m
+				}
 			}
-		}
+		}()
+
+		p.RunDryRun(ctx, videos, ch)
+		wg.Wait()
 
 		// When SkipHEVC = false:
 		// No videos should be in HEVCSkipped!
@@ -351,14 +374,20 @@ exit 0
 	t.Run("EmptyVideos", func(t *testing.T) {
 		cfg := &config.Config{URL: "http://localhost:2283", APIKey: "key"}
 		p, _ := NewPipelineWithBinaries(cfg, binaries)
-		ch := make(chan interface{}, 5)
-		p.RunDryRun(context.Background(), nil, ch)
+		ch := make(chan interface{}, 100)
 		var gotComplete bool
-		for msg := range ch {
-			if _, ok := msg.(DryRunCompleteMsg); ok {
-				gotComplete = true
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for msg := range ch {
+				if _, ok := msg.(DryRunCompleteMsg); ok {
+					gotComplete = true
+				}
 			}
-		}
+		}()
+		p.RunDryRun(context.Background(), nil, ch)
+		wg.Wait()
 		if !gotComplete {
 			t.Errorf("expected DryRunCompleteMsg on empty videos list")
 		}
@@ -368,7 +397,7 @@ exit 0
 	t.Run("ContextCancelled", func(t *testing.T) {
 		cfg := &config.Config{URL: "http://localhost:2283", APIKey: "key", SkipHEVC: true}
 		p, _ := NewPipelineWithBinaries(cfg, binaries)
-		ch := make(chan interface{}, 20)
+		ch := make(chan interface{}, 100)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel() // immediately cancel
 		p.RunDryRun(ctx, videos, ch)
@@ -450,20 +479,26 @@ func TestPipeline_DuplicateAssetGuard(t *testing.T) {
 		t.Fatalf("Failed to query videos: %v", err)
 	}
 
-	ch := make(chan interface{}, 10)
+	ch := make(chan interface{}, 100)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	p.Run(ctx, videos, ch)
-
 	var gotError bool
-	for msg := range ch {
-		if cmsg, ok := msg.(PipelineVideoCompleteMsg); ok {
-			if cmsg.Err != nil {
-				gotError = true
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for msg := range ch {
+			if cmsg, ok := msg.(PipelineVideoCompleteMsg); ok {
+				if cmsg.Err != nil {
+					gotError = true
+				}
 			}
 		}
-	}
+	}()
+
+	p.Run(ctx, videos, ch)
+	wg.Wait()
 
 	if !gotError {
 		t.Errorf("Expected pipeline to report error when duplicate asset ID is returned")
@@ -540,24 +575,30 @@ func TestPipeline_DeleteFailureHandling(t *testing.T) {
 		t.Fatalf("Failed to query videos: %v", err)
 	}
 
-	ch := make(chan interface{}, 10)
+	ch := make(chan interface{}, 100)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	p.Run(ctx, videos, ch)
-
 	var gotError bool
 	var totalSaved int64
-	for msg := range ch {
-		if cmsg, ok := msg.(PipelineVideoCompleteMsg); ok {
-			if cmsg.Err != nil {
-				gotError = true
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for msg := range ch {
+			if cmsg, ok := msg.(PipelineVideoCompleteMsg); ok {
+				if cmsg.Err != nil {
+					gotError = true
+				}
+			}
+			if dmsg, ok := msg.(PipelineDoneMsg); ok {
+				totalSaved = dmsg.TotalSavedBytes
 			}
 		}
-		if dmsg, ok := msg.(PipelineDoneMsg); ok {
-			totalSaved = dmsg.TotalSavedBytes
-		}
-	}
+	}()
+
+	p.Run(ctx, videos, ch)
+	wg.Wait()
 
 	if !gotError {
 		t.Errorf("Expected error when DeleteAsset fails")
@@ -676,15 +717,20 @@ exit 0
 		},
 	}
 
-	ch := make(chan interface{}, 20)
+	ch := make(chan interface{}, 100)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	p.Run(ctx, videos, ch)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range ch {
+		}
+	}()
 
-	for msg := range ch {
-		_ = msg
-	}
+	p.Run(ctx, videos, ch)
+	wg.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -785,15 +831,20 @@ exit 0
 		},
 	}
 
-	ch := make(chan interface{}, 20)
+	ch := make(chan interface{}, 100)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	p.Run(ctx, videos, ch)
+	var wg2 sync.WaitGroup
+	wg2.Add(1)
+	go func() {
+		defer wg2.Done()
+		for range ch {
+		}
+	}()
 
-	for msg := range ch {
-		_ = msg
-	}
+	p.Run(ctx, videos, ch)
+	wg2.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -886,14 +937,20 @@ exit 0
 	}
 
 	// 1. Run first dry run -> should create dry run album
-	ch1 := make(chan interface{}, 10)
-	p.RunDryRun(context.Background(), videos, ch1)
+	ch1 := make(chan interface{}, 100)
 	var completeMsg DryRunCompleteMsg
-	for msg := range ch1 {
-		if c, ok := msg.(DryRunCompleteMsg); ok {
-			completeMsg = c
+	var wg1 sync.WaitGroup
+	wg1.Add(1)
+	go func() {
+		defer wg1.Done()
+		for msg := range ch1 {
+			if c, ok := msg.(DryRunCompleteMsg); ok {
+				completeMsg = c
+			}
 		}
-	}
+	}()
+	p.RunDryRun(context.Background(), videos, ch1)
+	wg1.Wait()
 
 	if completeMsg.DryRunAlbumID != "album-dryrun-123" {
 		t.Errorf("Expected DryRunAlbumID 'album-dryrun-123', got '%s'", completeMsg.DryRunAlbumID)
@@ -912,10 +969,16 @@ exit 0
 	mu.Unlock()
 
 	// 2. Run a second dry run -> should delete the first dry run album and create a new one
-	ch2 := make(chan interface{}, 10)
+	ch2 := make(chan interface{}, 100)
+	var wg2 sync.WaitGroup
+	wg2.Add(1)
+	go func() {
+		defer wg2.Done()
+		for range ch2 {
+		}
+	}()
 	p.RunDryRun(context.Background(), videos, ch2)
-	for range ch2 {
-	}
+	wg2.Wait()
 
 	mu.Lock()
 	if len(deletedAlbums) != 1 || deletedAlbums[0] != "album-dryrun-123" {
@@ -930,6 +993,108 @@ exit 0
 		t.Errorf("Expected CleanDryRunAlbum to delete album, got: %v", deletedAlbums)
 	}
 	mu.Unlock()
+}
+
+func TestPipeline_UnbufferedChannel(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == "POST" && r.URL.Path == "/api/search/metadata" {
+			w.Write([]byte(`{"assets": {"items": [{"id": "unbuf-1", "type": "VIDEO", "originalFileName": "unbuf.mp4", "exifInfo": {"fileSizeInByte": 5000}}]}}`))
+			return
+		}
+		if r.Method == "GET" && strings.Contains(r.URL.Path, "/original") {
+			w.Header().Set("Content-Type", "video/mp4")
+			w.Write([]byte("fake video content"))
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/api/albums" {
+			w.Write([]byte(`{"id": "album-unbuf"}`))
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/api/assets" {
+			w.Write([]byte(`{"id": "new-unbuf-id"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	fakeFFmpeg := filepath.Join(tempHome, "fake_ffmpeg")
+	script := "#!/bin/sh\nfor arg do last_arg=\"$arg\"; done\necho 'small' > \"$last_arg\"\nexit 0\n"
+	_ = os.WriteFile(fakeFFmpeg, []byte(script), 0755)
+	fakeExifTool := filepath.Join(tempHome, "fake_exiftool")
+	_ = os.WriteFile(fakeExifTool, []byte("#!/bin/sh\nexit 0\n"), 0755)
+
+	cfg := &config.Config{
+		URL:           ts.URL,
+		APIKey:        "test-key",
+		SizeThreshold: "0",
+	}
+
+	binaries := &engine.BinaryManager{
+		FFmpegPath:   fakeFFmpeg,
+		ExifToolPath: fakeExifTool,
+	}
+
+	p, err := NewPipelineWithBinaries(cfg, binaries)
+	if err != nil {
+		t.Fatalf("Failed to create pipeline: %v", err)
+	}
+	p.Client().SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: ts.Config.Handler},
+	})
+
+	videos, err := p.QueryVideos(0)
+	if err != nil {
+		t.Fatalf("Failed to query videos: %v", err)
+	}
+
+	// Test Run with unbuffered channel (cap = 0)
+	chRun := make(chan interface{})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var runCount int
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range chRun {
+			runCount++
+		}
+	}()
+
+	p.Run(ctx, videos, chRun)
+	wg.Wait()
+
+	if runCount == 0 {
+		t.Errorf("Expected messages from pipeline run on unbuffered channel")
+	}
+
+	// Test RunDryRun with unbuffered channel (cap = 0)
+	chDry := make(chan interface{})
+	ctxDry, cancelDry := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelDry()
+
+	var dryCount int
+	var wgDry sync.WaitGroup
+	wgDry.Add(1)
+	go func() {
+		defer wgDry.Done()
+		for range chDry {
+			dryCount++
+		}
+	}()
+
+	p.RunDryRun(ctxDry, videos, chDry)
+	wgDry.Wait()
+
+	if dryCount == 0 {
+		t.Errorf("Expected messages from pipeline dry run on unbuffered channel")
+	}
 }
 
 

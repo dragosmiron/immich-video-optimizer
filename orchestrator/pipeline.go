@@ -106,10 +106,24 @@ func (p *Pipeline) CleanDryRunAlbum() {
 func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- interface{}) {
 	defer close(ch)
 
+	emit := func(msg interface{}) bool {
+		select {
+		case ch <- msg:
+			return true
+		case <-ctx.Done():
+			select {
+			case ch <- msg:
+				return true
+			default:
+				return false
+			}
+		}
+	}
+
 	p.runMu.Lock()
 	if p.isRunning {
 		p.runMu.Unlock()
-		ch <- PipelineDoneMsg{Err: fmt.Errorf("pipeline already running")}
+		emit(PipelineDoneMsg{Err: fmt.Errorf("pipeline already running")})
 		return
 	}
 	p.isRunning = true
@@ -124,11 +138,11 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 	}()
 
 	if len(videos) == 0 {
-		ch <- PipelineDoneMsg{}
+		emit(PipelineDoneMsg{})
 		return
 	}
 
-	ch <- PipelineStartMsg{Total: len(videos)}
+	emit(PipelineStartMsg{Total: len(videos)})
 
 	sess, _ := state.LoadSession()
 	var albumID string
@@ -176,26 +190,26 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		if sess.PendingCount() == 0 && sess.FailedCount() == 0 {
 			_ = state.ClearSession()
 		}
-		ch <- PipelineDoneMsg{TotalSavedBytes: sess.GetTotalSavedBytes()}
+		emit(PipelineDoneMsg{TotalSavedBytes: sess.GetTotalSavedBytes()})
 		return
 	}
 
 	// Phase A: Parallel Codec Pre-Scanning (inspects small HTTP range headers in parallel)
 	if p.cfg.SkipHEVC {
-		ch <- PipelineStageMsg{Stage: "probing", VideoName: fmt.Sprintf("Scanning %d videos for HEVC format in parallel...", len(pendingVideos))}
-		pendingVideos = p.filterHEVCParallel(ctx, pendingVideos, sess, ch)
+		emit(PipelineStageMsg{Stage: "probing", VideoName: fmt.Sprintf("Scanning %d videos for HEVC format in parallel...", len(pendingVideos))})
+		pendingVideos = p.filterHEVCParallel(ctx, pendingVideos, sess, emit)
 	}
 
 	if len(pendingVideos) == 0 || ctx.Err() != nil {
 		if ctx.Err() != nil {
 			_ = state.SaveSession(sess)
-			ch <- PipelineDoneMsg{TotalSavedBytes: sess.GetTotalSavedBytes(), Paused: true}
+			emit(PipelineDoneMsg{TotalSavedBytes: sess.GetTotalSavedBytes(), Paused: true})
 			return
 		}
 		if sess.PendingCount() == 0 && sess.FailedCount() == 0 {
 			_ = state.ClearSession()
 		}
-		ch <- PipelineDoneMsg{TotalSavedBytes: sess.GetTotalSavedBytes()}
+		emit(PipelineDoneMsg{TotalSavedBytes: sess.GetTotalSavedBytes()})
 		return
 	}
 
@@ -221,13 +235,24 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		_ = p.client.AddAssetsToAlbum(albumID, origIDs)
 	}
 
-	queueCap := 1
+	numEncoders := p.cfg.ConcurrentEncoders
+	if numEncoders <= 0 {
+		numEncoders = 1
+	} else if numEncoders > 2 {
+		numEncoders = 2
+	}
+
+	queueCap := numEncoders
 	if !p.cfg.EnablePrefetch {
 		queueCap = 0 // unbuffered: synchronous handoff
 	}
 
 	transcodeQueue := make(chan *WorkItem, queueCap)
-	uploadQueue := make(chan *WorkItem, queueCap)
+	uploadCap := numEncoders + 2
+	if !p.cfg.EnablePrefetch {
+		uploadCap = numEncoders
+	}
+	uploadQueue := make(chan *WorkItem, uploadCap)
 
 	// Worker 1: Prefetch Downloader
 	var downloadWg sync.WaitGroup
@@ -242,18 +267,19 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 			default:
 			}
 
-			ch <- PipelineStageMsg{Stage: "downloading", VideoName: v.OriginalFileName}
+			emit(PipelineStageMsg{Stage: "downloading", VideoName: v.OriginalFileName, VideoID: v.ID})
 			origPath := filepath.Join(p.tempDir, fmt.Sprintf("orig_%s.mp4", v.ID))
 			item := NewWorkItem(v, origPath)
 
 			if err := p.client.DownloadAssetWithContext(ctx, v.ID, origPath); err != nil {
 				item.Cleanup()
+				emit(PipelineStageMsg{Stage: "download-idle", VideoID: v.ID})
 				if ctx.Err() != nil {
 					return
 				}
 				sess.MarkFailed(v.ID, err.Error())
 				_ = state.SaveSession(sess)
-				ch <- PipelineVideoCompleteMsg{VideoID: v.ID, VideoName: v.OriginalFileName, Err: err}
+				emit(PipelineVideoCompleteMsg{VideoID: v.ID, VideoName: v.OriginalFileName, Err: err})
 				continue
 			}
 
@@ -262,34 +288,31 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 				isHEVC, err := engine.IsHEVC(ctx, p.binaries.FFmpegPath, origPath)
 				if err == nil && isHEVC {
 					item.Cleanup()
+					emit(PipelineStageMsg{Stage: "download-idle", VideoID: v.ID})
 					sess.MarkSkipped(v.ID, "already HEVC")
 					_ = state.SaveSession(sess)
-					ch <- PipelineVideoCompleteMsg{VideoID: v.ID, VideoName: v.OriginalFileName, OriginalSize: v.GetSize(), Skipped: true, SkipReason: "already HEVC"}
+					emit(PipelineVideoCompleteMsg{VideoID: v.ID, VideoName: v.OriginalFileName, OriginalSize: v.GetSize(), Skipped: true, SkipReason: "already HEVC"})
 					continue
 				}
 			}
 
 			select {
 			case transcodeQueue <- item:
+				emit(PipelineStageMsg{Stage: "download-idle", VideoID: v.ID})
 			case <-ctx.Done():
 				item.Cleanup()
+				emit(PipelineStageMsg{Stage: "download-idle", VideoID: v.ID})
 				return
 			}
 		}
 	}()
 
 	// Worker 2: Transcoder(s)
-	numEncoders := p.cfg.ConcurrentEncoders
-	if numEncoders <= 0 {
-		numEncoders = 1
-	} else if numEncoders > 2 {
-		numEncoders = 2
-	}
-
 	var transcodeWg sync.WaitGroup
 	for w := 0; w < numEncoders; w++ {
+		workerID := w + 1
 		transcodeWg.Add(1)
-		go func() {
+		go func(wID int) {
 			defer transcodeWg.Done()
 			for item := range transcodeQueue {
 				if ctx.Err() != nil {
@@ -298,13 +321,19 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 				}
 
 				resStr := fmt.Sprintf("%dx%d", item.Asset.ExifInfo.ExifImageWidth, item.Asset.ExifInfo.ExifImageHeight)
-				ch <- PipelineVideoStartMsg{
+				emit(PipelineVideoStartMsg{
+					WorkerID:   wID,
 					VideoID:    item.Asset.ID,
 					VideoName:  item.Asset.OriginalFileName,
 					Size:       item.Asset.GetSize(),
 					Resolution: resStr,
-				}
-				ch <- PipelineStageMsg{Stage: "transcoding", VideoName: item.Asset.OriginalFileName}
+				})
+				emit(PipelineStageMsg{
+					WorkerID:  wID,
+					VideoID:   item.Asset.ID,
+					Stage:     "transcoding",
+					VideoName: item.Asset.OriginalFileName,
+				})
 
 				transcodedPath := filepath.Join(p.tempDir, fmt.Sprintf("opt_%s.mp4", item.Asset.ID))
 				item.TranscodedPath = transcodedPath
@@ -326,7 +355,11 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 
 				onProgress := func(prog engine.Progress) {
 					select {
-					case ch <- PipelineProgressMsg{VideoID: item.Asset.ID, EngineProgress: prog}:
+					case ch <- PipelineProgressMsg{
+						WorkerID:       wID,
+						VideoID:        item.Asset.ID,
+						EngineProgress: prog,
+					}:
 					default:
 					}
 				}
@@ -340,11 +373,21 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 					logger.Error("Transcode failed for %s: %v", item.Asset.OriginalFileName, err)
 					sess.MarkFailed(item.Asset.ID, err.Error())
 					_ = state.SaveSession(sess)
-					ch <- PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: fmt.Errorf("transcode failed: %w", err)}
+					emit(PipelineVideoCompleteMsg{
+						WorkerID:  wID,
+						VideoID:   item.Asset.ID,
+						VideoName: item.Asset.OriginalFileName,
+						Err:       fmt.Errorf("transcode failed: %w", err),
+					})
 					continue
 				}
 
-				ch <- PipelineStageMsg{Stage: "metadata", VideoName: item.Asset.OriginalFileName}
+				emit(PipelineStageMsg{
+					WorkerID:  wID,
+					VideoID:   item.Asset.ID,
+					Stage:     "metadata",
+					VideoName: item.Asset.OriginalFileName,
+				})
 
 				if err := engine.CopyMetadata(ctx, p.binaries.ExifToolPath, item.OrigPath, transcodedPath); err != nil {
 					item.Cleanup()
@@ -355,8 +398,20 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 					logger.Error("Metadata copy failed for %s: %v", item.Asset.OriginalFileName, err)
 					sess.MarkFailed(item.Asset.ID, err.Error())
 					_ = state.SaveSession(sess)
-					ch <- PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: fmt.Errorf("metadata copy failed: %w", err)}
+					emit(PipelineVideoCompleteMsg{
+						WorkerID:  wID,
+						VideoID:   item.Asset.ID,
+						VideoName: item.Asset.OriginalFileName,
+						Err:       fmt.Errorf("metadata copy failed: %w", err),
+					})
 					continue
+				}
+
+				// Clean up the local original file right away to free disk space immediately,
+				// since only transcodedPath is needed for upload.
+				if item.OrigPath != "" {
+					_ = os.Remove(item.OrigPath)
+					item.OrigPath = ""
 				}
 
 				optStat, err := os.Stat(transcodedPath)
@@ -365,7 +420,12 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 					logger.Error("Failed to stat transcoded file for %s: %v", item.Asset.OriginalFileName, err)
 					sess.MarkFailed(item.Asset.ID, err.Error())
 					_ = state.SaveSession(sess)
-					ch <- PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: fmt.Errorf("failed to stat transcoded file: %w", err)}
+					emit(PipelineVideoCompleteMsg{
+						WorkerID:  wID,
+						VideoID:   item.Asset.ID,
+						VideoName: item.Asset.OriginalFileName,
+						Err:       fmt.Errorf("failed to stat transcoded file: %w", err),
+					})
 					continue
 				}
 
@@ -374,13 +434,27 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 					logger.Info("Size guard: skipped %s (transcoded %d >= original %d bytes)", item.Asset.OriginalFileName, optStat.Size(), item.Asset.GetSize())
 					sess.MarkSkipped(item.Asset.ID, "transcoded file larger")
 					_ = state.SaveSession(sess)
-					ch <- PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, OriginalSize: item.Asset.GetSize(), Skipped: true, SkipReason: "transcoded file larger"}
+					emit(PipelineVideoCompleteMsg{
+						WorkerID:     wID,
+						VideoID:      item.Asset.ID,
+						VideoName:    item.Asset.OriginalFileName,
+						OriginalSize: item.Asset.GetSize(),
+						Skipped:      true,
+						SkipReason:   "transcoded file larger",
+					})
 					continue
 				}
 
 				item.OptimizedSize = optStat.Size()
 				item.SavedBytes = item.Asset.GetSize() - optStat.Size()
 				logger.Debug("Transcode success for %s: saved %d bytes", item.Asset.OriginalFileName, item.SavedBytes)
+
+				emit(PipelineStageMsg{
+					WorkerID:  wID,
+					VideoID:   item.Asset.ID,
+					Stage:     "idle",
+					VideoName: "",
+				})
 
 				select {
 				case uploadQueue <- item:
@@ -389,7 +463,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 					continue
 				}
 			}
-		}()
+		}(workerID)
 	}
 
 	go func() {
@@ -404,7 +478,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 			continue
 		}
 
-		ch <- PipelineStageMsg{Stage: "uploading", VideoName: item.Asset.OriginalFileName}
+		emit(PipelineStageMsg{Stage: "uploading", VideoName: item.Asset.OriginalFileName, VideoID: item.Asset.ID})
 
 		newAsset, err := p.client.UploadReplacementAssetWithContext(ctx, item.TranscodedPath, item.Asset)
 		if err != nil {
@@ -416,7 +490,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 			logger.Error("Upload failed for %s: %v", item.Asset.OriginalFileName, err)
 			sess.MarkFailed(item.Asset.ID, fmt.Sprintf("upload failed: %v", err))
 			_ = state.SaveSession(sess)
-			ch <- PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: fmt.Errorf("upload failed: %w", err)}
+			emit(PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: fmt.Errorf("upload failed: %w", err)})
 			continue
 		}
 
@@ -429,7 +503,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 			logger.Error("Safety guard triggered for %s: %s; aborting deletion of original", item.Asset.OriginalFileName, errMsg)
 			sess.MarkFailed(item.Asset.ID, errMsg)
 			_ = state.SaveSession(sess)
-			ch <- PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: errors.New(errMsg)}
+			emit(PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: errors.New(errMsg)})
 			continue
 		}
 
@@ -450,14 +524,14 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 			_ = p.client.AddAssetsToAlbum(albumID, []string{newAsset.ID})
 		}
 
-		ch <- PipelineStageMsg{Stage: "finalizing", VideoName: item.Asset.OriginalFileName}
+		emit(PipelineStageMsg{Stage: "finalizing", VideoName: item.Asset.OriginalFileName, VideoID: item.Asset.ID})
 
 		if err := p.client.DeleteAssetWithContext(ctx, item.Asset.ID); err != nil {
 			item.Cleanup()
 			logger.Error("Failed to delete original asset %s (%s): %v", item.Asset.OriginalFileName, item.Asset.ID, err)
 			sess.MarkFailed(item.Asset.ID, fmt.Sprintf("failed to delete original asset: %v", err))
 			_ = state.SaveSession(sess)
-			ch <- PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: fmt.Errorf("failed to delete original asset: %w", err)}
+			emit(PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: fmt.Errorf("failed to delete original asset: %w", err)})
 			continue
 		}
 
@@ -467,24 +541,24 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		_ = state.SaveSession(sess)
 
 		logger.Info("Completed %s (Saved %.2f MB)", item.Asset.OriginalFileName, float64(item.SavedBytes)/1024/1024)
-		ch <- PipelineVideoCompleteMsg{
+		emit(PipelineVideoCompleteMsg{
 			VideoID:       item.Asset.ID,
 			VideoName:     item.Asset.OriginalFileName,
 			OriginalSize:  item.Asset.GetSize(),
 			OptimizedSize: item.OptimizedSize,
 			SavedBytes:    item.SavedBytes,
-		}
+		})
 	}
 
 	// Guarantee all workers have completely drained and terminated before proceeding
 	downloadWg.Wait()
 	transcodeWg.Wait()
 
-	ch <- PipelineStageMsg{Stage: "idle", VideoName: ""}
+	emit(PipelineStageMsg{Stage: "idle", VideoName: ""})
 
 	if ctx.Err() != nil {
 		_ = state.SaveSession(sess)
-		ch <- PipelineDoneMsg{TotalSavedBytes: sess.GetTotalSavedBytes(), Paused: true}
+		emit(PipelineDoneMsg{TotalSavedBytes: sess.GetTotalSavedBytes(), Paused: true})
 		return
 	}
 
@@ -492,7 +566,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		_ = state.ClearSession()
 	}
 
-	ch <- PipelineDoneMsg{TotalSavedBytes: sess.GetTotalSavedBytes()}
+	emit(PipelineDoneMsg{TotalSavedBytes: sess.GetTotalSavedBytes()})
 }
 
 // RunDryRun performs a read-only pre-flight check on the selected videos.
@@ -503,11 +577,25 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan<- interface{}) {
 	defer close(ch)
 
+	emit := func(msg interface{}) bool {
+		select {
+		case ch <- msg:
+			return true
+		case <-ctx.Done():
+			select {
+			case ch <- msg:
+				return true
+			default:
+				return false
+			}
+		}
+	}
+
 	p.CleanDryRunAlbum()
 
 	total := len(videos)
 	if total == 0 {
-		ch <- DryRunCompleteMsg{}
+		emit(DryRunCompleteMsg{})
 		return
 	}
 
@@ -581,7 +669,7 @@ func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan
 			} else {
 				toProcess = append(toProcess, res.asset)
 			}
-			ch <- DryRunVideoMsg{
+			emit(DryRunVideoMsg{
 				VideoID:    res.asset.ID,
 				VideoName:  res.asset.OriginalFileName,
 				IsHEVC:     res.details.IsHEVC,
@@ -590,7 +678,7 @@ func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan
 				Probed:     probed,
 				Total:      total,
 				Err:        res.err,
-			}
+			})
 		}
 	}
 
@@ -616,17 +704,17 @@ func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan
 		}
 	}
 
-	ch <- DryRunCompleteMsg{
+	emit(DryRunCompleteMsg{
 		ToProcess:       toProcess,
 		HEVCSkipped:     hevcSkipped,
 		ProbeFailed:     probeFailed,
 		VideoDetails:    videoDetails,
 		DryRunAlbumName: albumName,
 		DryRunAlbumID:   albumID,
-	}
+	})
 }
 
-func (p *Pipeline) filterHEVCParallel(ctx context.Context, videos []immich.Asset, sess *state.Session, ch chan<- interface{}) []immich.Asset {
+func (p *Pipeline) filterHEVCParallel(ctx context.Context, videos []immich.Asset, sess *state.Session, emit func(interface{}) bool) []immich.Asset {
 	numWorkers := 8
 	if len(videos) < numWorkers {
 		numWorkers = len(videos)
@@ -673,18 +761,24 @@ func (p *Pipeline) filterHEVCParallel(ctx context.Context, videos []immich.Asset
 
 	var toProcess []immich.Asset
 	for i := 0; i < len(videos); i++ {
-		res := <-results
-		if res.isHEVC {
-			sess.MarkSkipped(res.asset.ID, "already HEVC")
-			ch <- PipelineVideoCompleteMsg{
-				VideoID:      res.asset.ID,
-				VideoName:    res.asset.OriginalFileName,
-				OriginalSize: res.asset.GetSize(),
-				Skipped:      true,
-				SkipReason:   "already HEVC",
+		select {
+		case <-ctx.Done():
+			return toProcess
+		case res := <-results:
+			if res.isHEVC {
+				sess.MarkSkipped(res.asset.ID, "already HEVC")
+				if !emit(PipelineVideoCompleteMsg{
+					VideoID:      res.asset.ID,
+					VideoName:    res.asset.OriginalFileName,
+					OriginalSize: res.asset.GetSize(),
+					Skipped:      true,
+					SkipReason:   "already HEVC",
+				}) {
+					return toProcess
+				}
+			} else {
+				toProcess = append(toProcess, res.asset)
 			}
-		} else {
-			toProcess = append(toProcess, res.asset)
 		}
 	}
 	_ = state.SaveSession(sess)

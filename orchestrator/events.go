@@ -11,6 +11,7 @@ type PipelineStartMsg struct {
 }
 
 type PipelineVideoStartMsg struct {
+	WorkerID   int
 	VideoID    string
 	VideoName  string
 	Size       int64
@@ -18,16 +19,20 @@ type PipelineVideoStartMsg struct {
 }
 
 type PipelineStageMsg struct {
-	Stage     string // "downloading", "transcoding", "uploading", "probing", "idle"
+	WorkerID  int
+	VideoID   string
+	Stage     string // "downloading", "download-idle", "transcoding", "metadata", "uploading", "finalizing", "probing", "idle"
 	VideoName string
 }
 
 type PipelineProgressMsg struct {
+	WorkerID       int
 	VideoID        string
 	EngineProgress engine.Progress
 }
 
 type PipelineVideoCompleteMsg struct {
+	WorkerID      int
 	VideoID       string
 	VideoName     string
 	OriginalSize  int64

@@ -770,42 +770,90 @@ func (m *AppModel) viewDashboard() string {
 		b.WriteString(fmt.Sprintf("  🔎 %s: %s\n", styles.Value.Render("Probing"), m.probingStatus))
 	}
 
-	tName := m.currentTranscodeName
-	if tName == "" && m.currentMetadataName == "" && m.currentUploadName == "" && m.currentFinalizeName == "" {
-		tName = m.currentVideoName
+	numEncoders := m.cfg.ConcurrentEncoders
+	if numEncoders <= 0 {
+		numEncoders = 1
+	} else if numEncoders > 2 {
+		numEncoders = 2
 	}
-	if tName != "" {
-		b.WriteString(fmt.Sprintf("  ⚙ Transcoding: %s", styles.Value.Render(tName)))
-		if m.currentVideoOriginalSize > 0 || m.currentVideoResolution != "" {
-			b.WriteString(fmt.Sprintf("  (%.1f MB, %s)", float64(m.currentVideoOriginalSize)/(1024*1024), m.currentVideoResolution))
-		}
-		b.WriteString("\n")
-		var parts []string
-		if m.currentTranscodeTime != "" {
-			tStr := m.currentTranscodeTime
-			if idx := strings.IndexAny(tStr, ".,"); idx != -1 {
-				tStr = tStr[:idx]
+
+	if numEncoders > 1 {
+		for wID := 1; wID <= numEncoders; wID++ {
+			w := m.getWorker(wID)
+			if w != nil && w.Stage == "transcoding" && w.VideoName != "" {
+				b.WriteString(fmt.Sprintf("  ⚙ Transcoder %d: %s", wID, styles.Value.Render(w.VideoName)))
+				if w.OriginalSize > 0 || w.Resolution != "" {
+					b.WriteString(fmt.Sprintf("  (%.1f MB, %s)", float64(w.OriginalSize)/(1024*1024), w.Resolution))
+				}
+				b.WriteString("\n")
+				var parts []string
+				if w.Time != "" {
+					tStr := w.Time
+					if idx := strings.IndexAny(tStr, ".,"); idx != -1 {
+						tStr = tStr[:idx]
+					}
+					parts = append(parts, fmt.Sprintf("Time: %s", styles.Value.Render(tStr)))
+				}
+				if w.Speed != "" {
+					parts = append(parts, fmt.Sprintf("Speed: %s", styles.Value.Render(w.Speed)))
+				}
+				if w.FPS > 0 {
+					parts = append(parts, fmt.Sprintf("FPS: %.1f", w.FPS))
+				}
+				pulse := m.renderEncodingPulseForFrame(w.PulseFrame)
+				if len(parts) > 0 {
+					b.WriteString(fmt.Sprintf("                   %s  %s\n", strings.Join(parts, "  |  "), pulse))
+				} else {
+					b.WriteString(fmt.Sprintf("                   %s\n", pulse))
+				}
+			} else if w != nil && w.Stage == "metadata" && w.VideoName != "" {
+				b.WriteString(fmt.Sprintf("  🏷️ Metadata %d:   %s  %s\n",
+					wID,
+					styles.Value.Render(w.VideoName),
+					styles.Subtext.Render("(copying GPS, timestamps & tags via ExifTool...)"),
+				))
+			} else {
+				b.WriteString(fmt.Sprintf("  ⚙ Transcoder %d: idle\n", wID))
 			}
-			parts = append(parts, fmt.Sprintf("Time: %s", styles.Value.Render(tStr)))
 		}
-		if m.speed != "" {
-			parts = append(parts, fmt.Sprintf("Speed: %s", styles.Value.Render(m.speed)))
-		}
-		if m.fps > 0 {
-			parts = append(parts, fmt.Sprintf("FPS: %.1f", m.fps))
-		}
-		if len(parts) > 0 {
-			b.WriteString(fmt.Sprintf("                 %s  %s\n", strings.Join(parts, "  |  "), m.renderEncodingPulse()))
-		} else {
-			b.WriteString(fmt.Sprintf("                 %s\n", m.renderEncodingPulse()))
-		}
-	} else if m.currentMetadataName != "" {
-		b.WriteString(fmt.Sprintf("  🏷️ Metadata:    %s  %s\n",
-			styles.Value.Render(m.currentMetadataName),
-			styles.Subtext.Render("(copying GPS, timestamps & tags via ExifTool...)"),
-		))
 	} else {
-		b.WriteString("  ⚙ Transcoding: idle\n")
+		tName := m.currentTranscodeName
+		if tName == "" && m.currentMetadataName == "" && m.currentUploadName == "" && m.currentFinalizeName == "" {
+			tName = m.currentVideoName
+		}
+		if tName != "" {
+			b.WriteString(fmt.Sprintf("  ⚙ Transcoding: %s", styles.Value.Render(tName)))
+			if m.currentVideoOriginalSize > 0 || m.currentVideoResolution != "" {
+				b.WriteString(fmt.Sprintf("  (%.1f MB, %s)", float64(m.currentVideoOriginalSize)/(1024*1024), m.currentVideoResolution))
+			}
+			b.WriteString("\n")
+			var parts []string
+			if m.currentTranscodeTime != "" {
+				tStr := m.currentTranscodeTime
+				if idx := strings.IndexAny(tStr, ".,"); idx != -1 {
+					tStr = tStr[:idx]
+				}
+				parts = append(parts, fmt.Sprintf("Time: %s", styles.Value.Render(tStr)))
+			}
+			if m.speed != "" {
+				parts = append(parts, fmt.Sprintf("Speed: %s", styles.Value.Render(m.speed)))
+			}
+			if m.fps > 0 {
+				parts = append(parts, fmt.Sprintf("FPS: %.1f", m.fps))
+			}
+			if len(parts) > 0 {
+				b.WriteString(fmt.Sprintf("                 %s  %s\n", strings.Join(parts, "  |  "), m.renderEncodingPulse()))
+			} else {
+				b.WriteString(fmt.Sprintf("                 %s\n", m.renderEncodingPulse()))
+			}
+		} else if m.currentMetadataName != "" {
+			b.WriteString(fmt.Sprintf("  🏷️ Metadata:    %s  %s\n",
+				styles.Value.Render(m.currentMetadataName),
+				styles.Subtext.Render("(copying GPS, timestamps & tags via ExifTool...)"),
+			))
+		} else {
+			b.WriteString("  ⚙ Transcoding: idle\n")
+		}
 	}
 
 	if m.cfg.EnablePrefetch {
@@ -1125,8 +1173,8 @@ func estimateSavings(orig int64, detail engine.ProbeDetails, targetResSetting st
 	return ratio, saved
 }
 
-// renderEncodingPulse returns an actively animated and color-pulsing encoding status indicator.
-func (m *AppModel) renderEncodingPulse() string {
+// renderEncodingPulseForFrame returns an actively animated and color-pulsing encoding status indicator for a specific frame index.
+func (m *AppModel) renderEncodingPulseForFrame(frame int) string {
 	spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 	pulseColors := []lipgloss.Color{
 		lipgloss.Color("#22C55E"), // Green
@@ -1135,10 +1183,15 @@ func (m *AppModel) renderEncodingPulse() string {
 		lipgloss.Color("#38BDF8"), // Sky blue
 		lipgloss.Color("#0EA5E9"), // Light blue
 	}
-	frameIdx := m.pulseFrame % len(spinnerFrames)
-	colorIdx := m.pulseFrame % len(pulseColors)
+	frameIdx := frame % len(spinnerFrames)
+	colorIdx := frame % len(pulseColors)
 
 	icon := spinnerFrames[frameIdx]
 	style := lipgloss.NewStyle().Foreground(pulseColors[colorIdx]).Bold(true)
 	return style.Render(fmt.Sprintf("%s Encoding", icon))
+}
+
+// renderEncodingPulse returns an actively animated and color-pulsing encoding status indicator.
+func (m *AppModel) renderEncodingPulse() string {
+	return m.renderEncodingPulseForFrame(m.pulseFrame)
 }

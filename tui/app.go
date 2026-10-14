@@ -182,6 +182,23 @@ type AppModel struct {
 	dryRunVideos      []immich.Asset // the selection that triggered the dry run
 	dryRunAlbumName   string
 	dryRunAlbumID     string
+
+	// Multi-Transcoder tracking
+	transcoderWorkers map[int]*TranscoderWorkerStatus
+}
+
+// TranscoderWorkerStatus holds the live transcoding status of a dedicated worker slot.
+type TranscoderWorkerStatus struct {
+	WorkerID     int
+	VideoID      string
+	VideoName    string
+	OriginalSize int64
+	Resolution   string
+	Stage        string // "transcoding", "metadata", "idle"
+	Time         string
+	Speed        string
+	FPS          float64
+	PulseFrame   int
 }
 
 // transcodedVideo holds details for a successfully transcoded and replaced video.
@@ -204,6 +221,38 @@ type failureEntry struct {
 	VideoID string
 	Name    string
 	Err     string
+}
+
+func (m *AppModel) getWorker(workerID int) *TranscoderWorkerStatus {
+	if workerID <= 0 {
+		workerID = 1
+	}
+	if m.transcoderWorkers == nil {
+		m.transcoderWorkers = make(map[int]*TranscoderWorkerStatus)
+	}
+	w, ok := m.transcoderWorkers[workerID]
+	if !ok {
+		w = &TranscoderWorkerStatus{
+			WorkerID: workerID,
+			Stage:    "idle",
+		}
+		m.transcoderWorkers[workerID] = w
+	}
+	return w
+}
+
+func (m *AppModel) findWorker(workerID int, videoID string) *TranscoderWorkerStatus {
+	if workerID > 0 {
+		return m.getWorker(workerID)
+	}
+	if videoID != "" && m.transcoderWorkers != nil {
+		for _, w := range m.transcoderWorkers {
+			if w.VideoID == videoID {
+				return w
+			}
+		}
+	}
+	return m.getWorker(1)
 }
 
 func NewAppModel(cfg *config.Config, pipeline *orchestrator.Pipeline, opts ...Option) *AppModel {
@@ -286,8 +335,9 @@ func NewAppModel(cfg *config.Config, pipeline *orchestrator.Pipeline, opts ...Op
 		table:          t,
 		searchInput:    si,
 		selectedVideos: make(map[string]bool),
-		resolutions:    []string{"Original", "4K", "1440p", "1080p", "720p"},
-		overallProgress: op,
+		resolutions:       []string{"Original", "4K", "1440p", "1080p", "720p"},
+		overallProgress:   op,
+		transcoderWorkers: make(map[int]*TranscoderWorkerStatus),
 	}
 
 	for _, opt := range opts {
@@ -405,28 +455,49 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case orchestrator.PipelineStartMsg:
 		m.totalVideos = msg.Total
 		m.processedVideos = 0
+		encCount := m.cfg.ConcurrentEncoders
+		if encCount <= 0 {
+			encCount = 1
+		} else if encCount > 2 {
+			encCount = 2
+		}
+		m.transcoderWorkers = make(map[int]*TranscoderWorkerStatus)
+		for i := 1; i <= encCount; i++ {
+			m.transcoderWorkers[i] = &TranscoderWorkerStatus{
+				WorkerID: i,
+				Stage:    "idle",
+			}
+		}
 		return m, waitForPipeline(m.pipelineChan)
 
 	case orchestrator.PipelineVideoStartMsg:
-		m.currentVideoID = msg.VideoID
-		m.currentVideoOriginalSize = msg.Size
+		w := m.findWorker(msg.WorkerID, msg.VideoID)
+		w.VideoID = msg.VideoID
+		w.OriginalSize = msg.Size
+		w.Resolution = msg.Resolution
+		w.Stage = "transcoding"
+		w.Time = ""
+		w.Speed = ""
+		w.FPS = 0
 		if msg.VideoName != "" {
-			m.currentVideoName = msg.VideoName
-			m.currentTranscodeName = msg.VideoName
-		}
-		if msg.Resolution != "" {
-			m.currentVideoResolution = msg.Resolution
-		}
-		if m.currentVideoName == "" {
+			w.VideoName = msg.VideoName
+		} else {
 			for _, v := range m.videos {
 				if v.ID == msg.VideoID {
-					m.currentVideoName = v.OriginalFileName
-					m.currentTranscodeName = v.OriginalFileName
-					m.currentVideoResolution = fmt.Sprintf("%dx%d", v.ExifInfo.ExifImageWidth, v.ExifInfo.ExifImageHeight)
+					w.VideoName = v.OriginalFileName
+					if w.Resolution == "" {
+						w.Resolution = fmt.Sprintf("%dx%d", v.ExifInfo.ExifImageWidth, v.ExifInfo.ExifImageHeight)
+					}
 					break
 				}
 			}
 		}
+
+		m.currentVideoID = msg.VideoID
+		m.currentVideoOriginalSize = msg.Size
+		m.currentVideoName = w.VideoName
+		m.currentTranscodeName = w.VideoName
+		m.currentVideoResolution = w.Resolution
 		m.addLog(fmt.Sprintf("%s - Transcoding %s", time.Now().Format("15:04:05"), m.currentVideoName))
 		return m, waitForPipeline(m.pipelineChan)
 
@@ -440,7 +511,16 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "downloading":
 			m.probingStatus = ""
 			m.currentDownloadName = msg.VideoName
+		case "download-idle":
+			if msg.VideoName == "" || m.currentDownloadName == msg.VideoName {
+				m.currentDownloadName = ""
+			}
 		case "transcoding":
+			w := m.findWorker(msg.WorkerID, msg.VideoID)
+			w.Stage = "transcoding"
+			if msg.VideoName != "" {
+				w.VideoName = msg.VideoName
+			}
 			m.currentTranscodeName = msg.VideoName
 			m.currentMetadataName = ""
 			m.currentFinalizeName = ""
@@ -449,6 +529,14 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.currentDownloadName = ""
 			}
 		case "metadata":
+			w := m.findWorker(msg.WorkerID, msg.VideoID)
+			w.Stage = "metadata"
+			if msg.VideoName != "" {
+				w.VideoName = msg.VideoName
+			}
+			w.Speed = ""
+			w.FPS = 0
+			w.Time = ""
 			m.currentMetadataName = msg.VideoName
 			m.currentTranscodeName = ""
 			m.speed = ""
@@ -467,20 +555,45 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentFinalizeName = msg.VideoName
 			m.currentUploadName = ""
 		case "idle":
-			m.currentDownloadName = ""
-			m.currentTranscodeName = ""
-			m.currentMetadataName = ""
-			m.currentUploadName = ""
-			m.currentFinalizeName = ""
-			m.probingStatus = ""
-			m.speed = ""
-			m.fps = 0
-			m.currentTranscodeTime = ""
+			if msg.WorkerID > 0 {
+				w := m.getWorker(msg.WorkerID)
+				w.Stage = "idle"
+				w.VideoID = ""
+				w.VideoName = ""
+				w.Speed = ""
+				w.FPS = 0
+				w.Time = ""
+			} else {
+				m.currentDownloadName = ""
+				m.currentTranscodeName = ""
+				m.currentMetadataName = ""
+				m.currentUploadName = ""
+				m.currentFinalizeName = ""
+				m.probingStatus = ""
+				m.speed = ""
+				m.fps = 0
+				m.currentTranscodeTime = ""
+				for _, w := range m.transcoderWorkers {
+					w.Stage = "idle"
+					w.VideoID = ""
+					w.VideoName = ""
+					w.Speed = ""
+					w.FPS = 0
+					w.Time = ""
+				}
+			}
 		}
 		return m, waitForPipeline(m.pipelineChan)
 
 	case orchestrator.PipelineProgressMsg:
 		m.pulseFrame++
+		w := m.findWorker(msg.WorkerID, msg.VideoID)
+		w.PulseFrame++
+		w.FPS = msg.EngineProgress.FPS
+		w.Speed = msg.EngineProgress.Speed
+		if msg.EngineProgress.Time != "" {
+			w.Time = msg.EngineProgress.Time
+		}
 		m.fps = msg.EngineProgress.FPS
 		m.speed = msg.EngineProgress.Speed
 		if msg.EngineProgress.Time != "" {
@@ -491,6 +604,11 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pulseTickMsg:
 		if m.state == ViewDashboard {
 			m.pulseFrame++
+			for _, w := range m.transcoderWorkers {
+				if w.Stage == "transcoding" {
+					w.PulseFrame++
+				}
+			}
 			return m, tickPulseCmd()
 		}
 		return m, nil
@@ -510,6 +628,16 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.speed = ""
 		m.fps = 0
 		m.currentTranscodeTime = ""
+
+		w := m.findWorker(msg.WorkerID, msg.VideoID)
+		if w != nil {
+			w.Stage = "idle"
+			w.VideoID = ""
+			w.VideoName = ""
+			w.Speed = ""
+			w.FPS = 0
+			w.Time = ""
+		}
 
 		timeStr := time.Now().Format("15:04:05")
 		completedName := msg.VideoName
