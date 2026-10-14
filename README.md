@@ -4,32 +4,14 @@ A terminal client for [Immich](https://immich.app/) that reduces storage usage b
 
 ---
 
-## Features
+## ✨ Features
 
-- **Hardware Acceleration:**
-  - **macOS:** Apple Silicon & Intel VideoToolbox (`hevc_videotoolbox`).
-  - **Linux:** NVIDIA NVENC (`hevc_nvenc`), Intel VA-API (`hevc_vaapi`), or CPU fallback (`libx265`).
-  - **Windows:** NVIDIA NVENC (`hevc_nvenc`) or CPU fallback (`libx265`).
-- **Pipelined Execution:**
-  - Concurrent download prefetching, transcoding, and background uploading.
-  - Strictly bounded disk usage: local storage holds at most 2 video files simultaneously.
-- **Streaming Uploads:**
-  - Streams multipart video uploads directly from disk using `io.MultiReader` with exact `Content-Length`, avoiding memory buffers for large files.
-- **Remote Codec Probing:**
-  - Checks remote video headers using HTTP range requests to detect and skip already-HEVC videos without downloading them.
-- **Metadata & State Preservation:**
-  - Uses ExifTool to replicate camera make/model, original shooting dates, and GPS coordinates.
-  - Retains Immich database attributes including `fileCreatedAt`, `fileModifiedAt`, `deviceAssetId`, and original filenames.
-  - Automatically preserves album memberships: re-adds replacement videos to every user album the original belonged to.
-  - Preserves favorite status (`isFavorite`).
-- **Pause & Resume:**
-  - Press `q` to pause at any point. Completed videos and pending items are saved atomically to `session.json` for later resume.
-- **Size Guard:**
-  - Verifies that the transcoded file is smaller than the original. If a re-encoded file is larger, replacement is skipped and the original is kept intact.
-- **Adjustable Quality Control:**
-  - 1–10 quality slider ranging from High Compression (~70–80% savings) to Visually Lossless (~15–20% savings). Maps automatically to standard CRF and Apple VideoToolbox quality scales.
-- **Dry Run Estimation:**
-  - Pre-flight preview inspecting video codecs and providing realistic, conservative storage savings estimates before processing.
+- **Hardware Acceleration:** Apple Silicon & Intel (`hevc_videotoolbox`), NVIDIA (`hevc_nvenc`), and Intel Linux (`hevc_vaapi`), with CPU fallback (`libx265`).
+- **Full Metadata & State Preservation:** Preserves camera make/model, original shooting dates, GPS coordinates, original filenames, user album memberships, and favorite status.
+- **Smart Filtering & Remote Probing:** Filter scans by bitrate density (`MB/min`) or total file size. Automatically detects and skips existing HEVC videos without downloading them.
+- **Dry Run & Size Guard:** Preview estimated space savings before encoding. If a re-encoded video ends up larger than the original, replacement is skipped automatically.
+- **Adjustable Quality:** 1–10 quality slider ranging from High Compression (~70–80% savings) to Visually Lossless (~15–20% savings).
+- **Low-Footprint & Resumable:** Downloads, transcodes, and streams uploads in parallel while keeping at most 2 temporary videos on disk. Pause anytime and resume later where you left off.
 
 ---
 
@@ -60,7 +42,7 @@ tar -xzf immich-video-optimizer_darwin_arm64.tar.gz
 > ```bash
 > xattr -d com.apple.quarantine ./immich-video-optimizer
 > ```
-> Or right-click the binary in Finder $\to$ choose **Open** $\to$ click **Open Anyway**.
+> Or right-click the binary in Finder → choose **Open** → click **Open Anyway**.
 
 #### Windows Quick Start:
 1. Install prerequisites using **Winget**:
@@ -84,162 +66,41 @@ Requirements: **Go 1.24+**, Git, `ffmpeg`, and `exiftool` in your `PATH`:
 - **Windows:** `winget install Gyan.FFmpeg PhilHarvey.ExifTool`
 
 ```bash
-git clone https://github.com/dragosmiron/immich-video-optimizer.git
+git clone [https://github.com/dragosmiron/immich-video-optimizer.git](https://github.com/dragosmiron/immich-video-optimizer.git)
 cd immich-video-optimizer
 go build -o immich-video-optimizer .
 ./immich-video-optimizer
 ```
 
-### CLI Flags
+---
 
-| Flag | Shorthand | Description |
-|---|---|---|
-| `--config` | `-c` | Open interactive terminal configuration form to edit server URL and API key |
+## 🚀 Usage
+
+Launch `./immich-video-optimizer` (pass `--config` or `-c` anytime to update your server URL or API key). All keyboard shortcuts are shown at the bottom of the terminal UI.
+
+1. **Connect:** Enter your Immich URL (e.g. `http://192.168.1.100:2283`) and **API Key** (created in Immich under *Account Settings → API Keys*). Saved to `~/.config/immich-video-optimizer/config.yaml`.
+2. **Scan & Tune:** Review videos exceeding your threshold (defaults to `100 MB/min` to catch high-bitrate clips). Open **Settings** to change target resolution, quality (1–10), or threshold mode, or run a **Dry Run** to preview estimated savings.
+3. **Optimize:** Start the batch and monitor progress in real time. You can safely pause at any time and resume the session later.
 
 ---
 
-## 🚀 Usage & Workflow
+## 🗂️ Tracking Albums & Safety
 
-**Connection Setup** ➔ **Library Scan** ➔ **Selection & Settings** ➔ **Transcode Pipeline** ➔ **Summary**
+### Zero-Data-Loss Replacement
+An original video on Immich is deleted **only after** the optimized replacement has finished uploading, been re-added to all your original albums, and had its favorite status restored. If any step fails, deletion is aborted and your original video remains untouched.
 
-### 1. Connection Setup
-Enter your Immich server URL (e.g. `http://192.168.1.100:2283` or `https://immich.example.com`) and your **API Key** (created in Immich under *Account Settings $\to$ API Keys*). Credentials are saved to `~/.config/immich-video-optimizer/config.yaml`.
+### How Tracking Albums Work
+To help you verify your videos in Immich, the app creates a temporary tracking album on your server:
+- **Dry Run:** `Immich-Optimizer-DryRun-<YYYYMMDD-HHMMSS>` (lets you preview candidate videos in Immich before encoding).
+- **In Progress:** `Immich-Optimizer-InProgress-<YYYYMMDD-HHMMSS>` (updated live as optimized videos replace originals).
+- **Completed:** `Immich-Optimizer-Completed-<YYYYMMDD-HHMMSS>` (renamed once the batch finishes).
 
-### 2. Video Browser & Selection
-Review discovered videos exceeding your configured threshold (`MB/min`, `Total MB`, or all videos if `Disabled`):
-- **`[Space]`**: Toggle selection for highlighted video.
-- **`[a]`**: Select all visible videos.
-- **`[n]`**: Deselect all videos.
-- **`[/]`**: Filter table by filename in real-time.
-- **`[d]`**: Dry Run preview (probe codecs and view estimated savings).
-- **`[Enter]`**: Start optimization batch.
-- **`[s]`**: Open Settings menu.
-- **`[r]`**: Rescan library.
-
-### 3. Settings & Preferences (`s`)
-- **Target Resolution:** `Original` (default), `4K`, `1440p`, `1080p`, or `720p` (never upscales).
-- **Video Quality:** 1–10 quality slider (default: `[6] Balanced`), balancing space savings with visual fidelity:
-  - **Levels 1–3 (High Compression):** CRF 32–30, VideoToolbox 50–56. ~70–80% space savings, noticeable softening suitable for surveillance, dashcams, or casual recordings. (Level 1: Max Savings).
-  - **Levels 4–6 (Balanced):** CRF 29–26, VideoToolbox 59–66. ~40–50% space savings with imperceptible quality loss. (Level 6: Default).
-  - **Levels 7–8 (High Quality):** CRF 24–22, VideoToolbox 72–76. ~25–35% space savings, preserves fine film grain and high-motion details.
-  - **Levels 9–10 (Visually Lossless):** CRF 20–18, VideoToolbox 80–85. ~15–20% space savings for archival preservation.
-- **Size Guard:** `[✓] ON` (default checked) — skips replacement if the transcoded file is larger than the original.
-- **Skip HEVC Videos:** `[✓] ON` (default checked) — automatically detects and skips videos already encoded in H.265.
-- **Pipeline Prefetch:** `[✓] ON` (default checked) — downloads the next video in background while the current video transcodes.
-- **Concurrent Encoders:** `1` (default, recommended for hardware encoders) or `2`.
-- **Threshold Mode:** Dedicated 3-option filter toggle (`MB/min`, `Total MB`, `Disabled`):
-  - `MB/min` (default): Bitrate density filtering (e.g. `100 MB/min`). Ensures short high-bitrate clips are caught while long lean files are bypassed.
-  - `Total MB`: Flat file size threshold (e.g. `500 MB`). Filters strictly by total video file size.
-  - `Disabled`: Includes all video assets in scans without threshold filtering.
-- **Threshold Value:** Typeable value used by the active mode (`100 MB/min`, `500 MB`, or `Disabled (All videos scanned)`). Press `[Enter]` to edit when enabled.
-- **Logging Level:** `Info` (default) or `Debug` (logs FFmpeg/ExifTool command arguments and stderr).
-- **Network Retries:** Automatic retry count with exponential backoff on transient network drops (`0` to `5`, default `2`).
-
-### 4. Live Dashboard
-- **`⚙ Transcoding`**: Active file, resolution, file size, encoding speed, and FPS.
-- **`↓ Prefetching`**: Next video downloading in the background.
-- **`↑ Uploading`**: Completed video uploading to Immich.
-- **`[q]`**: Safely pause at any time; temporary files are deleted and progress is saved.
-
-### 5. Summary & Detailed Breakdown
-Upon completion, the summary view displays:
-- Counts for transcoded, skipped, and failed videos.
-- Total disk space saved.
-- Per-video breakdown showing original size $\to$ new size, bytes saved, and reduction percentage for each transcoded video.
-- Skip reasons for untouched videos and failure categories.
+> **Cleanup Tip:** Once you check playback of your optimized videos in the Immich web or mobile app, **delete the tracking album in Immich**. Deleting an album in Immich only removes the album container—it does **not** delete the videos inside it or remove them from your personal albums.
 
 ---
 
-## 🗂️ What to Do with the Tracking Album
+## 📄 Troubleshooting & License
 
-Before optimization begins, queued videos are automatically added to a dedicated tracking album on your Immich server named:
-
-```
-Immich-Optimizer-InProgress-<YYYYMMDD-HHMMSS>
-```
-
-As each video is transcoded, its optimized replacement is uploaded and added to this album, while the original asset is cleanly removed.
-
-When the optimization batch completes successfully, the album is automatically renamed to:
-```
-Immich-Optimizer-Completed-<YYYYMMDD-HHMMSS>
-```
-
-During **Dry Run**, an inspection album is created with the candidate videos that will be processed:
-```
-Immich-Optimizer-DryRun-<YYYYMMDD-HHMMSS>
-```
-You can open Immich to review the queued videos before starting. When you proceed with optimization, this album is automatically reused and renamed to `InProgress` (and then `Completed` upon finish), avoiding duplicate albums.
-
-### Important Details:
-1. **Existing User Albums & Favorites Are Preserved:** Replacement videos are automatically added back to every user album the original video belonged to, and favorite status is restored.
-2. **Only Queued & Transcoded Videos Are Added:** Videos that are skipped (e.g. already HEVC, or skipped by Size Guard) are never added to this album.
-3. **Review Playback:** Open this tracking album in the Immich web or mobile app during or after the process to inspect the queued and newly uploaded videos.
-4. **Delete the Tracking Album When Done:** Once you have verified that the transcoded videos play properly, **delete the tracking album in Immich**.
-   > **Note:** In Immich, deleting an album deletes **only the album container**. It does **not** delete the video assets inside it or remove them from your other personal albums.
-
----
-
-## ⌨ Keyboard Shortcuts
-
-| Screen | Key | Action |
-|---|---|---|
-| **Global** | `Ctrl + C` | Force exit application |
-| **Connection Setup** | `Tab` / `↓` / `↑` | Move between URL, API key, and submit button |
-| | `Enter` | Test connection and proceed |
-| **Scan Prompt** | `Enter` | Start library scan |
-| | `s` | Open Settings |
-| | `e` | Edit connection settings |
-| | `q` / `Esc` | Exit application |
-| **Video Browser** | `↑` / `↓` | Navigate rows |
-| | `Space` | Toggle selection for highlighted video |
-| | `a` | Select all filtered videos |
-| | `n` | Deselect all videos |
-| | `/` | Filter by filename |
-| | `d` | Dry Run preview |
-| | `Enter` | Start optimization |
-| | `s` | Open Settings |
-| | `r` | Rescan library |
-| | `q` / `Esc` | Exit application |
-| **Dry Run Preview** | `Enter` | Start optimization batch |
-| | `s` | Open Settings |
-| | `q` / `Esc` / `b` | Return to browser |
-| **Settings** | `↑` / `↓` (`k` / `j`) | Navigate options |
-| | `←` / `→` (`h` / `l`) | Change values |
-| | `Space` / `Enter` | Toggle option / edit threshold |
-| | `Esc` / `q` | Save and return |
-| **Live Dashboard** | `q` / `Esc` | Pause optimization and save session |
-| **Resume Prompt** | `r` | Resume paused session |
-| | `s` | Discard session and scan anew |
-| | `c` | Clear session and exit |
-| **Summary** | `r` | Retry failed videos |
-| | `Enter` / `q` | Exit application |
-
----
-
-## 🛡️ Safety & Data Protection
-
-- **Safe Replacement Order:** The original asset on Immich is deleted only after the replacement asset has successfully uploaded, returned a valid distinct asset ID, been re-added to all original user albums, and had its favorite status restored. If any step fails, deletion is aborted and the original asset remains untouched.
-- **Atomic Session Persistence:** State is written using atomic file renames (`session.json.tmp` $\to$ `session.json`). Interrupted sessions can be resumed without duplicate uploads.
-- **Logging:** Operational traces and errors are logged to `~/.config/immich-video-optimizer/optimizer.log`.
-
----
-
-## 🧪 Development & Testing
-
-Run the test suite:
-```bash
-go test -v ./...
-go vet ./...
-```
-
-Build the native executable:
-```bash
-go build -o immich-video-optimizer .
-```
-
----
-
-## 📄 License
-
-This project is licensed under the [GNU Affero General Public License v3.0 (AGPL-3.0)](LICENSE).
+- **Logs:** `~/.config/immich-video-optimizer/optimizer.log`
+- **Tests:** `go test -v ./... && go vet ./...`
+- **License:** [GNU Affero General Public License v3.0 (AGPL-3.0)](LICENSE)
