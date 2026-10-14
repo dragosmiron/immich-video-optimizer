@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -60,9 +62,20 @@ jobs:
           sha256sum * > checksums.txt
           cd ..
 
+      - name: Extract tag annotation
+        id: tag_info
+        run: |
+          TAG_MSG=$(git tag -l --format='%(contents)' "${{ github.ref_name }}")
+          {
+            echo "notes<<EOF"
+            echo "$TAG_MSG"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          body: ${{ steps.tag_info.outputs.notes }}
           files: |
             dist/*
           generate_release_notes: true
