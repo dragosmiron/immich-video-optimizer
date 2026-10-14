@@ -1216,4 +1216,62 @@ func TestQueryVideoAssets_ExternalLibraryFilter(t *testing.T) {
 	}
 }
 
+func TestEnableTagsFeatureWithContext(t *testing.T) {
+	t.Run("success via PUT", func(t *testing.T) {
+		putCalled := false
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPut && r.URL.Path == "/api/users/me/preferences" {
+				putCalled = true
+				var body map[string]map[string]bool
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatalf("failed to decode body: %v", err)
+				}
+				if !body["tags"]["enabled"] || !body["tags"]["sidebarWeb"] {
+					t.Errorf("expected tags enabled=true and sidebarWeb=true, got %+v", body)
+				}
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"tags":{"enabled":true,"sidebarWeb":true}}`))
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		client := newTestClient(server, "secret")
+		if err := client.EnableTagsFeatureWithContext(context.Background()); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !putCalled {
+			t.Errorf("expected PUT /api/users/me/preferences to be called")
+		}
+	})
+
+	t.Run("fallback to PATCH", func(t *testing.T) {
+		patchCalled := false
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPut && r.URL.Path == "/api/users/me/preferences" {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			if r.Method == http.MethodPatch && r.URL.Path == "/api/users/me/preferences" {
+				patchCalled = true
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"tags":{"enabled":true,"sidebarWeb":true}}`))
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		client := newTestClient(server, "secret")
+		if err := client.EnableTagsFeatureWithContext(context.Background()); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !patchCalled {
+			t.Errorf("expected PATCH /api/users/me/preferences fallback to be called")
+		}
+	})
+}
+
+
 

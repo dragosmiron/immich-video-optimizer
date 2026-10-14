@@ -409,6 +409,7 @@ func (c *Client) ScanVideosWithContext(ctx context.Context, mode string, thresho
 
 	var taggedIDs map[string]bool
 	if isExclude {
+		_ = c.EnableTagsFeatureWithContext(ctx)
 		tags, err := c.GetTagsWithContext(ctx)
 		if err == nil {
 			for _, t := range tags {
@@ -1178,4 +1179,39 @@ func (c *Client) GetTaggedAssetIDsWithContext(ctx context.Context, tagID string)
 	}
 
 	return tagged, nil
+}
+
+// EnableTagsFeatureWithContext enables the Tags feature and web sidebar visibility in Immich user preferences.
+func (c *Client) EnableTagsFeatureWithContext(ctx context.Context) error {
+	payload := map[string]interface{}{
+		"tags": map[string]interface{}{
+			"enabled":    true,
+			"sidebarWeb": true,
+		},
+	}
+	body, _ := json.Marshal(payload)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/api/users/me/preferences", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		// Fallback to PATCH if PUT is not accepted
+		patchReq, patchErr := http.NewRequestWithContext(ctx, http.MethodPatch, c.baseURL+"/api/users/me/preferences", bytes.NewReader(body))
+		if patchErr != nil {
+			return err
+		}
+		patchReq.Header.Set("Content-Type", "application/json")
+		patchResp, patchErr := c.doRequest(patchReq)
+		if patchErr != nil {
+			return err
+		}
+		patchResp.Body.Close()
+		return nil
+	}
+	resp.Body.Close()
+	return nil
 }

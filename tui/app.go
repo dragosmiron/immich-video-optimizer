@@ -1269,6 +1269,13 @@ func (m *AppModel) handleSettingsOptionChange(dir int) {
 			// Focusing handled via enter / space
 		case 2: // Exclude Optimized
 			m.cfg.ExcludeOptimized = !m.cfg.ExcludeOptimized
+			if m.cfg.ExcludeOptimized && m.pipeline != nil && m.pipeline.Client() != nil {
+				go func(c *immich.Client) {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					_ = c.EnableTagsFeatureWithContext(ctx)
+				}(m.pipeline.Client())
+			}
 		}
 
 	case 2: // Pipeline & Network
@@ -1348,6 +1355,13 @@ func (m *AppModel) handleSettingsOptionToggle() (tea.Model, tea.Cmd) {
 			}
 		case 2: // Exclude Optimized
 			m.cfg.ExcludeOptimized = !m.cfg.ExcludeOptimized
+			if m.cfg.ExcludeOptimized && m.pipeline != nil && m.pipeline.Client() != nil {
+				go func(c *immich.Client) {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					_ = c.EnableTagsFeatureWithContext(ctx)
+				}(m.pipeline.Client())
+			}
 		}
 
 	case 2: // Pipeline & Network

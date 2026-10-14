@@ -674,9 +674,10 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 
 		// Tag replacement asset with 'immich-optimizer' if enabled
 		if p.cfg != nil && p.cfg.ExcludeOptimized {
+			_ = p.client.EnableTagsFeatureWithContext(ctx)
 			tag, err := p.client.GetOrCreateTagWithContext(ctx, "immich-optimizer")
 			if err != nil {
-				logger.Error("Failed to get/create 'immich-optimizer' tag: %v (ensure Tags are enabled in Immich Account Settings)", err)
+				logger.Error("Failed to get/create 'immich-optimizer' tag: %v", err)
 			} else if tag != nil {
 				if err := p.client.TagAssetWithContext(ctx, tag.ID, newAsset.ID); err != nil {
 					logger.Error("Failed to tag %s with 'immich-optimizer': %v", newAsset.ID, err)
