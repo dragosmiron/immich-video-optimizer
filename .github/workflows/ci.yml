@@ -32,7 +32,12 @@ jobs:
         run: go vet ./...
 
       - name: Run unit & integration tests
-        run: go test -v ./...
+        run: |
+          set +e
+          go test -v ./... > test.log 2>&1
+          TEST_EXIT=$?
+          grep -E '(FAIL:|--- FAIL|panic:)' -A 5 -B 2 test.log || tail -n 100 test.log
+          exit $TEST_EXIT
 
       - name: Verify cross-compilation
         run: |
