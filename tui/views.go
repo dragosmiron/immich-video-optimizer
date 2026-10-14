@@ -39,6 +39,10 @@ func (m *AppModel) View() string {
 		s = m.viewSummary()
 	}
 
+	if banner := m.renderUpdateBanner(); banner != "" {
+		s = banner + s
+	}
+
 	content := styles.Base.Render(s)
 	if m.width > 0 && m.height > 0 {
 		cw := lipgloss.Width(content)
@@ -54,6 +58,30 @@ func (m *AppModel) View() string {
 		return lipgloss.Place(targetW, targetH, lipgloss.Center, lipgloss.Center, content)
 	}
 	return content
+}
+
+func (m *AppModel) renderUpdateBanner() string {
+	if m.updateInfo == nil || !m.updateInfo.HasUpdate {
+		return ""
+	}
+
+	badge := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#000000")).
+		Background(lipgloss.Color("#F59E0B")).
+		Padding(0, 1).
+		Render("🔔 UPDATE AVAILABLE")
+
+	info := lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#0F172A", Dark: "#F8FAFC"}).
+		Bold(true).
+		Render(fmt.Sprintf("%s → %s", m.updateInfo.CurrentVersion, m.updateInfo.LatestVersion))
+
+	url := lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#0284C7", Dark: "#38BDF8"}).
+		Render(m.updateInfo.ReleaseURL)
+
+	return fmt.Sprintf("%s  %s  (%s)\n\n", badge, info, url)
 }
 
 func (m *AppModel) viewTestingConnection() string {

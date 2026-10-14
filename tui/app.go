@@ -20,6 +20,7 @@ import (
 	"immich-video-optimizer/logger"
 	"immich-video-optimizer/orchestrator"
 	"immich-video-optimizer/state"
+	"immich-video-optimizer/version"
 )
 
 type ViewState int
@@ -41,6 +42,22 @@ const (
 // Async messages
 type ConnectionTestedMsg struct {
 	Err error
+}
+
+type UpdateAvailableMsg struct {
+	Info *version.UpdateInfo
+}
+
+func checkVersionCmd(currentVersion string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		info, err := version.CheckLatestRelease(ctx, version.ReleaseRepo, currentVersion)
+		if err != nil || info == nil || !info.HasUpdate {
+			return nil
+		}
+		return UpdateAvailableMsg{Info: info}
+	}
 }
 
 type ScanCompleteMsg struct {
@@ -110,6 +127,9 @@ type AppModel struct {
 	pipeline *orchestrator.Pipeline
 	width    int
 	height   int
+
+	// Version & Updates
+	updateInfo *version.UpdateInfo
 
 	// Connection Setup
 	urlInput        textinput.Model
@@ -353,11 +373,16 @@ func (m *AppModel) Init() tea.Cmd {
 	if m.state == ViewTestingConnection {
 		cmds = append(cmds, testConnectionCmd(m.pipeline))
 	}
+	cmds = append(cmds, checkVersionCmd(version.Current))
 	return tea.Batch(cmds...)
 }
 
 func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case UpdateAvailableMsg:
+		m.updateInfo = msg.Info
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height

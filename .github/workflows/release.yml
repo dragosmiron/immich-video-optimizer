@@ -31,27 +31,27 @@ jobs:
           mkdir -p dist
 
           # 1. macOS ARM64 (Apple Silicon M1/M2/M3/M4)
-          GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o immich-video-optimizer .
+          GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w -X 'immich-video-optimizer/version.Current=${{ github.ref_name }}'" -o immich-video-optimizer .
           tar -czf dist/immich-video-optimizer_darwin_arm64.tar.gz immich-video-optimizer
           rm immich-video-optimizer
 
           # 2. macOS AMD64 (Intel)
-          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o immich-video-optimizer .
+          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w -X 'immich-video-optimizer/version.Current=${{ github.ref_name }}'" -o immich-video-optimizer .
           tar -czf dist/immich-video-optimizer_darwin_amd64.tar.gz immich-video-optimizer
           rm immich-video-optimizer
 
           # 3. Linux AMD64
-          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o immich-video-optimizer .
+          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X 'immich-video-optimizer/version.Current=${{ github.ref_name }}'" -o immich-video-optimizer .
           tar -czf dist/immich-video-optimizer_linux_amd64.tar.gz immich-video-optimizer
           rm immich-video-optimizer
 
           # 4. Linux ARM64
-          GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o immich-video-optimizer .
+          GOOS=linux GOARCH=arm64 go build -ldflags="-s -w -X 'immich-video-optimizer/version.Current=${{ github.ref_name }}'" -o immich-video-optimizer .
           tar -czf dist/immich-video-optimizer_linux_arm64.tar.gz immich-video-optimizer
           rm immich-video-optimizer
 
           # 5. Windows AMD64
-          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o immich-video-optimizer.exe .
+          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -X 'immich-video-optimizer/version.Current=${{ github.ref_name }}'" -o immich-video-optimizer.exe .
           zip -j dist/immich-video-optimizer_windows_amd64.zip immich-video-optimizer.exe
           rm immich-video-optimizer.exe
 

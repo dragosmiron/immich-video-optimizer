@@ -1,5 +1,7 @@
 package tui
 
+import "immich-video-optimizer/version"
+
 // Option configures the AppModel during initialization.
 type Option func(*AppModel)
 
@@ -13,5 +15,12 @@ func WithInitialView(v ViewState) Option {
 			m.tokenInput.Blur()
 			m.thresholdInput.Blur()
 		}
+	}
+}
+
+// WithUpdateInfo sets the update information on the AppModel (useful for tests).
+func WithUpdateInfo(info *version.UpdateInfo) Option {
+	return func(m *AppModel) {
+		m.updateInfo = info
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"immich-video-optimizer/immich"
 	"immich-video-optimizer/orchestrator"
 	"immich-video-optimizer/state"
+	"immich-video-optimizer/version"
 )
 
 func TestMain(m *testing.M) {
@@ -1967,6 +1968,49 @@ func TestAppModel_SettingsTabsNavigation(t *testing.T) {
 		t.Errorf("expected settingsTab to stay 1 while typing into input, got %d", m.settingsTab)
 	}
 }
+
+func TestAppModel_UpdateAvailableBanner(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	cfg := &config.Config{
+		URL:    "http://localhost:2283",
+		APIKey: "test-key",
+	}
+	pipeline, err := orchestrator.NewPipeline(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create pipeline: %v", err)
+	}
+
+	update := &version.UpdateInfo{
+		CurrentVersion: "v0.2.2",
+		LatestVersion:  "v0.3.0",
+		ReleaseURL:     "https://github.com/dragosmiron/immich-video-optimizer/releases/tag/v0.3.0",
+		HasUpdate:      true,
+	}
+
+	m := NewAppModel(cfg, pipeline, WithInitialView(ViewScanPrompt), WithUpdateInfo(update))
+	viewOutput := m.View()
+
+	if !strings.Contains(viewOutput, "UPDATE AVAILABLE") {
+		t.Errorf("expected viewOutput to contain 'UPDATE AVAILABLE', got: %s", viewOutput)
+	}
+	if !strings.Contains(viewOutput, "v0.3.0") {
+		t.Errorf("expected viewOutput to contain 'v0.3.0', got: %s", viewOutput)
+	}
+	if !strings.Contains(viewOutput, "https://github.com/dragosmiron/immich-video-optimizer/releases/tag/v0.3.0") {
+		t.Errorf("expected viewOutput to contain release URL, got: %s", viewOutput)
+	}
+
+	// Test message update
+	m2 := NewAppModel(cfg, pipeline)
+	newModel, _ := m2.Update(UpdateAvailableMsg{Info: update})
+	appModel := newModel.(*AppModel)
+	if appModel.updateInfo == nil || !appModel.updateInfo.HasUpdate {
+		t.Fatalf("expected updateInfo to be set after UpdateAvailableMsg")
+	}
+}
+
 
 
 
