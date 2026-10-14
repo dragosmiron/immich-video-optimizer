@@ -1673,14 +1673,27 @@ func TestAppModel_VideoQualitySettings(t *testing.T) {
 		t.Errorf("expected settings view to show visually lossless description, got: %s", view)
 	}
 
-	// 6. Space cycles from 10 to 1
+	// 6. Space and Enter cycle from 10 to 1 and 1 to 2
 	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
 	m = newM.(*AppModel)
 	if m.cfg.Quality() != 1 {
 		t.Errorf("expected Space on level 10 to cycle to 1, got %d", m.cfg.Quality())
 	}
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newM.(*AppModel)
+	if m.cfg.Quality() != 2 {
+		t.Errorf("expected Enter on level 1 to cycle to 2, got %d", m.cfg.Quality())
+	}
 
-	// 7. Verify settings navigation boundary clamping (0 to 9)
+	// 7. Verify settings navigation boundary clamping (0 to 9) and view rendering for all rows
+	for cursorIdx := 0; cursorIdx <= 9; cursorIdx++ {
+		m.settingCursor = cursorIdx
+		rendered := m.viewSettings()
+		if len(rendered) == 0 {
+			t.Errorf("expected non-empty settings view at cursor %d", cursorIdx)
+		}
+	}
+
 	for i := 0; i < 20; i++ {
 		newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 		m = newM.(*AppModel)
@@ -1702,8 +1715,8 @@ func TestAppModel_VideoQualitySettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load saved config: %v", err)
 	}
-	if loaded.VideoQuality != 1 {
-		t.Errorf("expected saved config to have VideoQuality 1, got %d", loaded.VideoQuality)
+	if loaded.VideoQuality != 2 {
+		t.Errorf("expected saved config to have VideoQuality 2, got %d", loaded.VideoQuality)
 	}
 }
 

@@ -355,4 +355,34 @@ func TestConfig_VideoQualityPersistence(t *testing.T) {
 	}
 }
 
+func TestConfig_DefaultPreset(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+
+	def := DefaultConfig()
+	if def.Preset != "Medium" {
+		t.Errorf("expected DefaultConfig Preset to be 'Medium', got %q", def.Preset)
+	}
+
+	cfg := &Config{
+		URL:           "http://localhost:2283",
+		APIKey:        "my-key",
+		SizeThreshold: "100",
+		Preset:        "",
+	}
+
+	if err := SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig failed: %v", err)
+	}
+
+	loaded, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	if loaded.Preset != "Medium" {
+		t.Errorf("expected loaded config with empty preset to default to 'Medium', got %q", loaded.Preset)
+	}
+}
+
 
