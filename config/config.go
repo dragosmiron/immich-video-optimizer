@@ -228,6 +228,9 @@ func LoadConfig() (*Config, error) {
 		return DefaultConfig(), err
 	}
 	cfg.ThresholdMode = NormalizeThresholdMode(cfg.ThresholdMode)
+	if cfg.Preset == "" {
+		cfg.Preset = "Medium"
+	}
 	if cfg.VideoQuality == 0 {
 		cfg.VideoQuality = 6
 	} else if cfg.VideoQuality < 1 {

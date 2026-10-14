@@ -127,7 +127,6 @@ func (m *AppModel) viewScanPrompt() string {
 	b.WriteString(fmt.Sprintf("  • Threshold:      %s\n", styles.Value.Render(threshDesc)))
 	b.WriteString(fmt.Sprintf("  • Resolution:     %s\n", styles.Value.Render(m.cfg.Resolution)))
 	b.WriteString(fmt.Sprintf("  • Video Quality:  %s\n", styles.Value.Render(fmt.Sprintf("Level %d (%s)", m.cfg.Quality(), m.cfg.QualityLabel()))))
-	b.WriteString(fmt.Sprintf("  • Transcode Speed:%s\n", styles.Value.Render(m.cfg.Preset)))
 	sgText := "Enabled (skips replacement if transcoded is larger)"
 	if !m.cfg.SizeGuard {
 		sgText = "Disabled"
@@ -552,12 +551,10 @@ func (m *AppModel) viewSettings() string {
 		"Controls the maximum output resolution.\n" +
 			"  • Original — keeps the same dimensions as the source (recommended)\n" +
 			"  • 4K / 1440p / 1080p / 720p — downscales if the source is larger; never upscales",
-		// 1 — Preset
-		"Controls the trade-off between encoding speed and output file size.\n" +
-			"  • Ultrafast — finishes quickly; slightly larger files\n" +
-			"  • Fast      — good balance for most cases\n" +
-			"  • Medium    — default; solid compression\n" +
-			"  • Slow      — best compression; takes longer",
+		// 1 — Video Quality
+		func() string {
+			return m.cfg.QualityDescription()
+		}(),
 		// 2 — Size Guard
 		func() string {
 			if m.cfg.SizeGuard {
@@ -614,10 +611,6 @@ func (m *AppModel) viewSettings() string {
 		"Number of automatic retry attempts with backoff for failed downloads and uploads.\n" +
 			"  • 0 — Disabled. Fails immediately on first error\n" +
 			"  • 1 to 5 — Retries automatically with exponential backoff on transient network drops",
-		// 10 — Video Quality
-		func() string {
-			return m.cfg.QualityDescription()
-		}(),
 	}
 
 	isFocused := func(idx int) bool { return m.settingCursor == idx }
@@ -643,10 +636,10 @@ func (m *AppModel) viewSettings() string {
 		m.cfg.Resolution+"  ← / → to change  [Original, 4K, 1440p, 1080p, 720p]",
 	)
 
-	// Row 1 — Preset
+	// Row 1 — Video Quality
 	writeRow(1,
-		"Transcoding Preset:  ",
-		m.cfg.Preset+"  ← / → to change  [Ultrafast, Fast, Medium, Slow]",
+		"Video Quality:       ",
+		fmt.Sprintf("[%d] %s  ← / → to change  [1: Max Savings ➔ 10: Max Quality]", m.cfg.Quality(), m.cfg.QualityLabel()),
 	)
 
 	// Row 2 — Size Guard
@@ -749,12 +742,6 @@ func (m *AppModel) viewSettings() string {
 	writeRow(9,
 		"Network Retries:     ",
 		retryStr+"  ← / → / [Space / Enter] to change  [0, 1, 2, 3, 5]",
-	)
-
-	// Row 10 — Video Quality
-	writeRow(10,
-		"Video Quality:       ",
-		fmt.Sprintf("[%d] %s  ← / → to change  [1: Max Savings ➔ 10: Max Quality]", m.cfg.Quality(), m.cfg.QualityLabel()),
 	)
 
 	b.WriteString("\n")

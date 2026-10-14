@@ -132,7 +132,6 @@ type AppModel struct {
 	// Settings
 	settingCursor  int
 	resolutions    []string
-	presets        []string
 	thresholdInput textinput.Model // typeable threshold in Settings
 
 	// Dashboard
@@ -288,7 +287,6 @@ func NewAppModel(cfg *config.Config, pipeline *orchestrator.Pipeline, opts ...Op
 		searchInput:    si,
 		selectedVideos: make(map[string]bool),
 		resolutions:    []string{"Original", "4K", "1440p", "1080p", "720p"},
-		presets:        []string{"Ultrafast", "Fast", "Medium", "Slow"},
 		overallProgress: op,
 	}
 
@@ -1086,7 +1084,7 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "down", "j":
-		if m.settingCursor < 10 {
+		if m.settingCursor < 9 {
 			m.settingCursor++
 		}
 
@@ -1101,12 +1099,11 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 		} else if m.settingCursor == 1 {
-			for i, p := range m.presets {
-				if p == m.cfg.Preset && i > 0 {
-					m.cfg.Preset = m.presets[i-1]
-					break
-				}
+			q := m.cfg.Quality() - 1
+			if q < 1 {
+				q = 1
 			}
+			m.cfg.VideoQuality = q
 		} else if m.settingCursor == 2 {
 			m.cfg.SizeGuard = !m.cfg.SizeGuard
 		} else if m.settingCursor == 3 {
@@ -1139,12 +1136,6 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
-		} else if m.settingCursor == 10 {
-			q := m.cfg.Quality() - 1
-			if q < 1 {
-				q = 1
-			}
-			m.cfg.VideoQuality = q
 		}
 
 	case "right", "l":
@@ -1158,12 +1149,11 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 		} else if m.settingCursor == 1 {
-			for i, p := range m.presets {
-				if p == m.cfg.Preset && i < len(m.presets)-1 {
-					m.cfg.Preset = m.presets[i+1]
-					break
-				}
+			q := m.cfg.Quality() + 1
+			if q > 10 {
+				q = 10
 			}
+			m.cfg.VideoQuality = q
 		} else if m.settingCursor == 2 {
 			m.cfg.SizeGuard = !m.cfg.SizeGuard
 		} else if m.settingCursor == 3 {
@@ -1196,16 +1186,16 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
-		} else if m.settingCursor == 10 {
-			q := m.cfg.Quality() + 1
-			if q > 10 {
-				q = 10
-			}
-			m.cfg.VideoQuality = q
 		}
 
 	case " ", "enter":
-		if m.settingCursor == 2 {
+		if m.settingCursor == 1 {
+			q := m.cfg.Quality() + 1
+			if q > 10 {
+				q = 1
+			}
+			m.cfg.VideoQuality = q
+		} else if m.settingCursor == 2 {
 			m.cfg.SizeGuard = !m.cfg.SizeGuard
 		} else if m.settingCursor == 3 {
 			m.cfg.SkipHEVC = !m.cfg.SkipHEVC
@@ -1252,12 +1242,6 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.pipeline != nil && m.pipeline.Client() != nil {
 				m.pipeline.Client().SetMaxRetries(m.cfg.MaxRetries)
 			}
-		} else if m.settingCursor == 10 {
-			q := m.cfg.Quality() + 1
-			if q > 10 {
-				q = 1
-			}
-			m.cfg.VideoQuality = q
 		}
 	}
 	return m, nil

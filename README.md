@@ -25,7 +25,7 @@ A terminal client for [Immich](https://immich.app/) that reduces storage usage b
 - **Size Guard:**
   - Verifies that the transcoded file is smaller than the original. If a re-encoded file is larger, replacement is skipped and the original is kept intact.
 - **Adjustable Quality Control:**
-  - 1–10 quality slider with dynamic presets ranging from High Compression (~70–80% savings) to Visually Lossless (~15–20% savings). Maps automatically to standard CRF and Apple VideoToolbox quality scales.
+  - 1–10 quality slider ranging from High Compression (~70–80% savings) to Visually Lossless (~15–20% savings). Maps automatically to standard CRF and Apple VideoToolbox quality scales.
 - **Dry Run Estimation:**
   - Pre-flight preview inspecting video codecs and providing realistic, conservative storage savings estimates before processing.
 
@@ -104,7 +104,7 @@ The terminal interface guides you through the process:
 flowchart TD
     A["Connection Setup<br/>(URL & API Key)"] --> B["Library Scan<br/>(Filter by Mode)"]
     B --> C["Interactive Video Browser<br/>(Filter & Select)"]
-    C --> D["Preferences & Settings<br/>(Resolution, Presets, Encoders)"]
+    C --> D["Preferences & Settings<br/>(Resolution, Quality, Encoders)"]
     D --> E["Remote Codec Probing<br/>(Skip existing HEVC)"]
     E --> F["Pipeline Processing<br/>(Prefetch ➔ Transcode ➔ Upload)"]
     F --> G["Summary & Detailed Breakdown<br/>(Per-video savings & status)"]
@@ -126,7 +126,11 @@ Review discovered videos exceeding your configured threshold (`MB/min`, `Total M
 
 ### 3. Settings & Preferences (`s`)
 - **Target Resolution:** `Original` (default), `4K`, `1440p`, `1080p`, or `720p` (never upscales).
-- **Transcoding Preset:** `Ultrafast`, `Fast`, `Medium` (default), or `Slow`.
+- **Video Quality:** 1–10 quality slider (default: `[6] Balanced`), balancing space savings with visual fidelity:
+  - **Levels 1–3 (High Compression):** CRF 32–30, VideoToolbox 50–56. ~70–80% space savings, noticeable softening suitable for surveillance, dashcams, or casual recordings. (Level 1: Max Savings).
+  - **Levels 4–6 (Balanced):** CRF 29–26, VideoToolbox 59–66. ~40–50% space savings with imperceptible quality loss. (Level 6: Default).
+  - **Levels 7–8 (High Quality):** CRF 24–22, VideoToolbox 72–76. ~25–35% space savings, preserves fine film grain and high-motion details.
+  - **Levels 9–10 (Visually Lossless):** CRF 20–18, VideoToolbox 80–85. ~15–20% space savings for archival preservation.
 - **Size Guard:** `[✓] ON` (default checked) — skips replacement if the transcoded file is larger than the original.
 - **Skip HEVC Videos:** `[✓] ON` (default checked) — automatically detects and skips videos already encoded in H.265.
 - **Pipeline Prefetch:** `[✓] ON` (default checked) — downloads the next video in background while the current video transcodes.
@@ -138,11 +142,6 @@ Review discovered videos exceeding your configured threshold (`MB/min`, `Total M
 - **Threshold Value:** Typeable value used by the active mode (`100 MB/min`, `500 MB`, or `Disabled (All videos scanned)`). Press `[Enter]` to edit when enabled.
 - **Logging Level:** `Info` (default) or `Debug` (logs FFmpeg/ExifTool command arguments and stderr).
 - **Network Retries:** Automatic retry count with exponential backoff on transient network drops (`0` to `5`, default `2`).
-- **Video Quality:** 1–10 quality slider (default: `[6] Balanced`), balancing space savings with visual fidelity:
-  - **Levels 1–3 (High Compression):** CRF 32–30, VideoToolbox 50–56. ~70–80% space savings, noticeable softening suitable for surveillance, dashcams, or casual recordings. (Level 1: Max Savings).
-  - **Levels 4–6 (Balanced):** CRF 29–26, VideoToolbox 59–66. ~40–50% space savings with imperceptible quality loss. (Level 6: Default).
-  - **Levels 7–8 (High Quality):** CRF 24–22, VideoToolbox 72–76. ~25–35% space savings, preserves fine film grain and high-motion details.
-  - **Levels 9–10 (Visually Lossless):** CRF 20–18, VideoToolbox 80–85. ~15–20% space savings for archival preservation.
 
 ### 4. Live Dashboard
 - **`⚙ Transcoding`**: Active file, resolution, file size, encoding speed, and FPS.

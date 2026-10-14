@@ -244,11 +244,17 @@ func TestAppModel_SettingsNavigation(t *testing.T) {
 		t.Errorf("expected resolution to cycle to 4K, got %s", model.cfg.Resolution)
 	}
 
-	// Move cursor down to Preset
+	// Move cursor down to Video Quality
 	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	model = newM.(*AppModel)
 	if model.settingCursor != 1 {
 		t.Errorf("expected settingCursor 1, got %d", model.settingCursor)
+	}
+	// Cycle Video Quality with Right
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	model = newM.(*AppModel)
+	if model.cfg.Quality() != 7 {
+		t.Errorf("expected VideoQuality 7, got %d", model.cfg.Quality())
 	}
 
 	// Move cursor down to SizeGuard and toggle
@@ -1591,17 +1597,23 @@ func TestAppModel_VideoQualitySettings(t *testing.T) {
 	pipeline, _ := orchestrator.NewPipeline(cfg)
 	m := NewAppModel(cfg, pipeline)
 
-	// 1. Check Scan Prompt displays Video Quality
+	// 1. Check Scan Prompt displays Video Quality and NOT Transcode Speed
 	m.state = ViewScanPrompt
 	prompt := m.viewScanPrompt()
 	if !strings.Contains(prompt, "• Video Quality:") || !strings.Contains(prompt, "Level 6 (Balanced)") {
 		t.Errorf("expected scan prompt to show '• Video Quality:  Level 6 (Balanced)', got: %s", prompt)
 	}
+	if strings.Contains(prompt, "Transcode Speed") || strings.Contains(prompt, "Transcoding Preset") {
+		t.Errorf("scan prompt should NOT display Transcode Speed or Preset, got: %s", prompt)
+	}
 
-	// 2. Open Settings and navigate to Video Quality (index 10)
+	// 2. Open Settings and navigate to Video Quality (index 1)
 	m.state = ViewSettings
-	m.settingCursor = 10
+	m.settingCursor = 1
 	view := m.viewSettings()
+	if strings.Contains(view, "Transcoding Preset") {
+		t.Errorf("settings view should NOT display Transcoding Preset, got: %s", view)
+	}
 	if !strings.Contains(view, "Video Quality:") || !strings.Contains(view, "[6] Balanced") {
 		t.Errorf("expected settings view to show '[6] Balanced', got: %s", view)
 	}
@@ -1668,7 +1680,23 @@ func TestAppModel_VideoQualitySettings(t *testing.T) {
 		t.Errorf("expected Space on level 10 to cycle to 1, got %d", m.cfg.Quality())
 	}
 
-	// 7. Test Esc saves config
+	// 7. Verify settings navigation boundary clamping (0 to 9)
+	for i := 0; i < 20; i++ {
+		newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = newM.(*AppModel)
+	}
+	if m.settingCursor != 9 {
+		t.Errorf("expected settingCursor clamped to 9 at bottom, got %d", m.settingCursor)
+	}
+	for i := 0; i < 20; i++ {
+		newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+		m = newM.(*AppModel)
+	}
+	if m.settingCursor != 0 {
+		t.Errorf("expected settingCursor clamped to 0 at top, got %d", m.settingCursor)
+	}
+
+	// 8. Test Esc saves config
 	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	loaded, err := config.LoadConfig()
 	if err != nil {

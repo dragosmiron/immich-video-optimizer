@@ -309,6 +309,10 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 				transcodedPath := filepath.Join(p.tempDir, fmt.Sprintf("opt_%s.mp4", item.Asset.ID))
 				item.TranscodedPath = transcodedPath
 
+				preset := p.cfg.Preset
+				if preset == "" {
+					preset = "Medium"
+				}
 				opts := engine.TranscodeOptions{
 					Input:               item.OrigPath,
 					Output:              transcodedPath,
@@ -316,7 +320,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 					AudioCopy:           false,
 					CRF:                 p.cfg.QualityCRF(),
 					VideoToolboxQuality: p.cfg.QualityVideoToolbox(),
-					Preset:              p.cfg.Preset,
+					Preset:              preset,
 					Resolution:          p.cfg.Resolution,
 				}
 
