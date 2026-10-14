@@ -1,6 +1,6 @@
 # 🎬 Immich Video Optimizer
 
-A terminal client for [Immich](https://immich.app/) that reduces storage usage by re-encoding videos to HEVC (H.265) using local hardware acceleration, while preserving original metadata, creation dates, and GPS coordinates.
+A terminal client for [Immich](https://immich.app/) that reduces storage usage by re-encoding videos to HEVC (H.265) using local hardware acceleration, while preserving original metadata, creation dates, GPS coordinates, album memberships, and favorite status.
 
 ---
 
@@ -17,9 +17,11 @@ A terminal client for [Immich](https://immich.app/) that reduces storage usage b
   - Streams multipart video uploads directly from disk using `io.MultiReader` with exact `Content-Length`, avoiding memory buffers for large files.
 - **Remote Codec Probing:**
   - Checks remote video headers using HTTP range requests to detect and skip already-HEVC videos without downloading them.
-- **Metadata Preservation:**
+- **Metadata & State Preservation:**
   - Uses ExifTool to replicate camera make/model, original shooting dates, and GPS coordinates.
   - Retains Immich database attributes including `fileCreatedAt`, `fileModifiedAt`, `deviceAssetId`, and original filenames.
+  - Automatically preserves album memberships: re-adds replacement videos to every user album the original belonged to.
+  - Preserves favorite status (`isFavorite`).
 - **Pause & Resume:**
   - Press `q` to pause at any point. Completed videos and pending items are saved atomically to `session.json` for later resume.
 - **Size Guard:**
@@ -98,17 +100,7 @@ go build -o immich-video-optimizer .
 
 ## 🚀 Usage & Workflow
 
-The terminal interface guides you through the process:
-
-```mermaid
-flowchart TD
-    A["Connection Setup<br/>(URL & API Key)"] --> B["Library Scan<br/>(Filter by Mode)"]
-    B --> C["Interactive Video Browser<br/>(Filter & Select)"]
-    C --> D["Preferences & Settings<br/>(Resolution, Quality, Encoders)"]
-    D --> E["Remote Codec Probing<br/>(Skip existing HEVC)"]
-    E --> F["Pipeline Processing<br/>(Prefetch ➔ Transcode ➔ Upload)"]
-    F --> G["Summary & Detailed Breakdown<br/>(Per-video savings & status)"]
-```
+**Connection Setup** ➔ **Library Scan** ➔ **Selection & Settings** ➔ **Transcode Pipeline** ➔ **Summary**
 
 ### 1. Connection Setup
 Enter your Immich server URL (e.g. `http://192.168.1.100:2283` or `https://immich.example.com`) and your **API Key** (created in Immich under *Account Settings $\to$ API Keys*). Credentials are saved to `~/.config/immich-video-optimizer/config.yaml`.
@@ -180,10 +172,11 @@ Immich-Optimizer-DryRun-<YYYYMMDD-HHMMSS>
 You can open Immich to review the queued videos before starting. When you proceed with optimization, this album is automatically reused and renamed to `InProgress` (and then `Completed` upon finish), avoiding duplicate albums.
 
 ### Important Details:
-1. **Only Queued & Transcoded Videos Are Added:** Videos that are skipped (e.g. already HEVC, or skipped by Size Guard) are never added to this album.
-2. **Review Playback:** Open this album in the Immich web or mobile app during or after the process to inspect the queued and newly uploaded videos.
-3. **Delete the Album When Done:** Once you have verified that the transcoded videos play properly, **delete the album in Immich**.
-   > **Note:** In Immich, deleting an album deletes **only the album container**. It does **not** delete the video assets inside it.
+1. **Existing User Albums & Favorites Are Preserved:** Replacement videos are automatically added back to every user album the original video belonged to, and favorite status is restored.
+2. **Only Queued & Transcoded Videos Are Added:** Videos that are skipped (e.g. already HEVC, or skipped by Size Guard) are never added to this album.
+3. **Review Playback:** Open this tracking album in the Immich web or mobile app during or after the process to inspect the queued and newly uploaded videos.
+4. **Delete the Tracking Album When Done:** Once you have verified that the transcoded videos play properly, **delete the tracking album in Immich**.
+   > **Note:** In Immich, deleting an album deletes **only the album container**. It does **not** delete the video assets inside it or remove them from your other personal albums.
 
 ---
 
@@ -226,7 +219,7 @@ You can open Immich to review the queued videos before starting. When you procee
 
 ## 🛡️ Safety & Data Protection
 
-- **Safe Replacement Order:** The original asset on Immich is deleted only after the replacement asset has successfully uploaded and returned a valid, distinct asset ID.
+- **Safe Replacement Order:** The original asset on Immich is deleted only after the replacement asset has successfully uploaded, returned a valid distinct asset ID, been re-added to all original user albums, and had its favorite status restored. If any step fails, deletion is aborted and the original asset remains untouched.
 - **Atomic Session Persistence:** State is written using atomic file renames (`session.json.tmp` $\to$ `session.json`). Interrupted sessions can be resumed without duplicate uploads.
 - **Logging:** Operational traces and errors are logged to `~/.config/immich-video-optimizer/optimizer.log`.
 
