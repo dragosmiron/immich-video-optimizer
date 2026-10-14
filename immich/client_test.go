@@ -3,6 +3,7 @@ package immich
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -948,6 +949,153 @@ func TestGetAsset(t *testing.T) {
 
 	if _, err := client.GetAsset(""); err == nil {
 		t.Errorf("Expected error for empty assetID")
+	}
+}
+
+func TestGetTagsAndCreateTag(t *testing.T) {
+	var createdName string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") != "secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/tags" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`[{"id": "tag-1", "name": "existing-tag"}]`))
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/tags" {
+			var body map[string]interface{}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			createdName = body["name"].(string)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(fmt.Sprintf(`{"id": "tag-new", "name": "%s"}`, createdName)))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+
+	// Get tags
+	tags, err := client.GetTagsWithContext(context.Background())
+	if err != nil {
+		t.Fatalf("GetTagsWithContext failed: %v", err)
+	}
+	if len(tags) != 1 || tags[0].Name != "existing-tag" {
+		t.Fatalf("unexpected tags: %+v", tags)
+	}
+
+	// GetOrCreateTag on existing
+	t1, err := client.GetOrCreateTagWithContext(context.Background(), "existing-tag")
+	if err != nil || t1.ID != "tag-1" {
+		t.Fatalf("expected existing tag, got: %+v (err: %v)", t1, err)
+	}
+
+	// GetOrCreateTag on non-existing (creates it)
+	t2, err := client.GetOrCreateTagWithContext(context.Background(), "immich-optimizer")
+	if err != nil || t2.ID != "tag-new" || t2.Name != "immich-optimizer" {
+		t.Fatalf("expected new tag created, got: %+v (err: %v)", t2, err)
+	}
+	if createdName != "immich-optimizer" {
+		t.Errorf("expected tag created with name immich-optimizer, got: %s", createdName)
+	}
+}
+
+func TestTagAsset(t *testing.T) {
+	var taggedID string
+	var assetID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/api/tags/") && strings.HasSuffix(r.URL.Path, "/assets") {
+			taggedID = strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/tags/"), "/assets")
+			var body struct {
+				IDs []string `json:"ids"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if len(body.IDs) > 0 {
+				assetID = body.IDs[0]
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`[{"id": "tag-1", "success": true}]`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+	err := client.TagAssetWithContext(context.Background(), "tag-123", "asset-456")
+	if err != nil {
+		t.Fatalf("TagAssetWithContext failed: %v", err)
+	}
+	if taggedID != "tag-123" || assetID != "asset-456" {
+		t.Errorf("TagAsset mismatch: tagID=%s, assetID=%s", taggedID, assetID)
+	}
+}
+
+func TestScanVideos_ExcludeOptimizedFilter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/tags" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`[{"id": "tag-opt", "name": "immich-optimizer"}]`))
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/search/metadata" {
+			var body map[string]interface{}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+
+			// Tagged search query
+			if _, hasTags := body["tagIds"]; hasTags {
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{
+					"assets": {
+						"items": [{"id": "v-already-opt"}]
+					}
+				}`))
+				return
+			}
+
+			// Main video scan
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"assets": {
+					"items": [
+						{"id": "v-already-opt", "type": "VIDEO", "size": 300000000, "originalFileName": "clip1.mp4", "duration": "0:01:00"},
+						{"id": "v-new", "type": "VIDEO", "size": 300000000, "originalFileName": "clip2.mp4", "duration": "0:01:00"}
+					]
+				}
+			}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+
+	// 1. Scan with excludeOptimized = true (default)
+	res, err := client.ScanVideos("MB/min", 10.0, true)
+	if err != nil {
+		t.Fatalf("ScanVideos failed: %v", err)
+	}
+	if res.SkippedAlreadyOptimized != 1 {
+		t.Errorf("expected 1 video skipped as already optimized, got %d", res.SkippedAlreadyOptimized)
+	}
+	if len(res.Videos) != 1 || res.Videos[0].ID != "v-new" {
+		t.Fatalf("expected only v-new returned, got %+v", res.Videos)
+	}
+
+	// 2. Scan with excludeOptimized = false
+	resAll, err := client.ScanVideos("MB/min", 10.0, false)
+	if err != nil {
+		t.Fatalf("ScanVideos failed: %v", err)
+	}
+	if resAll.SkippedAlreadyOptimized != 0 {
+		t.Errorf("expected 0 skipped when excludeOptimized=false, got %d", resAll.SkippedAlreadyOptimized)
+	}
+	if len(resAll.Videos) != 2 {
+		t.Fatalf("expected 2 videos returned when excludeOptimized=false, got %d", len(resAll.Videos))
 	}
 }
 

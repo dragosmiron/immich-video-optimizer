@@ -81,7 +81,11 @@ func (p *Pipeline) ScanVideos(mode string, threshold float64) (*immich.QueryResu
 }
 
 func (p *Pipeline) ScanVideosWithContext(ctx context.Context, mode string, threshold float64) (*immich.QueryResult, error) {
-	return p.client.ScanVideosWithContext(ctx, mode, threshold)
+	excludeOptimized := false
+	if p.cfg != nil {
+		excludeOptimized = p.cfg.ExcludeOptimized
+	}
+	return p.client.ScanVideosWithContext(ctx, mode, threshold, excludeOptimized)
 }
 
 func (p *Pipeline) ValidateConnection() error {
@@ -667,6 +671,20 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 
 		sess.MarkCompleted(item.Asset.ID, item.SavedBytes)
 		_ = state.SaveSession(sess)
+
+		// Tag replacement asset with 'immich-optimizer' if enabled
+		if p.cfg != nil && p.cfg.ExcludeOptimized {
+			tag, err := p.client.GetOrCreateTagWithContext(ctx, "immich-optimizer")
+			if err != nil {
+				logger.Error("Failed to get/create 'immich-optimizer' tag: %v (ensure Tags are enabled in Immich Account Settings)", err)
+			} else if tag != nil {
+				if err := p.client.TagAssetWithContext(ctx, tag.ID, newAsset.ID); err != nil {
+					logger.Error("Failed to tag %s with 'immich-optimizer': %v", newAsset.ID, err)
+				} else {
+					logger.Info("Tagged %s with '%s'", item.Asset.OriginalFileName, tag.Name)
+				}
+			}
+		}
 
 		logger.Info("Completed %s (Saved %.2f MB)", item.Asset.OriginalFileName, float64(item.SavedBytes)/1024/1024)
 		emit(PipelineVideoCompleteMsg{

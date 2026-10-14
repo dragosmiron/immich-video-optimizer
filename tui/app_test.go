@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,13 @@ func TestMain(m *testing.M) {
 	if err == nil {
 		os.Setenv("HOME", tempDir)
 		defer os.RemoveAll(tempDir)
+
+		binDir := filepath.Join(tempDir, "bin")
+		_ = os.MkdirAll(binDir, 0755)
+		fakeScript := "#!/bin/sh\nexit 0\n"
+		_ = os.WriteFile(filepath.Join(binDir, "ffmpeg"), []byte(fakeScript), 0755)
+		_ = os.WriteFile(filepath.Join(binDir, "exiftool"), []byte(fakeScript), 0755)
+		os.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 	}
 	os.Exit(m.Run())
 }
@@ -601,11 +609,61 @@ func TestAppModel_PipelineSettings(t *testing.T) {
 	if model.cfg.MaxRetries != 3 {
 		t.Errorf("expected MaxRetries 3 after space toggle, got %d", model.cfg.MaxRetries)
 	}
+
+	// Move down to index 10 (Exclude Optimized)
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = newM.(*AppModel)
+	if model.settingCursor != 10 {
+		t.Fatalf("expected settingCursor 10, got %d", model.settingCursor)
+	}
+
+	// Set initial to true and test toggling with Space
+	model.cfg.ExcludeOptimized = true
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	model = newM.(*AppModel)
+	if model.cfg.ExcludeOptimized != false {
+		t.Errorf("expected ExcludeOptimized false after space toggle")
+	}
+
+	// Toggle back with Right arrow
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	model = newM.(*AppModel)
+	if model.cfg.ExcludeOptimized != true {
+		t.Errorf("expected ExcludeOptimized true after right arrow")
+	}
+
+	// Toggle with Left arrow
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	model = newM.(*AppModel)
+	if model.cfg.ExcludeOptimized != false {
+		t.Errorf("expected ExcludeOptimized false after left arrow")
+	}
+
+	vOff := model.View()
+	if !strings.Contains(vOff, "Exclude Optimized") || !strings.Contains(vOff, "OFF — All videos matching search criteria are included") {
+		t.Errorf("expected viewSettings to show OFF description, got: %s", vOff)
+	}
+
+	// Toggle back to true with Right arrow
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	model = newM.(*AppModel)
+	if model.cfg.ExcludeOptimized != true {
+		t.Errorf("expected ExcludeOptimized true after right arrow")
+	}
+
+	// Verify settings view renders Exclude Optimized and tag mention when ON
+	vOn := model.View()
+	if !strings.Contains(vOn, "Exclude Optimized") || !strings.Contains(vOn, "immich-optimizer") {
+		t.Errorf("expected viewSettings to describe Exclude Optimized and immich-optimizer tag, got: %s", vOn)
+	}
 }
 
 func TestAppModel_ResumeMetadataPreservation(t *testing.T) {
 	cfg := &config.Config{URL: "http://localhost:2283", APIKey: "test-key"}
-	pipeline, _ := orchestrator.NewPipeline(cfg)
+	pipeline, err := orchestrator.NewPipeline(cfg)
+	if err != nil {
+		t.Fatalf("NewPipeline failed: %v", err)
+	}
 	m := NewAppModel(cfg, pipeline)
 	m.session = &state.Session{
 		SessionID: "sess-res",
@@ -1747,8 +1805,8 @@ func TestAppModel_VideoQualitySettings(t *testing.T) {
 		t.Errorf("expected Enter on level 1 to cycle to 2, got %d", m.cfg.Quality())
 	}
 
-	// 7. Verify settings navigation boundary clamping (0 to 9) and view rendering for all rows
-	for cursorIdx := 0; cursorIdx <= 9; cursorIdx++ {
+	// 7. Verify settings navigation boundary clamping (0 to 10) and view rendering for all rows
+	for cursorIdx := 0; cursorIdx <= 10; cursorIdx++ {
 		m.settingCursor = cursorIdx
 		rendered := m.viewSettings()
 		if len(rendered) == 0 {
@@ -1760,8 +1818,8 @@ func TestAppModel_VideoQualitySettings(t *testing.T) {
 		newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 		m = newM.(*AppModel)
 	}
-	if m.settingCursor != 9 {
-		t.Errorf("expected settingCursor clamped to 9 at bottom, got %d", m.settingCursor)
+	if m.settingCursor != 10 {
+		t.Errorf("expected settingCursor clamped to 10 at bottom, got %d", m.settingCursor)
 	}
 	for i := 0; i < 20; i++ {
 		newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})

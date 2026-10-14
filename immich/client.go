@@ -126,10 +126,17 @@ func (c *Client) ValidateConnection() error {
 
 // QueryResult holds queried videos and statistics on skipped items
 type QueryResult struct {
-	Videos              []Asset
-	TotalAssetsScanned  int
-	SkippedNonVideo     int
-	SkippedBelowSize    int
+	Videos                  []Asset
+	TotalAssetsScanned      int
+	SkippedNonVideo         int
+	SkippedBelowSize        int
+	SkippedAlreadyOptimized int
+}
+
+// Tag represents an Immich tag entity
+type Tag struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type ExifInfo struct {
@@ -369,15 +376,38 @@ func (c *Client) doRequest(req *http.Request) (*http.Response, error) {
 }
 
 // ScanVideos returns videos filtered by threshold and mode ("MB/min", "Total MB", "Disabled") along with bulk stats on excluded assets
-func (c *Client) ScanVideos(mode string, threshold float64) (*QueryResult, error) {
-	return c.ScanVideosWithContext(context.Background(), mode, threshold)
+func (c *Client) ScanVideos(mode string, threshold float64, excludeOptimized ...bool) (*QueryResult, error) {
+	return c.ScanVideosWithContext(context.Background(), mode, threshold, excludeOptimized...)
 }
 
 // ScanVideosWithContext returns videos filtered by threshold and mode ("MB/min", "Total MB", "Disabled") along with bulk stats on excluded assets, supporting context cancellation
-func (c *Client) ScanVideosWithContext(ctx context.Context, mode string, threshold float64) (*QueryResult, error) {
+func (c *Client) ScanVideosWithContext(ctx context.Context, mode string, threshold float64, excludeOptimized ...bool) (*QueryResult, error) {
 	res := &QueryResult{}
 	page := 1
 	size := 1000
+
+	isExclude := false
+	if len(excludeOptimized) > 0 {
+		isExclude = excludeOptimized[0]
+	}
+
+	var taggedIDs map[string]bool
+	if isExclude {
+		tags, err := c.GetTagsWithContext(ctx)
+		if err == nil {
+			for _, t := range tags {
+				if strings.EqualFold(t.Name, "immich-optimizer") {
+					ids, err := c.GetTaggedAssetIDsWithContext(ctx, t.ID)
+					if err == nil {
+						taggedIDs = ids
+					}
+					break
+				}
+			}
+		} else {
+			logger.Debug("Could not fetch tags for exclusion: %v", err)
+		}
+	}
 
 	for {
 		if ctx.Err() != nil {
@@ -423,6 +453,11 @@ func (c *Client) ScanVideosWithContext(ctx context.Context, mode string, thresho
 		for _, a := range searchResp.Assets.Items {
 			if a.Type != "VIDEO" {
 				res.SkippedNonVideo++
+				continue
+			}
+
+			if isExclude && taggedIDs != nil && taggedIDs[a.ID] {
+				res.SkippedAlreadyOptimized++
 				continue
 			}
 
@@ -985,4 +1020,139 @@ func (c *Client) DeleteAssetWithContext(ctx context.Context, assetID string) err
 // DeleteAsset deletes the specified asset
 func (c *Client) DeleteAsset(assetID string) error {
 	return c.DeleteAssetWithContext(context.Background(), assetID)
+}
+
+// GetTagsWithContext fetches all tags from Immich
+func (c *Client) GetTagsWithContext(ctx context.Context) ([]Tag, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/tags", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var tags []Tag
+	if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {
+		return nil, fmt.Errorf("failed to decode tags response: %w", err)
+	}
+	return tags, nil
+}
+
+// CreateTagWithContext creates a new tag in Immich
+func (c *Client) CreateTagWithContext(ctx context.Context, name string) (*Tag, error) {
+	payload := map[string]interface{}{
+		"name": name,
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/tags", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var created Tag
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		return nil, fmt.Errorf("failed to decode create tag response: %w", err)
+	}
+	return &created, nil
+}
+
+// GetOrCreateTagWithContext finds an existing tag by name or creates it if it doesn't exist
+func (c *Client) GetOrCreateTagWithContext(ctx context.Context, name string) (*Tag, error) {
+	tags, err := c.GetTagsWithContext(ctx)
+	if err == nil {
+		for _, t := range tags {
+			if strings.EqualFold(t.Name, name) {
+				return &t, nil
+			}
+		}
+	}
+	return c.CreateTagWithContext(ctx, name)
+}
+
+// TagAssetWithContext adds the given tag to an asset
+func (c *Client) TagAssetWithContext(ctx context.Context, tagID, assetID string) error {
+	payload := map[string][]string{
+		"ids": {assetID},
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, fmt.Sprintf("%s/api/tags/%s/assets", c.baseURL, tagID), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+// GetTaggedAssetIDsWithContext retrieves all asset IDs that have the specified tag ID
+func (c *Client) GetTaggedAssetIDsWithContext(ctx context.Context, tagID string) (map[string]bool, error) {
+	tagged := make(map[string]bool)
+	page := 1
+	size := 1000
+
+	for {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		payload := map[string]interface{}{
+			"tagIds": []string{tagID},
+			"page":   page,
+			"size":   size,
+		}
+		body, _ := json.Marshal(payload)
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/search/metadata", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := c.doRequest(req)
+		if err != nil {
+			return nil, err
+		}
+
+		var searchResp struct {
+			Assets struct {
+				Items []struct {
+					ID string `json:"id"`
+				} `json:"items"`
+			} `json:"assets"`
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("failed to decode tagged search response: %w", err)
+		}
+		resp.Body.Close()
+
+		for _, item := range searchResp.Assets.Items {
+			if item.ID != "" {
+				tagged[item.ID] = true
+			}
+		}
+
+		if len(searchResp.Assets.Items) < size {
+			break
+		}
+		page++
+	}
+
+	return tagged, nil
 }

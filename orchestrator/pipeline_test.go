@@ -2125,6 +2125,143 @@ func TestPipeline_FavoriteDiscoveredViaAssetInfo(t *testing.T) {
 	}
 }
 
+func TestPipeline_TagsReplacementAssetWhenExcludeOptimized(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	var mu sync.Mutex
+	var tagCreated bool
+	var assetTagged bool
+	var taggedAssetID string
+	var taggedTagID string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/original") {
+			w.Header().Set("Content-Type", "video/mp4")
+			w.Write([]byte("fake-video-data"))
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/albums" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("[]"))
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/albums" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(immich.Album{ID: "album-tag-test", AlbumName: "Immich-Optimizer-InProgress"})
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/assets" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(immich.Asset{ID: "new-tagged-asset-id", Type: "VIDEO"})
+			return
+		}
+		if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/assets") && strings.HasPrefix(r.URL.Path, "/api/albums/") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == http.MethodDelete && r.URL.Path == "/api/assets" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/albums/") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// Tag endpoints
+		if r.Method == http.MethodGet && r.URL.Path == "/api/tags" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("[]"))
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/tags" {
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["name"] == "immich-optimizer" {
+				tagCreated = true
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "tag-opt-123", "name": "immich-optimizer"}`))
+			return
+		}
+		if r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/api/tags/") && strings.HasSuffix(r.URL.Path, "/assets") {
+			taggedTagID = strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/tags/"), "/assets")
+			var body struct {
+				IDs []string `json:"ids"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if len(body.IDs) > 0 {
+				taggedAssetID = body.IDs[0]
+				assetTagged = true
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	fakeFFmpeg := filepath.Join(tempHome, "fake_ffmpeg")
+	script := "#!/bin/sh\nfor arg do last_arg=\"$arg\"; done\necho 'small' > \"$last_arg\"\nexit 0\n"
+	_ = os.WriteFile(fakeFFmpeg, []byte(script), 0755)
+
+	fakeExifTool := filepath.Join(tempHome, "fake_exiftool")
+	_ = os.WriteFile(fakeExifTool, []byte("#!/bin/sh\nexit 0\n"), 0755)
+
+	cfg := &config.Config{
+		URL:              ts.URL,
+		APIKey:           "test-key",
+		SkipHEVC:         false,
+		ExcludeOptimized: true,
+	}
+	binaries := &engine.BinaryManager{
+		FFmpegPath:   fakeFFmpeg,
+		ExifToolPath: fakeExifTool,
+	}
+
+	p, err := NewPipelineWithBinaries(cfg, binaries)
+	if err != nil {
+		t.Fatalf("Failed to create pipeline: %v", err)
+	}
+	p.Client().SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: ts.Config.Handler},
+	})
+
+	videos := []immich.Asset{
+		{
+			ID:               "asset-orig-to-tag",
+			OriginalFileName: "tag_me.mp4",
+			Type:             "VIDEO",
+			Size:             5000,
+		},
+	}
+
+	ch := make(chan interface{}, 20)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range ch {
+		}
+	}()
+
+	p.Run(context.Background(), videos, ch)
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if !tagCreated {
+		t.Errorf("Expected 'immich-optimizer' tag to be created")
+	}
+	if !assetTagged || taggedAssetID != "new-tagged-asset-id" || taggedTagID != "tag-opt-123" {
+		t.Errorf("Expected replacement asset to be tagged: assetTagged=%v, assetID=%s, tagID=%s", assetTagged, taggedAssetID, taggedTagID)
+	}
+}
+
 
 
 

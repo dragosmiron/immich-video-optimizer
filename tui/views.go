@@ -141,8 +141,13 @@ func (m *AppModel) viewScanPrompt() string {
 	if !m.cfg.EnablePrefetch {
 		prefetchText = "Disabled (sequential)"
 	}
-	b.WriteString(fmt.Sprintf("  • Prefetch Next:  %s\n", styles.Value.Render(prefetchText)))
-	b.WriteString(fmt.Sprintf("  • Encoders:       %s worker(s)\n\n", styles.Value.Render(fmt.Sprintf("%d", m.cfg.ConcurrentEncoders))))
+	b.WriteString(fmt.Sprintf("  • Prefetch Next:     %s\n", styles.Value.Render(prefetchText)))
+	excludeOptText := "Enabled (skips tagged 'immich-optimizer')"
+	if !m.cfg.ExcludeOptimized {
+		excludeOptText = "Disabled (includes all)"
+	}
+	b.WriteString(fmt.Sprintf("  • Exclude Optimized: %s\n", styles.Value.Render(excludeOptText)))
+	b.WriteString(fmt.Sprintf("  • Encoders:          %s worker(s)\n\n", styles.Value.Render(fmt.Sprintf("%d", m.cfg.ConcurrentEncoders))))
 
 	b.WriteString(styles.SectionHeader.Render("Ready to Scan:"))
 	b.WriteString("\nNo videos loaded yet. Start a scan to discover large videos on your server.\n\n")
@@ -182,6 +187,9 @@ func (m *AppModel) renderScanSummary() string {
 	b.WriteString("\n")
 	b.WriteString(fmt.Sprintf("  • Total assets inspected in library: %d\n", r.TotalAssetsScanned))
 	b.WriteString(fmt.Sprintf("  • Non-video assets skipped:          %d (photos, RAW, etc.)\n", r.SkippedNonVideo))
+	if r.SkippedAlreadyOptimized > 0 {
+		b.WriteString(fmt.Sprintf("  • Already optimized (tagged):        %d (skipped)\n", r.SkippedAlreadyOptimized))
+	}
 	var skippedLabel string
 	switch m.cfg.ThresholdMode {
 	case config.ThresholdModeDisabled:
@@ -610,6 +618,17 @@ func (m *AppModel) viewSettings() string {
 		"Number of automatic retry attempts with backoff for failed downloads and uploads.\n" +
 			"  • 0 — Disabled. Fails immediately on first error\n" +
 			"  • 1 to 5 — Retries automatically with exponential backoff on transient network drops",
+		// 10 — Exclude Already Optimized (Uses Tags)
+		func() string {
+			if m.cfg.ExcludeOptimized {
+				return "ON  — Enables and uses Immich tags ('immich-optimizer') to track and exclude\n" +
+					"       already optimized videos from search. Ideal for recurring runs as your\n" +
+					"       library grows on remaining videos.\n" +
+					"       Requires 'Tags' enabled in Immich (Account Settings → Features → Tags)."
+			}
+			return "OFF — All videos matching search criteria are included, even if previously\n" +
+				"       tagged as optimized."
+		}(),
 	}
 
 	isFocused := func(idx int) bool { return m.settingCursor == idx }
@@ -741,6 +760,16 @@ func (m *AppModel) viewSettings() string {
 	writeRow(9,
 		"Network Retries:     ",
 		retryStr+"  ← / → / [Space / Enter] to change  [0, 1, 2, 3, 5]",
+	)
+
+	// Row 10 — Exclude Already Optimized (Uses Tags)
+	excludeOptState := "[✓] ON"
+	if !m.cfg.ExcludeOptimized {
+		excludeOptState = "[ ] OFF"
+	}
+	writeRow(10,
+		"Exclude Optimized:   ",
+		excludeOptState+"  [Space / Enter] to toggle",
 	)
 
 	b.WriteString("\n")

@@ -26,6 +26,7 @@ func TestSaveAndLoadConfig(t *testing.T) {
 		EnablePrefetch:     true,
 		LogLevel:           "debug",
 		MaxRetries:         5,
+		ExcludeOptimized:   true,
 	}
 
 	// Test SaveConfig
@@ -46,7 +47,7 @@ func TestSaveAndLoadConfig(t *testing.T) {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
 
-	if loaded.URL != cfg.URL || loaded.APIKey != cfg.APIKey || loaded.ThresholdMode != cfg.ThresholdMode || loaded.SizeThreshold != cfg.SizeThreshold || loaded.SkipHEVC != cfg.SkipHEVC || loaded.ConcurrentEncoders != cfg.ConcurrentEncoders || loaded.EnablePrefetch != cfg.EnablePrefetch || loaded.LogLevel != cfg.LogLevel || loaded.MaxRetries != cfg.MaxRetries {
+	if loaded.URL != cfg.URL || loaded.APIKey != cfg.APIKey || loaded.ThresholdMode != cfg.ThresholdMode || loaded.SizeThreshold != cfg.SizeThreshold || loaded.SkipHEVC != cfg.SkipHEVC || loaded.ConcurrentEncoders != cfg.ConcurrentEncoders || loaded.EnablePrefetch != cfg.EnablePrefetch || loaded.LogLevel != cfg.LogLevel || loaded.MaxRetries != cfg.MaxRetries || loaded.ExcludeOptimized != cfg.ExcludeOptimized {
 		t.Errorf("Loaded config mismatch: got %v, expected %v", loaded, cfg)
 	}
 	if !loaded.IsDebug() {
@@ -54,6 +55,9 @@ func TestSaveAndLoadConfig(t *testing.T) {
 	}
 	if loaded.MaxRetries != 5 {
 		t.Errorf("expected MaxRetries 5, got %d", loaded.MaxRetries)
+	}
+	if !loaded.ExcludeOptimized {
+		t.Errorf("expected ExcludeOptimized true")
 	}
 }
 
@@ -167,6 +171,9 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.SizeThreshold != "100" {
 		t.Errorf("expected default SizeThreshold 100, got %s", cfg.SizeThreshold)
+	}
+	if !cfg.ExcludeOptimized {
+		t.Errorf("expected default ExcludeOptimized true")
 	}
 }
 

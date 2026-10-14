@@ -925,7 +925,11 @@ func (m *AppModel) updateResumePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.totalSavedBytes = m.session.GetTotalSavedBytes()
 			m.ctx, m.cancelCtx = context.WithCancel(context.Background())
 			m.pipelineChan = make(chan interface{}, 200)
-			go m.pipeline.Run(m.ctx, toProcess, m.pipelineChan)
+			if m.pipeline != nil {
+				go m.pipeline.Run(m.ctx, toProcess, m.pipelineChan)
+			} else {
+				close(m.pipelineChan)
+			}
 			return m, tea.Batch(waitForPipeline(m.pipelineChan), tickPulseCmd())
 		}
 		m.state = ViewScanPrompt
@@ -1097,7 +1101,11 @@ func (m *AppModel) updateBrowser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.dryRunDone = false
 			m.dryRunCtx, m.dryRunCancel = context.WithCancel(context.Background())
 			m.dryRunChan = make(chan interface{}, 200)
-			go m.pipeline.RunDryRun(m.dryRunCtx, toProcess, m.dryRunChan)
+			if m.pipeline != nil {
+				go m.pipeline.RunDryRun(m.dryRunCtx, toProcess, m.dryRunChan)
+			} else {
+				close(m.dryRunChan)
+			}
 			return m, waitForDryRun(m.dryRunChan)
 		}
 		return m, nil
@@ -1144,7 +1152,11 @@ func (m *AppModel) startOptimization(toProcess []immich.Asset) (tea.Model, tea.C
 	m.transcodedVideos = nil
 	m.ctx, m.cancelCtx = context.WithCancel(context.Background())
 	m.pipelineChan = make(chan interface{}, 200)
-	go m.pipeline.Run(m.ctx, toProcess, m.pipelineChan)
+	if m.pipeline != nil {
+		go m.pipeline.Run(m.ctx, toProcess, m.pipelineChan)
+	} else {
+		close(m.pipelineChan)
+	}
 	return m, tea.Batch(waitForPipeline(m.pipelineChan), tickPulseCmd())
 }
 
@@ -1218,7 +1230,7 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "down", "j":
-		if m.settingCursor < 9 {
+		if m.settingCursor < 10 {
 			m.settingCursor++
 		}
 
@@ -1270,6 +1282,8 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
+		} else if m.settingCursor == 10 {
+			m.cfg.ExcludeOptimized = !m.cfg.ExcludeOptimized
 		}
 
 	case "right", "l":
@@ -1320,6 +1334,8 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
+		} else if m.settingCursor == 10 {
+			m.cfg.ExcludeOptimized = !m.cfg.ExcludeOptimized
 		}
 
 	case " ", "enter":
@@ -1376,6 +1392,8 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.pipeline != nil && m.pipeline.Client() != nil {
 				m.pipeline.Client().SetMaxRetries(m.cfg.MaxRetries)
 			}
+		} else if m.settingCursor == 10 {
+			m.cfg.ExcludeOptimized = !m.cfg.ExcludeOptimized
 		}
 	}
 	return m, nil
@@ -1416,7 +1434,11 @@ func (m *AppModel) updateSummary(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.failedVideos = nil
 				m.ctx, m.cancelCtx = context.WithCancel(context.Background())
 				m.pipelineChan = make(chan interface{}, 200)
-				go m.pipeline.Run(m.ctx, toRetry, m.pipelineChan)
+				if m.pipeline != nil {
+					go m.pipeline.Run(m.ctx, toRetry, m.pipelineChan)
+				} else {
+					close(m.pipelineChan)
+				}
 				return m, tea.Batch(waitForPipeline(m.pipelineChan), tickPulseCmd())
 			}
 		}
