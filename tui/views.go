@@ -384,8 +384,7 @@ func (m *AppModel) viewDryRun() string {
 			))
 		}
 		if m.dryRunAlbumName != "" {
-			b.WriteString(fmt.Sprintf("\n  📁 %s %s %s\n",
-				styles.SectionHeader.Render("Album created in Immich:"),
+			b.WriteString(fmt.Sprintf("  📁 Album created in Immich:        %s  %s\n",
 				styles.Value.Render(m.dryRunAlbumName),
 				styles.Subtext.Render("(you can open Immich to inspect these videos)"),
 			))
