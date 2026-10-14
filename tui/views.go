@@ -187,6 +187,9 @@ func (m *AppModel) renderScanSummary() string {
 	b.WriteString("\n")
 	b.WriteString(fmt.Sprintf("  • Total assets inspected in library: %d\n", r.TotalAssetsScanned))
 	b.WriteString(fmt.Sprintf("  • Non-video assets skipped:          %d (photos, RAW, etc.)\n", r.SkippedNonVideo))
+	if r.SkippedExternal > 0 {
+		b.WriteString(fmt.Sprintf("  • External library videos:           %d (skipped — read-only)\n", r.SkippedExternal))
+	}
 	if r.SkippedAlreadyOptimized > 0 {
 		b.WriteString(fmt.Sprintf("  • Already optimized (tagged):        %d (skipped)\n", r.SkippedAlreadyOptimized))
 	}

@@ -1505,6 +1505,31 @@ func TestAppModel_ThresholdModesAndToggle(t *testing.T) {
 	}
 }
 
+func TestAppModel_RenderScanSummary_ExternalLibrary(t *testing.T) {
+	cfg := &config.Config{
+		URL:           "http://localhost:2283",
+		APIKey:        "test-key",
+		ThresholdMode: config.ThresholdModeMBPerMin,
+		SizeThreshold: "100",
+	}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.scanResult = &immich.QueryResult{
+		TotalAssetsScanned: 25,
+		SkippedNonVideo:    5,
+		SkippedExternal:    8,
+		SkippedBelowSize:   2,
+	}
+	m.videos = []immich.Asset{
+		{ID: "v1", Type: "VIDEO", Size: 500000000, OriginalFileName: "clip.mp4"},
+	}
+	m.state = ViewBrowser
+	summary := m.renderScanSummary()
+	if !strings.Contains(summary, "External library videos:           8 (skipped — read-only)") {
+		t.Errorf("expected summary to contain external library skipped count, got: %s", summary)
+	}
+}
+
 func TestAppModel_ElapsedTimeSubsecondTruncated(t *testing.T) {
 	cfg := &config.Config{
 		URL:    "http://localhost:2283",

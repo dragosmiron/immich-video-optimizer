@@ -1099,3 +1099,121 @@ func TestScanVideos_ExcludeOptimizedFilter(t *testing.T) {
 	}
 }
 
+func TestAsset_IsExternalLibrary(t *testing.T) {
+	libID := "uuid-1234"
+	emptyLibID := ""
+
+	tests := []struct {
+		name     string
+		asset    Asset
+		expected bool
+	}{
+		{
+			name:     "standard internal asset",
+			asset:    Asset{ID: "1", IsReadOnly: false, IsExternal: false, LibraryID: nil},
+			expected: false,
+		},
+		{
+			name:     "read-only asset (Immich v1.118+)",
+			asset:    Asset{ID: "2", IsReadOnly: true, IsExternal: false, LibraryID: nil},
+			expected: true,
+		},
+		{
+			name:     "external asset flag (Immich legacy)",
+			asset:    Asset{ID: "3", IsReadOnly: false, IsExternal: true, LibraryID: nil},
+			expected: true,
+		},
+		{
+			name:     "libraryId populated",
+			asset:    Asset{ID: "4", IsReadOnly: false, IsExternal: false, LibraryID: &libID},
+			expected: true,
+		},
+		{
+			name:     "empty libraryId string",
+			asset:    Asset{ID: "5", IsReadOnly: false, IsExternal: false, LibraryID: &emptyLibID},
+			expected: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.asset.IsExternalLibrary(); got != tc.expected {
+				t.Errorf("IsExternalLibrary() = %v, expected %v", got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestScanVideos_ExternalLibraryFilter(t *testing.T) {
+	libID := "external-lib-uuid"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/search/metadata" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"assets": {
+					"items": [
+						{"id": "v-internal", "type": "VIDEO", "size": 300000000, "originalFileName": "internal.mp4", "duration": "0:01:00", "isReadOnly": false, "isExternal": false},
+						{"id": "v-readonly", "type": "VIDEO", "size": 300000000, "originalFileName": "ext1.mp4", "duration": "0:01:00", "isReadOnly": true},
+						{"id": "v-external", "type": "VIDEO", "size": 300000000, "originalFileName": "ext2.mp4", "duration": "0:01:00", "isExternal": true},
+						{"id": "v-libid", "type": "VIDEO", "size": 300000000, "originalFileName": "ext3.mp4", "duration": "0:01:00", "libraryId": "` + libID + `"}
+					]
+				}
+			}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+
+	res, err := client.ScanVideos("MB/min", 10.0, false)
+	if err != nil {
+		t.Fatalf("ScanVideos failed: %v", err)
+	}
+
+	if res.SkippedExternal != 3 {
+		t.Errorf("expected 3 external library videos skipped, got %d", res.SkippedExternal)
+	}
+	if len(res.Videos) != 1 || res.Videos[0].ID != "v-internal" {
+		t.Fatalf("expected only v-internal returned, got %+v", res.Videos)
+	}
+}
+
+func TestQueryVideoAssets_ExternalLibraryFilter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/search/metadata" {
+			var reqBody map[string]interface{}
+			_ = json.NewDecoder(r.Body).Decode(&reqBody)
+			if reqBody["page"].(float64) == 1 {
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{
+					"assets": {
+						"items": [
+							{"id": "v-internal", "type": "VIDEO", "size": 5000, "isReadOnly": false},
+							{"id": "v-external", "type": "VIDEO", "size": 5000, "isReadOnly": true}
+						]
+					}
+				}`))
+			} else {
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"assets": {"items": []}}`))
+			}
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+
+	videos, err := client.QueryVideoAssets(1000)
+	if err != nil {
+		t.Fatalf("QueryVideoAssets failed: %v", err)
+	}
+	if len(videos) != 1 || videos[0].ID != "v-internal" {
+		t.Fatalf("expected only v-internal returned, got %+v", videos)
+	}
+}
+
+

@@ -131,6 +131,7 @@ type QueryResult struct {
 	SkippedNonVideo         int
 	SkippedBelowSize        int
 	SkippedAlreadyOptimized int
+	SkippedExternal         int
 }
 
 // Tag represents an Immich tag entity
@@ -158,7 +159,22 @@ type Asset struct {
 	FileModifiedAt   string          `json:"fileModifiedAt,omitempty"`
 	OriginalFileName string          `json:"originalFileName,omitempty"`
 	IsFavorite       bool            `json:"isFavorite"`
+	IsReadOnly       bool            `json:"isReadOnly"`
+	IsExternal       bool            `json:"isExternal"`
+	LibraryID        *string         `json:"libraryId,omitempty"`
 	ExifInfo         ExifInfo        `json:"exifInfo,omitempty"`
+}
+
+// IsExternalLibrary returns true if the asset belongs to an external library
+// (e.g. read-only mount or external storage path) rather than internal uploads.
+func (a *Asset) IsExternalLibrary() bool {
+	if a.IsReadOnly || a.IsExternal {
+		return true
+	}
+	if a.LibraryID != nil && *a.LibraryID != "" {
+		return true
+	}
+	return false
 }
 
 // GetSize returns the asset size, falling back to exifInfo.fileSizeInByte if Size is 0
@@ -456,6 +472,11 @@ func (c *Client) ScanVideosWithContext(ctx context.Context, mode string, thresho
 				continue
 			}
 
+			if a.IsExternalLibrary() {
+				res.SkippedExternal++
+				continue
+			}
+
 			if isExclude && taggedIDs != nil && taggedIDs[a.ID] {
 				res.SkippedAlreadyOptimized++
 				continue
@@ -537,6 +558,8 @@ func (c *Client) QueryVideoAssets(sizeThresholdBytes int64) ([]Asset, error) {
 		for _, a := range searchResp.Assets.Items {
 			if a.Type != "VIDEO" {
 				res.SkippedNonVideo++
+			} else if a.IsExternalLibrary() {
+				res.SkippedExternal++
 			} else if a.GetSize() <= sizeThresholdBytes {
 				res.SkippedBelowSize++
 			} else {
