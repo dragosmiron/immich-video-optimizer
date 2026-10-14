@@ -995,6 +995,365 @@ exit 0
 	mu.Unlock()
 }
 
+func TestPipeline_DryRunToOptimizationAlbumReuseAndRename(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	var createdAlbums []string
+	var deletedAlbums []string
+	var renamedAlbums []string
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if r.Method == http.MethodPost && r.URL.Path == "/api/albums" {
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			name := body["albumName"]
+			createdAlbums = append(createdAlbums, name)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(immich.Album{ID: "album-dryrun-123", AlbumName: name})
+			return
+		}
+		if r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/albums/") {
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			renamedAlbums = append(renamedAlbums, body["albumName"])
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/assets") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/albums/") {
+			id := strings.TrimPrefix(r.URL.Path, "/api/albums/")
+			deletedAlbums = append(deletedAlbums, id)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/original") {
+			w.Header().Set("Content-Type", "video/mp4")
+			w.Write([]byte("fake video content"))
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/assets" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "new-asset-456"}`))
+			return
+		}
+		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/assets/") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	fakeFFmpeg := filepath.Join(tempHome, "fake_ffmpeg")
+	script := `#!/bin/sh
+if [ "$1" = "-i" ] || [ "$2" = "-i" ] || [ "$3" = "-i" ]; then
+    echo "Stream #0:0: Video: h264, 1920x1080"
+    # If output file specified, write a dummy file
+    last="${@: -1}"
+    if [ "$last" != "" ]; then
+        echo "fake transcoded" > "$last"
+    fi
+fi
+exit 0
+`
+	_ = os.WriteFile(fakeFFmpeg, []byte(script), 0755)
+
+	fakeExifTool := filepath.Join(tempHome, "fake_exiftool")
+	_ = os.WriteFile(fakeExifTool, []byte("#!/bin/sh\nexit 0\n"), 0755)
+
+	cfg := &config.Config{
+		URL:           ts.URL,
+		APIKey:        "test-key",
+		SizeThreshold: "0",
+		SkipHEVC:      false,
+	}
+
+	binaries := &engine.BinaryManager{
+		FFmpegPath:   fakeFFmpeg,
+		ExifToolPath: fakeExifTool,
+	}
+
+	p, err := NewPipelineWithBinaries(cfg, binaries)
+	if err != nil {
+		t.Fatalf("Failed to initialize pipeline: %v", err)
+	}
+	p.Client().SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: ts.Config.Handler},
+	})
+
+	videos := []immich.Asset{
+		{
+			ID:               "asset-1",
+			OriginalFileName: "video1.mp4",
+			Size:             5000,
+			ExifInfo: immich.ExifInfo{
+				FileSizeInByte:  5000,
+				ExifImageWidth:  1920,
+				ExifImageHeight: 1080,
+			},
+		},
+	}
+
+	// 1. Run dry run
+	chDry := make(chan interface{}, 100)
+	var wgDry sync.WaitGroup
+	wgDry.Add(1)
+	go func() {
+		defer wgDry.Done()
+		for range chDry {
+		}
+	}()
+	p.RunDryRun(context.Background(), videos, chDry)
+	wgDry.Wait()
+
+	mu.Lock()
+	if len(createdAlbums) != 1 {
+		t.Fatalf("Expected 1 dry run album created, got %d", len(createdAlbums))
+	}
+	if !strings.HasPrefix(createdAlbums[0], "Immich-Optimizer-DryRun-") {
+		t.Errorf("Expected album name to start with Immich-Optimizer-DryRun-, got %s", createdAlbums[0])
+	}
+	mu.Unlock()
+
+	// 2. Run optimization using the same pipeline instance (which retains dryRunAlbumID)
+	chOpt := make(chan interface{}, 200)
+	var wgOpt sync.WaitGroup
+	wgOpt.Add(1)
+	go func() {
+		defer wgOpt.Done()
+		for range chOpt {
+		}
+	}()
+	p.Run(context.Background(), videos, chOpt)
+	wgOpt.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Dry run album must NOT have been deleted
+	if len(deletedAlbums) != 0 {
+		t.Errorf("Expected dry run album NOT to be deleted, got deleted: %v", deletedAlbums)
+	}
+	// No second album should have been created (only the 1 from dry run)
+	if len(createdAlbums) != 1 {
+		t.Errorf("Expected only 1 album created total (dry-run reused), got %d: %v", len(createdAlbums), createdAlbums)
+	}
+	// Album must have been renamed to InProgress, and then Completed!
+	if len(renamedAlbums) != 2 {
+		t.Fatalf("Expected 2 renames (InProgress and Completed), got %d: %v", len(renamedAlbums), renamedAlbums)
+	}
+	if !strings.HasPrefix(renamedAlbums[0], "Immich-Optimizer-InProgress-") {
+		t.Errorf("Expected first rename to start with Immich-Optimizer-InProgress-, got: %s", renamedAlbums[0])
+	}
+	if !strings.HasPrefix(renamedAlbums[1], "Immich-Optimizer-Completed-") {
+		t.Errorf("Expected second rename to start with Immich-Optimizer-Completed-, got: %s", renamedAlbums[1])
+	}
+}
+
+func TestPipeline_DirectRunAlbumLifecycle(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	var createdAlbums []string
+	var renamedAlbums []string
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if r.Method == http.MethodPost && r.URL.Path == "/api/albums" {
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			name := body["albumName"]
+			createdAlbums = append(createdAlbums, name)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(immich.Album{ID: "album-direct-123", AlbumName: name})
+			return
+		}
+		if r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/albums/") {
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			renamedAlbums = append(renamedAlbums, body["albumName"])
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/assets") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/original") {
+			w.Header().Set("Content-Type", "video/mp4")
+			w.Write([]byte("fake video content"))
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/assets" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "new-asset-direct"}`))
+			return
+		}
+		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/assets/") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	fakeFFmpeg := filepath.Join(tempHome, "fake_ffmpeg")
+	script := `#!/bin/sh
+if [ "$1" = "-i" ] || [ "$2" = "-i" ] || [ "$3" = "-i" ]; then
+    echo "Stream #0:0: Video: h264, 1920x1080"
+    last="${@: -1}"
+    if [ "$last" != "" ]; then
+        echo "fake transcoded" > "$last"
+    fi
+fi
+exit 0
+`
+	_ = os.WriteFile(fakeFFmpeg, []byte(script), 0755)
+
+	fakeExifTool := filepath.Join(tempHome, "fake_exiftool")
+	_ = os.WriteFile(fakeExifTool, []byte("#!/bin/sh\nexit 0\n"), 0755)
+
+	cfg := &config.Config{
+		URL:           ts.URL,
+		APIKey:        "test-key",
+		SizeThreshold: "0",
+		SkipHEVC:      false,
+	}
+
+	binaries := &engine.BinaryManager{
+		FFmpegPath:   fakeFFmpeg,
+		ExifToolPath: fakeExifTool,
+	}
+
+	p, err := NewPipelineWithBinaries(cfg, binaries)
+	if err != nil {
+		t.Fatalf("Failed to initialize pipeline: %v", err)
+	}
+	p.Client().SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: ts.Config.Handler},
+	})
+
+	videos := []immich.Asset{
+		{
+			ID:               "asset-direct-1",
+			OriginalFileName: "video_direct.mp4",
+			Size:             5000,
+			ExifInfo: immich.ExifInfo{
+				FileSizeInByte:  5000,
+				ExifImageWidth:  1920,
+				ExifImageHeight: 1080,
+			},
+		},
+	}
+
+	ch := make(chan interface{}, 200)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range ch {
+		}
+	}()
+	p.Run(context.Background(), videos, ch)
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Direct run creates InProgress album
+	if len(createdAlbums) != 1 || !strings.HasPrefix(createdAlbums[0], "Immich-Optimizer-InProgress-") {
+		t.Fatalf("Expected 1 InProgress album created, got: %v", createdAlbums)
+	}
+	// On completion, renamed to Completed
+	if len(renamedAlbums) != 1 || !strings.HasPrefix(renamedAlbums[0], "Immich-Optimizer-Completed-") {
+		t.Fatalf("Expected 1 Completed album rename, got: %v", renamedAlbums)
+	}
+}
+
+func TestPipeline_CancelledRunDoesNotRenameToCompleted(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	var renamedAlbums []string
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if r.Method == http.MethodPost && r.URL.Path == "/api/albums" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(immich.Album{ID: "album-cancel-123", AlbumName: "Immich-Optimizer-InProgress-test"})
+			return
+		}
+		if r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/albums/") {
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			renamedAlbums = append(renamedAlbums, body["albumName"])
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	p, err := NewPipelineWithBinaries(&config.Config{
+		URL:           ts.URL,
+		APIKey:        "test-key",
+		SizeThreshold: "0",
+		SkipHEVC:      false,
+	}, &engine.BinaryManager{})
+	if err != nil {
+		t.Fatalf("Failed to initialize pipeline: %v", err)
+	}
+	p.Client().SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: ts.Config.Handler},
+	})
+
+	videos := []immich.Asset{
+		{
+			ID:               "asset-cancel-1",
+			OriginalFileName: "video_cancel.mp4",
+			Size:             5000,
+		},
+	}
+
+	ch := make(chan interface{}, 200)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range ch {
+		}
+	}()
+	p.Run(ctx, videos, ch)
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Should NOT have renamed to Completed
+	for _, name := range renamedAlbums {
+		if strings.HasPrefix(name, "Immich-Optimizer-Completed-") {
+			t.Errorf("Cancelled pipeline should NOT rename album to Completed, got: %s", name)
+		}
+	}
+}
+
 func TestPipeline_UnbufferedChannel(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)

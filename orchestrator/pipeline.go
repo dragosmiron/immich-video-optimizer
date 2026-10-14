@@ -103,6 +103,31 @@ func (p *Pipeline) CleanDryRunAlbum() {
 	}
 }
 
+// SetDryRunAlbumID sets or updates the dry run album ID.
+func (p *Pipeline) SetDryRunAlbumID(albumID string) {
+	p.dryRunMu.Lock()
+	p.dryRunAlbumID = albumID
+	p.dryRunMu.Unlock()
+}
+
+// DryRunAlbumID returns the current dry run album ID.
+func (p *Pipeline) DryRunAlbumID() string {
+	p.dryRunMu.Lock()
+	defer p.dryRunMu.Unlock()
+	return p.dryRunAlbumID
+}
+
+func (p *Pipeline) renameAlbumToCompleted(albumID string) {
+	if albumID == "" || p.client == nil {
+		return
+	}
+	timestamp := time.Now().Format("20060102-150405")
+	completedName := fmt.Sprintf("Immich-Optimizer-Completed-%s", timestamp)
+	if err := p.client.UpdateAlbumName(albumID, completedName); err != nil {
+		logger.Error("Failed to rename tracking album %s to completed %s: %v", albumID, completedName, err)
+	}
+}
+
 func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- interface{}) {
 	defer close(ch)
 
@@ -129,7 +154,10 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 	p.isRunning = true
 	p.runMu.Unlock()
 
-	p.CleanDryRunAlbum()
+	p.dryRunMu.Lock()
+	dryRunAlbum := p.dryRunAlbumID
+	p.dryRunAlbumID = ""
+	p.dryRunMu.Unlock()
 
 	defer func() {
 		p.runMu.Lock()
@@ -150,6 +178,21 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		albumID = sess.TrackingAlbumID
 	}
 
+	if albumID == "" && dryRunAlbum != "" {
+		albumID = dryRunAlbum
+		timestamp := time.Now().Format("20060102-150405")
+		inProgressName := fmt.Sprintf("Immich-Optimizer-InProgress-%s", timestamp)
+		if p.client != nil {
+			if err := p.client.UpdateAlbumName(albumID, inProgressName); err != nil {
+				logger.Error("Failed to rename dry-run album %s to %s: %v", albumID, inProgressName, err)
+			}
+		}
+	} else if dryRunAlbum != "" && dryRunAlbum != albumID {
+		if p.client != nil {
+			_ = p.client.DeleteAlbum(dryRunAlbum)
+		}
+	}
+
 	if sess == nil {
 		timestamp := time.Now().Format("20060102-150405")
 		sess = &state.Session{
@@ -159,6 +202,9 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 			Videos:          make(map[string]*state.VideoState),
 			TotalVideos:     len(videos),
 		}
+	} else if sess.TrackingAlbumID == "" && albumID != "" {
+		sess.TrackingAlbumID = albumID
+		_ = state.SaveSession(sess)
 	}
 
 	for _, v := range videos {
@@ -190,6 +236,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		if sess.PendingCount() == 0 && sess.FailedCount() == 0 {
 			_ = state.ClearSession()
 		}
+		p.renameAlbumToCompleted(albumID)
 		emit(PipelineDoneMsg{TotalSavedBytes: sess.GetTotalSavedBytes()})
 		return
 	}
@@ -209,6 +256,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		if sess.PendingCount() == 0 && sess.FailedCount() == 0 {
 			_ = state.ClearSession()
 		}
+		p.renameAlbumToCompleted(albumID)
 		emit(PipelineDoneMsg{TotalSavedBytes: sess.GetTotalSavedBytes()})
 		return
 	}
@@ -565,6 +613,8 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 	if sess.PendingCount() == 0 && sess.FailedCount() == 0 {
 		_ = state.ClearSession()
 	}
+
+	p.renameAlbumToCompleted(albumID)
 
 	emit(PipelineDoneMsg{TotalSavedBytes: sess.GetTotalSavedBytes()})
 }

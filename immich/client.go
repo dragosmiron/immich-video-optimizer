@@ -584,6 +584,28 @@ func (c *Client) DeleteAlbum(albumID string) error {
 	return nil
 }
 
+// UpdateAlbumName updates the name of an existing album in Immich.
+func (c *Client) UpdateAlbumName(albumID string, newName string) error {
+	if albumID == "" {
+		return nil
+	}
+	payload := map[string]string{"albumName": newName}
+	body, _ := json.Marshal(payload)
+	url := fmt.Sprintf("%s/api/albums/%s", c.baseURL, albumID)
+	req, err := http.NewRequest(http.MethodPatch, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
 func (c *Client) downloadAssetOnce(ctx context.Context, assetID string, outPath string) error {
 	url := fmt.Sprintf("%s/api/assets/%s/original", c.baseURL, assetID)
 	logger.Debug("Downloading asset %s from %s -> %s", assetID, url, outPath)

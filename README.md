@@ -168,11 +168,16 @@ Immich-Optimizer-InProgress-<YYYYMMDD-HHMMSS>
 
 As each video is transcoded, its optimized replacement is uploaded and added to this album, while the original asset is cleanly removed.
 
-During **Dry Run**, an inspection album is also created with the videos that will be processed:
+When the optimization batch completes successfully, the album is automatically renamed to:
+```
+Immich-Optimizer-Completed-<YYYYMMDD-HHMMSS>
+```
+
+During **Dry Run**, an inspection album is created with the candidate videos that will be processed:
 ```
 Immich-Optimizer-DryRun-<YYYYMMDD-HHMMSS>
 ```
-You can open Immich to review the queued videos before starting. This dry-run album is automatically removed when you start optimization or run another dry run.
+You can open Immich to review the queued videos before starting. When you proceed with optimization, this album is automatically reused and renamed to `InProgress` (and then `Completed` upon finish), avoiding duplicate albums.
 
 ### Important Details:
 1. **Only Queued & Transcoded Videos Are Added:** Videos that are skipped (e.g. already HEVC, or skipped by Size Guard) are never added to this album.

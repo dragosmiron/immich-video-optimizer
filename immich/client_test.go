@@ -198,6 +198,57 @@ func TestDeleteAlbum_404Ignored(t *testing.T) {
 	}
 }
 
+func TestUpdateAlbumName(t *testing.T) {
+	var receivedMethod string
+	var receivedPath string
+	var receivedBody map[string]string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedMethod = r.Method
+		receivedPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&receivedBody)
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(Album{ID: "album-123", AlbumName: receivedBody["albumName"]})
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+
+	// 1. Success case
+	err := client.UpdateAlbumName("album-123", "Immich-Optimizer-InProgress-20261014")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if receivedMethod != http.MethodPatch {
+		t.Errorf("Expected PATCH, got %s", receivedMethod)
+	}
+	if receivedPath != "/api/albums/album-123" {
+		t.Errorf("Expected /api/albums/album-123, got %s", receivedPath)
+	}
+	if receivedBody["albumName"] != "Immich-Optimizer-InProgress-20261014" {
+		t.Errorf("Expected albumName 'Immich-Optimizer-InProgress-20261014', got '%s'", receivedBody["albumName"])
+	}
+
+	// 2. Empty albumID is a no-op
+	if err := client.UpdateAlbumName("", "New Name"); err != nil {
+		t.Errorf("Expected nil error on empty albumID, got: %v", err)
+	}
+}
+
+func TestUpdateAlbumName_Error(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"message": "Album not editable"}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+	err := client.UpdateAlbumName("album-123", "New Name")
+	if err == nil {
+		t.Fatalf("Expected error on 400 Bad Request, got nil")
+	}
+}
+
 func TestDownloadAsset(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

@@ -1540,6 +1540,50 @@ func TestAppModel_DryRunAlbumNotice(t *testing.T) {
 	}
 }
 
+func TestAppModel_DryRunToOptimizationPassesAlbumID(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	cfg := &config.Config{
+		URL:    "http://localhost:2283",
+		APIKey: "test-key",
+	}
+	pipeline, err := orchestrator.NewPipeline(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create pipeline: %v", err)
+	}
+	m := NewAppModel(cfg, pipeline)
+	m.state = ViewDryRun
+	m.dryRunDone = true
+	m.dryRunAlbumID = "album-xyz-789"
+	m.dryRunAlbumName = "Immich-Optimizer-DryRun-20261014-123456"
+	m.dryRunToProcess = []immich.Asset{
+		{ID: "vid-1", OriginalFileName: "vid1.mp4", ExifInfo: immich.ExifInfo{FileSizeInByte: 1000}},
+	}
+
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	appModel, ok := newM.(*AppModel)
+	if !ok {
+		t.Fatalf("Expected *AppModel, got %T", newM)
+	}
+
+	if appModel.state != ViewDashboard {
+		t.Errorf("Expected state ViewDashboard, got %v", appModel.state)
+	}
+	if pipeline.DryRunAlbumID() != "album-xyz-789" {
+		t.Errorf("Expected pipeline to have DryRunAlbumID 'album-xyz-789', got '%s'", pipeline.DryRunAlbumID())
+	}
+	if appModel.dryRunAlbumID != "" {
+		t.Errorf("Expected appModel.dryRunAlbumID to be cleared, got '%s'", appModel.dryRunAlbumID)
+	}
+	if appModel.dryRunAlbumName != "" {
+		t.Errorf("Expected appModel.dryRunAlbumName to be cleared, got '%s'", appModel.dryRunAlbumName)
+	}
+	if appModel.cancelCtx != nil {
+		appModel.cancelCtx()
+	}
+}
+
 func TestAppModel_DashboardPulsingWhenNoParts(t *testing.T) {
 	cfg := &config.Config{
 		URL:    "http://localhost:2283",

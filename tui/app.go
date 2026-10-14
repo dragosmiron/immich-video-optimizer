@@ -1109,6 +1109,11 @@ func (m *AppModel) updateBrowser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if len(toProcess) > 0 {
+			if m.pipeline != nil && m.dryRunAlbumID != "" {
+				m.pipeline.CleanDryRunAlbum()
+				m.dryRunAlbumID = ""
+				m.dryRunAlbumName = ""
+			}
 			return m.startOptimization(toProcess)
 		}
 		return m, nil
@@ -1122,8 +1127,8 @@ func (m *AppModel) updateBrowser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *AppModel) startOptimization(toProcess []immich.Asset) (tea.Model, tea.Cmd) {
-	if m.pipeline != nil {
-		m.pipeline.CleanDryRunAlbum()
+	if m.pipeline != nil && m.dryRunAlbumID != "" {
+		m.pipeline.SetDryRunAlbumID(m.dryRunAlbumID)
 	}
 	m.dryRunAlbumName = ""
 	m.dryRunAlbumID = ""
