@@ -1176,12 +1176,12 @@ func estimateSavings(orig int64, detail engine.ProbeDetails, targetResSetting st
 // renderEncodingPulseForFrame returns an actively animated and color-pulsing encoding status indicator for a specific frame index.
 func (m *AppModel) renderEncodingPulseForFrame(frame int) string {
 	spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-	pulseColors := []lipgloss.Color{
-		lipgloss.Color("#22C55E"), // Green
-		lipgloss.Color("#10B981"), // Emerald
-		lipgloss.Color("#06B6D4"), // Cyan
-		lipgloss.Color("#38BDF8"), // Sky blue
-		lipgloss.Color("#0EA5E9"), // Light blue
+	pulseColors := []lipgloss.TerminalColor{
+		lipgloss.AdaptiveColor{Light: "#15803D", Dark: "#22C55E"}, // Green
+		lipgloss.AdaptiveColor{Light: "#047857", Dark: "#10B981"}, // Emerald
+		lipgloss.AdaptiveColor{Light: "#0E7490", Dark: "#06B6D4"}, // Cyan
+		lipgloss.AdaptiveColor{Light: "#0369A1", Dark: "#38BDF8"}, // Sky blue
+		lipgloss.AdaptiveColor{Light: "#1D4ED8", Dark: "#0EA5E9"}, // Blue
 	}
 	frameIdx := frame % len(spinnerFrames)
 	colorIdx := frame % len(pulseColors)
