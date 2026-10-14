@@ -27,6 +27,42 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func drainAndCancelPipeline(m *AppModel) {
+	if m == nil {
+		return
+	}
+	if m.cancelCtx != nil {
+		m.cancelCtx()
+	}
+	if m.dryRunCancel != nil {
+		m.dryRunCancel()
+	}
+	if m.pipelineChan != nil {
+		done := make(chan struct{})
+		go func() {
+			for range m.pipelineChan {
+			}
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+		}
+	}
+	if m.dryRunChan != nil {
+		done := make(chan struct{})
+		go func() {
+			for range m.dryRunChan {
+			}
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+		}
+	}
+}
+
 func TestAppModel_InitialRouting(t *testing.T) {
 	// 1. Missing credentials routes to ViewConnectionSetup
 	cfgEmpty := &config.Config{URL: "", APIKey: ""}
@@ -597,9 +633,7 @@ func TestAppModel_ResumeMetadataPreservation(t *testing.T) {
 		t.Fatalf("expected ViewDashboard after resume, got %v", model.state)
 	}
 	// Verify that when pipeline starts or displays, metadata is present
-	if model.cancelCtx != nil {
-		model.cancelCtx() // Clean up background pipeline
-	}
+	drainAndCancelPipeline(model)
 }
 
 func TestAppModel_BrowserShortcuts_DryRunAndStart(t *testing.T) {
@@ -623,9 +657,7 @@ func TestAppModel_BrowserShortcuts_DryRunAndStart(t *testing.T) {
 	if model.state != ViewDryRun {
 		t.Fatalf("expected ViewDryRun on 'd', got %v", model.state)
 	}
-	if model.dryRunCancel != nil {
-		model.dryRunCancel()
-	}
+	drainAndCancelPipeline(model)
 
 	// 2. Pressing 'Enter' triggers optimization directly (ViewDashboard)
 	m2 := NewAppModel(cfg, pipeline)
@@ -639,9 +671,7 @@ func TestAppModel_BrowserShortcuts_DryRunAndStart(t *testing.T) {
 	if model2.state != ViewDashboard {
 		t.Fatalf("expected ViewDashboard on 'enter', got %v", model2.state)
 	}
-	if model2.cancelCtx != nil {
-		model2.cancelCtx()
-	}
+	drainAndCancelPipeline(model2)
 
 	// 3. Browser shortcut text contains both [d] Dry Run and [Enter] Start Optimization
 	browserView := m.viewBrowser()
@@ -742,9 +772,7 @@ func TestAppModel_DryRunFlow(t *testing.T) {
 	if model2.state != ViewDashboard {
 		t.Errorf("expected ViewDashboard on 'enter' with videos to transcode, got: %v", model2.state)
 	}
-	if model2.cancelCtx != nil {
-		model2.cancelCtx()
-	}
+	drainAndCancelPipeline(model2)
 
 	// Case C: Probe failures recorded and displayed
 	m3 := NewAppModel(cfg, pipeline)
@@ -850,9 +878,7 @@ func TestAppModel_RetryFailedCollision(t *testing.T) {
 	if model.totalVideos != 1 {
 		t.Errorf("expected exactly 1 video to be retried (id-2), got totalVideos: %d", model.totalVideos)
 	}
-	if model.cancelCtx != nil {
-		model.cancelCtx()
-	}
+	drainAndCancelPipeline(model)
 }
 
 func TestAppModel_ScanCancellation(t *testing.T) {
@@ -914,9 +940,7 @@ func TestAppModel_ResumeRetryFailed(t *testing.T) {
 	if len(model.videos) != 1 || model.videos[0].ID != "v-resumed" {
 		t.Fatalf("expected m.videos to be populated with resumed video, got %+v", model.videos)
 	}
-	if model.cancelCtx != nil {
-		model.cancelCtx()
-	}
+	drainAndCancelPipeline(model)
 
 	// Resumed video fails
 	newM2, _ := model.Update(orchestrator.PipelineVideoCompleteMsg{
@@ -939,9 +963,7 @@ func TestAppModel_ResumeRetryFailed(t *testing.T) {
 	if model3.totalVideos != 1 {
 		t.Fatalf("expected 1 retried video, got: %d", model3.totalVideos)
 	}
-	if model3.cancelCtx != nil {
-		model3.cancelCtx()
-	}
+	drainAndCancelPipeline(model3)
 }
 
 func TestAppModel_ResumeRestoresSkippedAndFailedVideos(t *testing.T) {
@@ -993,9 +1015,7 @@ func TestAppModel_ResumeRestoresSkippedAndFailedVideos(t *testing.T) {
 	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
 	model := newM.(*AppModel)
 
-	if model.cancelCtx != nil {
-		model.cancelCtx()
-	}
+	drainAndCancelPipeline(model)
 
 	if len(model.transcodedVideos) != 1 {
 		t.Errorf("expected 1 transcodedVideo restored, got %d", len(model.transcodedVideos))
@@ -1579,9 +1599,7 @@ func TestAppModel_DryRunToOptimizationPassesAlbumID(t *testing.T) {
 	if appModel.dryRunAlbumName != "" {
 		t.Errorf("Expected appModel.dryRunAlbumName to be cleared, got '%s'", appModel.dryRunAlbumName)
 	}
-	if appModel.cancelCtx != nil {
-		appModel.cancelCtx()
-	}
+	drainAndCancelPipeline(appModel)
 }
 
 func TestAppModel_DashboardPulsingWhenNoParts(t *testing.T) {
