@@ -62,9 +62,11 @@ type DryRunVideoMsg struct {
 // ProbeFailed contains videos whose probe encountered an error or timeout.
 // VideoDetails maps asset ID to parsed codec and resolution info.
 type DryRunCompleteMsg struct {
-	ToProcess    []immich.Asset
-	HEVCSkipped  []immich.Asset
-	ProbeFailed  []immich.Asset
-	VideoDetails map[string]engine.ProbeDetails
+	ToProcess       []immich.Asset
+	HEVCSkipped     []immich.Asset
+	ProbeFailed     []immich.Asset
+	VideoDetails    map[string]engine.ProbeDetails
+	DryRunAlbumName string
+	DryRunAlbumID   string
 }
 

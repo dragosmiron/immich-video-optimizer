@@ -35,7 +35,7 @@ func TestBuildFFmpegArgs(t *testing.T) {
 				CRF:       28,
 				Preset:    "medium",
 			},
-			expected: []string{"-y", "-i", "in.mp4", "-c:v", "hevc_videotoolbox", "-tag:v", "hvc1", "-allow_sw", "1", "-preset", "medium", "-q:v", "28", "-c:a", "copy", "out.mp4"},
+			expected: []string{"-y", "-i", "in.mp4", "-c:v", "hevc_videotoolbox", "-tag:v", "hvc1", "-allow_sw", "1", "-preset", "medium", "-q:v", "65", "-c:a", "copy", "out.mp4"},
 		},
 		{
 			name: "libx265 with CRF",
@@ -58,6 +58,29 @@ func TestBuildFFmpegArgs(t *testing.T) {
 				Resolution: "1080p",
 			},
 			expected: []string{"-y", "-i", "in.mp4", "-c:v", "hevc_videotoolbox", "-tag:v", "hvc1", "-allow_sw", "1", "-vf", "scale=-2:'min(ih,1080)'", "-c:a", "copy", "out.mp4"},
+		},
+		{
+			name: "hevc_nvenc with CRF and Preset",
+			opts: TranscodeOptions{
+				Input:     "in.mp4",
+				Output:    "out.mp4",
+				Encoder:   "hevc_nvenc",
+				AudioCopy: true,
+				CRF:       28,
+				Preset:    "medium",
+			},
+			expected: []string{"-y", "-i", "in.mp4", "-c:v", "hevc_nvenc", "-preset", "medium", "-cq", "28", "-b:v", "0", "-c:a", "copy", "out.mp4"},
+		},
+		{
+			name: "hevc_vaapi with CRF",
+			opts: TranscodeOptions{
+				Input:     "in.mp4",
+				Output:    "out.mp4",
+				Encoder:   "hevc_vaapi",
+				AudioCopy: true,
+				CRF:       28,
+			},
+			expected: []string{"-vaapi_device", "/dev/dri/renderD128", "-y", "-i", "in.mp4", "-c:v", "hevc_vaapi", "-qp", "28", "-vf", "format=nv12,hwupload", "-c:a", "copy", "out.mp4"},
 		},
 	}
 
@@ -225,6 +248,28 @@ exit 0
 	}
 	if !strings.Contains(string(data), "libx265 success") {
 		t.Errorf("expected fallback output from libx265, got: %s", string(data))
+	}
+}
+
+func TestVideoToolboxQuality(t *testing.T) {
+	tests := []struct {
+		crf      int
+		expected int
+	}{
+		{crf: 0, expected: 65},
+		{crf: 28, expected: 65},
+		{crf: 23, expected: 75},
+		{crf: 20, expected: 81},
+		{crf: 32, expected: 57},
+		{crf: 70, expected: 70},   // already 1-100 scale
+		{crf: 120, expected: 100}, // clamped to 100
+	}
+
+	for _, tt := range tests {
+		got := VideoToolboxQuality(tt.crf)
+		if got != tt.expected {
+			t.Errorf("VideoToolboxQuality(%d) = %d, expected %d", tt.crf, got, tt.expected)
+		}
 	}
 }
 

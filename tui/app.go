@@ -73,6 +73,14 @@ func waitForPipeline(ch chan interface{}) tea.Cmd {
 	}
 }
 
+type pulseTickMsg time.Time
+
+func tickPulseCmd() tea.Cmd {
+	return tea.Tick(350*time.Millisecond, func(t time.Time) tea.Msg {
+		return pulseTickMsg(t)
+	})
+}
+
 func waitForDryRun(ch chan interface{}) tea.Cmd {
 	return func() tea.Msg {
 		msg, ok := <-ch
@@ -159,6 +167,8 @@ type AppModel struct {
 	scanCancel        context.CancelFunc
 	scanSeq           int
 
+	pulseFrame        int
+
 	// Dry Run
 	dryRunChan        chan interface{}
 	dryRunCtx         context.Context
@@ -171,6 +181,8 @@ type AppModel struct {
 	dryRunDetails     map[string]engine.ProbeDetails
 	dryRunDone        bool
 	dryRunVideos      []immich.Asset // the selection that triggered the dry run
+	dryRunAlbumName   string
+	dryRunAlbumID     string
 }
 
 // transcodedVideo holds details for a successfully transcoded and replaced video.
@@ -386,6 +398,8 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.VideoDetails != nil {
 				m.dryRunDetails = msg.VideoDetails
 			}
+			m.dryRunAlbumName = msg.DryRunAlbumName
+			m.dryRunAlbumID = msg.DryRunAlbumID
 			m.dryRunDone = true
 		}
 		return m, nil
@@ -468,12 +482,20 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForPipeline(m.pipelineChan)
 
 	case orchestrator.PipelineProgressMsg:
+		m.pulseFrame++
 		m.fps = msg.EngineProgress.FPS
 		m.speed = msg.EngineProgress.Speed
 		if msg.EngineProgress.Time != "" {
 			m.currentTranscodeTime = msg.EngineProgress.Time
 		}
 		return m, waitForPipeline(m.pipelineChan)
+
+	case pulseTickMsg:
+		if m.state == ViewDashboard {
+			m.pulseFrame++
+			return m, tickPulseCmd()
+		}
+		return m, nil
 
 	case progress.FrameMsg:
 		progressModel2, cmd2 := m.overallProgress.Update(msg)
@@ -777,7 +799,7 @@ func (m *AppModel) updateResumePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.ctx, m.cancelCtx = context.WithCancel(context.Background())
 			m.pipelineChan = make(chan interface{}, 200)
 			go m.pipeline.Run(m.ctx, toProcess, m.pipelineChan)
-			return m, waitForPipeline(m.pipelineChan)
+			return m, tea.Batch(waitForPipeline(m.pipelineChan), tickPulseCmd())
 		}
 		m.state = ViewScanPrompt
 		return m, nil
@@ -974,6 +996,11 @@ func (m *AppModel) updateBrowser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *AppModel) startOptimization(toProcess []immich.Asset) (tea.Model, tea.Cmd) {
+	if m.pipeline != nil {
+		m.pipeline.CleanDryRunAlbum()
+	}
+	m.dryRunAlbumName = ""
+	m.dryRunAlbumID = ""
 	m.state = ViewDashboard
 	m.totalVideos = len(toProcess)
 	m.processedVideos = 0
@@ -986,7 +1013,7 @@ func (m *AppModel) startOptimization(toProcess []immich.Asset) (tea.Model, tea.C
 	m.ctx, m.cancelCtx = context.WithCancel(context.Background())
 	m.pipelineChan = make(chan interface{}, 200)
 	go m.pipeline.Run(m.ctx, toProcess, m.pipelineChan)
-	return m, waitForPipeline(m.pipelineChan)
+	return m, tea.Batch(waitForPipeline(m.pipelineChan), tickPulseCmd())
 }
 
 func (m *AppModel) updateDryRun(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1248,7 +1275,7 @@ func (m *AppModel) updateSummary(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.ctx, m.cancelCtx = context.WithCancel(context.Background())
 				m.pipelineChan = make(chan interface{}, 200)
 				go m.pipeline.Run(m.ctx, toRetry, m.pipelineChan)
-				return m, waitForPipeline(m.pipelineChan)
+				return m, tea.Batch(waitForPipeline(m.pipelineChan), tickPulseCmd())
 			}
 		}
 	case "enter", "q", "esc":

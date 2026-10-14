@@ -541,6 +541,9 @@ func (c *Client) CreateTrackingAlbum(name string) (*Album, error) {
 
 // AddAssetsToAlbum adds the given asset IDs to the specified album
 func (c *Client) AddAssetsToAlbum(albumID string, assetIDs []string) error {
+	if albumID == "" || len(assetIDs) == 0 {
+		return nil
+	}
 	payload := map[string][]string{"ids": assetIDs}
 	body, _ := json.Marshal(payload)
 	url := fmt.Sprintf("%s/api/albums/%s/assets", c.baseURL, albumID)
@@ -552,6 +555,29 @@ func (c *Client) AddAssetsToAlbum(albumID string, assetIDs []string) error {
 
 	resp, err := c.doRequest(req)
 	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+// DeleteAlbum deletes the album with the specified ID
+func (c *Client) DeleteAlbum(albumID string) error {
+	if albumID == "" {
+		return nil
+	}
+	url := fmt.Sprintf("%s/api/albums/%s", c.baseURL, albumID)
+	req, err := http.NewRequest(http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == 404 {
+			return nil
+		}
 		return err
 	}
 	defer resp.Body.Close()

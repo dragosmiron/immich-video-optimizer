@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -688,13 +689,17 @@ exit 0
 	mu.Lock()
 	defer mu.Unlock()
 
+	foundOriginalQueued := false
 	for _, reqBody := range addedToAlbum {
 		if strings.Contains(reqBody, "asset-hevc") {
 			t.Errorf("Skipped HEVC asset 'asset-hevc' was erroneously added to tracking album! Body: %s", reqBody)
 		}
 		if strings.Contains(reqBody, "asset-h264") {
-			t.Errorf("Original asset 'asset-h264' was erroneously added to tracking album! Body: %s", reqBody)
+			foundOriginalQueued = true
 		}
+	}
+	if !foundOriginalQueued {
+		t.Errorf("Expected original queued asset 'asset-h264' to be added to album before optimization, but got bodies: %v", addedToAlbum)
 	}
 
 	foundReplacement := false
@@ -795,6 +800,136 @@ exit 0
 	if albumCreated {
 		t.Errorf("Expected NO tracking album to be created when all videos are skipped, but CreateTrackingAlbum was invoked!")
 	}
+}
+
+func TestPipeline_DryRunAlbumCreationAndCleanup(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	var createdAlbums []string
+	var deletedAlbums []string
+	var addedToAlbum []string
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.Method == http.MethodPost && r.URL.Path == "/api/albums" {
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			name := body["albumName"]
+			createdAlbums = append(createdAlbums, name)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(immich.Album{ID: "album-dryrun-123", AlbumName: name})
+			return
+		}
+		if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/assets") {
+			body, _ := io.ReadAll(r.Body)
+			addedToAlbum = append(addedToAlbum, string(body))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/albums/") {
+			id := strings.TrimPrefix(r.URL.Path, "/api/albums/")
+			deletedAlbums = append(deletedAlbums, id)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/original") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	fakeFFmpeg := filepath.Join(tempHome, "fake_ffmpeg")
+	script := `#!/bin/sh
+echo "Stream #0:0: Video: h264, 1920x1080"
+exit 0
+`
+	_ = os.WriteFile(fakeFFmpeg, []byte(script), 0755)
+
+	fakeExifTool := filepath.Join(tempHome, "fake_exiftool")
+	_ = os.WriteFile(fakeExifTool, []byte("#!/bin/sh\nexit 0\n"), 0755)
+
+	cfg := &config.Config{
+		URL:           ts.URL,
+		APIKey:        "test-key",
+		SizeThreshold: "0",
+		SkipHEVC:      true,
+	}
+
+	binaries := &engine.BinaryManager{
+		FFmpegPath:   fakeFFmpeg,
+		ExifToolPath: fakeExifTool,
+	}
+
+	p, err := NewPipelineWithBinaries(cfg, binaries)
+	if err != nil {
+		t.Fatalf("Failed to initialize pipeline: %v", err)
+	}
+	p.Client().SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: ts.Config.Handler},
+	})
+
+	videos := []immich.Asset{
+		{
+			ID:               "asset-1",
+			OriginalFileName: "video1.mp4",
+			ExifInfo: immich.ExifInfo{
+				FileSizeInByte:  5000,
+				ExifImageWidth:  1920,
+				ExifImageHeight: 1080,
+			},
+		},
+	}
+
+	// 1. Run first dry run -> should create dry run album
+	ch1 := make(chan interface{}, 10)
+	p.RunDryRun(context.Background(), videos, ch1)
+	var completeMsg DryRunCompleteMsg
+	for msg := range ch1 {
+		if c, ok := msg.(DryRunCompleteMsg); ok {
+			completeMsg = c
+		}
+	}
+
+	if completeMsg.DryRunAlbumID != "album-dryrun-123" {
+		t.Errorf("Expected DryRunAlbumID 'album-dryrun-123', got '%s'", completeMsg.DryRunAlbumID)
+	}
+	if !strings.HasPrefix(completeMsg.DryRunAlbumName, "Immich-Optimizer-DryRun-") {
+		t.Errorf("Expected DryRunAlbumName to start with Immich-Optimizer-DryRun-, got '%s'", completeMsg.DryRunAlbumName)
+	}
+
+	mu.Lock()
+	if len(createdAlbums) != 1 {
+		t.Errorf("Expected 1 created album, got %d", len(createdAlbums))
+	}
+	if len(addedToAlbum) != 1 || !strings.Contains(addedToAlbum[0], "asset-1") {
+		t.Errorf("Expected asset-1 to be added to dry run album, got %v", addedToAlbum)
+	}
+	mu.Unlock()
+
+	// 2. Run a second dry run -> should delete the first dry run album and create a new one
+	ch2 := make(chan interface{}, 10)
+	p.RunDryRun(context.Background(), videos, ch2)
+	for range ch2 {
+	}
+
+	mu.Lock()
+	if len(deletedAlbums) != 1 || deletedAlbums[0] != "album-dryrun-123" {
+		t.Errorf("Expected previous dry run album 'album-dryrun-123' to be deleted on new dry run, got: %v", deletedAlbums)
+	}
+	mu.Unlock()
+
+	// 3. CleanDryRunAlbum directly cleans up any remaining album
+	p.CleanDryRunAlbum()
+	mu.Lock()
+	if len(deletedAlbums) != 2 || deletedAlbums[1] != "album-dryrun-123" {
+		t.Errorf("Expected CleanDryRunAlbum to delete album, got: %v", deletedAlbums)
+	}
+	mu.Unlock()
 }
 
 

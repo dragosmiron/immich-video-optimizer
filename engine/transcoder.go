@@ -68,11 +68,11 @@ func BuildFFmpegArgs(opts TranscodeOptions) []string {
 	if opts.CRF > 0 {
 		switch opts.Encoder {
 		case "hevc_videotoolbox":
-			args = append(args, "-q:v", strconv.Itoa(opts.CRF))
+			args = append(args, "-q:v", strconv.Itoa(VideoToolboxQuality(opts.CRF)))
 		case "hevc_vaapi":
 			args = append(args, "-qp", strconv.Itoa(opts.CRF))
 		case "hevc_nvenc":
-			args = append(args, "-cq", strconv.Itoa(opts.CRF))
+			args = append(args, "-cq", strconv.Itoa(opts.CRF), "-b:v", "0")
 		default:
 			args = append(args, "-crf", strconv.Itoa(opts.CRF))
 		}
@@ -266,4 +266,30 @@ func Transcode(ctx context.Context, ffmpegPath string, opts TranscodeOptions, on
 	}
 
 	return nil
+}
+
+// VideoToolboxQuality maps a standard CRF (0..51) to VideoToolbox's -q:v scale (1..100).
+// In VideoToolbox, 1 is the worst quality / lowest bitrate, while 100 is max quality.
+// A CRF of 28 corresponds to roughly 65 on VideoToolbox to preserve visual fidelity.
+func VideoToolboxQuality(crf int) int {
+	if crf <= 0 {
+		return 65
+	}
+	// If the value is already on VideoToolbox's 1-100 scale (e.g. > 51), clamp to 100.
+	if crf > 51 {
+		if crf > 100 {
+			return 100
+		}
+		return crf
+	}
+	// Linear mapping around CRF 28 -> quality 65
+	// CRF 20 -> 81, CRF 24 -> 73, CRF 28 -> 65, CRF 32 -> 57
+	q := 65 + (28-crf)*2
+	if q < 30 {
+		q = 30
+	}
+	if q > 100 {
+		q = 100
+	}
+	return q
 }

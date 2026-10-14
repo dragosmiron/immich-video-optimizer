@@ -23,6 +23,9 @@ type Pipeline struct {
 	encoder  string
 	tempDir  string
 
+	dryRunMu      sync.Mutex
+	dryRunAlbumID string
+
 	runMu     sync.Mutex
 	isRunning bool
 }
@@ -88,6 +91,18 @@ func (p *Pipeline) Client() *immich.Client {
 	return p.client
 }
 
+// CleanDryRunAlbum deletes any previously created dry-run tracking album in Immich.
+func (p *Pipeline) CleanDryRunAlbum() {
+	p.dryRunMu.Lock()
+	albumID := p.dryRunAlbumID
+	p.dryRunAlbumID = ""
+	p.dryRunMu.Unlock()
+
+	if albumID != "" && p.client != nil {
+		_ = p.client.DeleteAlbum(albumID)
+	}
+}
+
 func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- interface{}) {
 	defer close(ch)
 
@@ -99,6 +114,8 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 	}
 	p.isRunning = true
 	p.runMu.Unlock()
+
+	p.CleanDryRunAlbum()
 
 	defer func() {
 		p.runMu.Lock()
@@ -183,6 +200,27 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 	}
 
 	// Phase B: Assembly Line Pipelining (Prefetch Downloader -> Transcoder -> Background Uploader)
+	if albumID == "" && len(pendingVideos) > 0 {
+		timestamp := time.Now().Format("20060102-150405")
+		albumName := fmt.Sprintf("Immich-Optimizer-InProgress-%s", timestamp)
+		album, err := p.client.CreateTrackingAlbum(albumName)
+		if err != nil {
+			logger.Error("Failed to create tracking album %s: %v", albumName, err)
+		} else if album != nil {
+			albumID = album.ID
+			sess.TrackingAlbumID = albumID
+			_ = state.SaveSession(sess)
+		}
+	}
+
+	if albumID != "" && len(pendingVideos) > 0 {
+		var origIDs []string
+		for _, v := range pendingVideos {
+			origIDs = append(origIDs, v.ID)
+		}
+		_ = p.client.AddAssetsToAlbum(albumID, origIDs)
+	}
+
 	queueCap := 1
 	if !p.cfg.EnablePrefetch {
 		queueCap = 0 // unbuffered: synchronous handoff
@@ -460,6 +498,8 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan<- interface{}) {
 	defer close(ch)
 
+	p.CleanDryRunAlbum()
+
 	total := len(videos)
 	if total == 0 {
 		ch <- DryRunCompleteMsg{}
@@ -549,11 +589,35 @@ func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan
 		}
 	}
 
+	var albumName string
+	var albumID string
+	if len(toProcess) > 0 {
+		timestamp := time.Now().Format("20060102-150405")
+		albumName = fmt.Sprintf("Immich-Optimizer-DryRun-%s", timestamp)
+		album, err := p.client.CreateTrackingAlbum(albumName)
+		if err != nil {
+			logger.Error("Failed to create dry-run album %s: %v", albumName, err)
+		} else if album != nil {
+			albumID = album.ID
+			p.dryRunMu.Lock()
+			p.dryRunAlbumID = albumID
+			p.dryRunMu.Unlock()
+
+			var ids []string
+			for _, a := range toProcess {
+				ids = append(ids, a.ID)
+			}
+			_ = p.client.AddAssetsToAlbum(albumID, ids)
+		}
+	}
+
 	ch <- DryRunCompleteMsg{
-		ToProcess:    toProcess,
-		HEVCSkipped:  hevcSkipped,
-		ProbeFailed:  probeFailed,
-		VideoDetails: videoDetails,
+		ToProcess:       toProcess,
+		HEVCSkipped:     hevcSkipped,
+		ProbeFailed:     probeFailed,
+		VideoDetails:    videoDetails,
+		DryRunAlbumName: albumName,
+		DryRunAlbumID:   albumID,
 	}
 }
 

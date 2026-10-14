@@ -367,13 +367,29 @@ func (m *AppModel) viewDryRun() string {
 			styles.SuccessText.Render(fmt.Sprintf("%d videos", processCount)),
 			formatByteSize(processBytes),
 		))
-		b.WriteString(fmt.Sprintf("  💾 Est. Storage Reclaimed:         %s  (~%.0f%% space saved)\n",
-			styles.SuccessText.Render(fmt.Sprintf("~%s", formatByteSize(estSavedBytes))),
-			pct,
-		))
-		b.WriteString(fmt.Sprintf("  📦 Est. Final Storage:             %s\n",
-			styles.Value.Render(fmt.Sprintf("~%s", formatByteSize(estFinalBytes))),
-		))
+		if estSavedBytes > 0 {
+			b.WriteString(fmt.Sprintf("  💾 Est. Storage Reclaimed:         %s  (~%.0f%% space saved)\n",
+				styles.SuccessText.Render(fmt.Sprintf("~%s", formatByteSize(estSavedBytes))),
+				pct,
+			))
+			b.WriteString(fmt.Sprintf("  📦 Est. Final Storage:             %s\n",
+				styles.Value.Render(fmt.Sprintf("~%s", formatByteSize(estFinalBytes))),
+			))
+		} else {
+			b.WriteString(fmt.Sprintf("  💾 Est. Storage Reclaimed:         %s\n",
+				styles.Subtext.Render("potentially minimal savings"),
+			))
+			b.WriteString(fmt.Sprintf("  📦 Est. Final Storage:             %s\n",
+				styles.Value.Render(fmt.Sprintf("~%s", formatByteSize(processBytes))),
+			))
+		}
+		if m.dryRunAlbumName != "" {
+			b.WriteString(fmt.Sprintf("\n  📁 %s %s %s\n",
+				styles.SectionHeader.Render("Album created in Immich:"),
+				styles.Value.Render(m.dryRunAlbumName),
+				styles.Subtext.Render("(you can open Immich to inspect these videos)"),
+			))
+		}
 	} else {
 		var reason string
 		if selectedCount == 0 {
@@ -452,24 +468,31 @@ func (m *AppModel) viewDryRun() string {
 
 			transcodeBadge := fmt.Sprintf("[%s • %s] ➔ [HEVC • %s]", codec, res, targetRes)
 			var itemEst string
-			if itemSaved > 0 {
-				itemEst = fmt.Sprintf("~%s saved", formatByteSize(itemSaved))
-			} else {
-				itemEst = "0 MB saved"
-			}
+			var extra string
 
-			extra := ""
 			if detail.IsHEVC && !m.cfg.SkipHEVC {
-				extra = " " + styles.WarningText.Render("⚠️ Already HEVC (0 MB saved)")
-			} else if failedMap[v.ID] {
-				extra = " " + styles.WarningText.Render("(probe unverified)")
+				if itemSaved > 0 {
+					itemEst = styles.SuccessText.Render(fmt.Sprintf("~%s saved", formatByteSize(itemSaved)))
+				} else {
+					itemEst = styles.Subtext.Render("potentially minimal savings")
+				}
+				extra = " " + styles.WarningText.Render("⚠️ Already HEVC")
+			} else {
+				if itemSaved > 0 {
+					itemEst = styles.SuccessText.Render(fmt.Sprintf("~%s saved", formatByteSize(itemSaved)))
+				} else {
+					itemEst = styles.Subtext.Render("0 MB saved")
+				}
+				if failedMap[v.ID] {
+					extra = " " + styles.WarningText.Render("(probe unverified)")
+				}
 			}
 
 			b.WriteString(fmt.Sprintf("  • %-26s  %-9s  %-26s  %s%s\n",
 				truncate(v.OriginalFileName, 26),
 				styles.Subtext.Render(formatByteSize(orig)),
 				styles.Value.Render(transcodeBadge),
-				styles.SuccessText.Render(itemEst),
+				itemEst,
 				extra,
 			))
 		}
@@ -762,7 +785,11 @@ func (m *AppModel) viewDashboard() string {
 		b.WriteString("\n")
 		var parts []string
 		if m.currentTranscodeTime != "" {
-			parts = append(parts, fmt.Sprintf("Time: %s", styles.Value.Render(m.currentTranscodeTime)))
+			tStr := m.currentTranscodeTime
+			if idx := strings.IndexAny(tStr, ".,"); idx != -1 {
+				tStr = tStr[:idx]
+			}
+			parts = append(parts, fmt.Sprintf("Time: %s", styles.Value.Render(tStr)))
 		}
 		if m.speed != "" {
 			parts = append(parts, fmt.Sprintf("Speed: %s", styles.Value.Render(m.speed)))
@@ -771,7 +798,9 @@ func (m *AppModel) viewDashboard() string {
 			parts = append(parts, fmt.Sprintf("FPS: %.1f", m.fps))
 		}
 		if len(parts) > 0 {
-			b.WriteString(fmt.Sprintf("                 %s  ● Encoding\n", strings.Join(parts, "  |  ")))
+			b.WriteString(fmt.Sprintf("                 %s  %s\n", strings.Join(parts, "  |  "), m.renderEncodingPulse()))
+		} else {
+			b.WriteString(fmt.Sprintf("                 %s\n", m.renderEncodingPulse()))
 		}
 	} else if m.currentMetadataName != "" {
 		b.WriteString(fmt.Sprintf("  🏷️ Metadata:    %s  %s\n",
@@ -1048,31 +1077,37 @@ func resolveTargetResolution(inputRes, targetSetting string) (string, bool) {
 // estimateSavings calculates a conservative, realistic ratio and saved byte count
 // for a video asset based on probed codec, resolution, and target settings.
 func estimateSavings(orig int64, detail engine.ProbeDetails, targetResSetting string, isProbeFailed bool) (float64, int64) {
-	if isProbeFailed || detail.IsHEVC || detail.Codec == "" {
+	if isProbeFailed || detail.Codec == "" {
 		return 1.0, 0
 	}
 
 	_, isDownscaling := resolveTargetResolution(detail.Resolution, targetResSetting)
 
 	var ratio float64
-	switch detail.Codec {
-	case "ProRes":
+	switch {
+	case detail.IsHEVC || detail.Codec == "HEVC" || detail.Codec == "H.265":
+		if isDownscaling {
+			ratio = 0.50
+		} else {
+			return 1.0, 0
+		}
+	case detail.Codec == "ProRes":
 		if isDownscaling {
 			ratio = 0.20
 		} else {
 			ratio = 0.30
 		}
-	case "MJPEG":
+	case detail.Codec == "MJPEG":
 		ratio = 0.40
-	case "MPEG-4", "VP8":
+	case detail.Codec == "MPEG-4" || detail.Codec == "VP8":
 		if isDownscaling {
 			ratio = 0.50
 		} else {
 			ratio = 0.70
 		}
-	case "VP9", "AV1":
+	case detail.Codec == "VP9" || detail.Codec == "AV1":
 		ratio = 1.0
-	case "H.264":
+	case detail.Codec == "H.264":
 		if isDownscaling {
 			ratio = 0.50
 		} else {
@@ -1091,4 +1126,22 @@ func estimateSavings(orig int64, detail engine.ProbeDetails, targetResSetting st
 		saved = 0
 	}
 	return ratio, saved
+}
+
+// renderEncodingPulse returns an actively animated and color-pulsing encoding status indicator.
+func (m *AppModel) renderEncodingPulse() string {
+	spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	pulseColors := []lipgloss.Color{
+		lipgloss.Color("#22C55E"), // Green
+		lipgloss.Color("#10B981"), // Emerald
+		lipgloss.Color("#06B6D4"), // Cyan
+		lipgloss.Color("#38BDF8"), // Sky blue
+		lipgloss.Color("#0EA5E9"), // Light blue
+	}
+	frameIdx := m.pulseFrame % len(spinnerFrames)
+	colorIdx := m.pulseFrame % len(pulseColors)
+
+	icon := spinnerFrames[frameIdx]
+	style := lipgloss.NewStyle().Foreground(pulseColors[colorIdx]).Bold(true)
+	return style.Render(fmt.Sprintf("%s Encoding", icon))
 }

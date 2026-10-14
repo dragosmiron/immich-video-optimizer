@@ -154,15 +154,23 @@ Upon completion, the summary view displays:
 
 ## 🗂️ What to Do with the Tracking Album
 
-During optimization, replacement videos are automatically added to a dedicated tracking album on your Immich server named:
+Before optimization begins, queued videos are automatically added to a dedicated tracking album on your Immich server named:
 
 ```
 Immich-Optimizer-InProgress-<YYYYMMDD-HHMMSS>
 ```
 
+As each video is transcoded, its optimized replacement is uploaded and added to this album, while the original asset is cleanly removed.
+
+During **Dry Run**, an inspection album is also created with the videos that will be processed:
+```
+Immich-Optimizer-DryRun-<YYYYMMDD-HHMMSS>
+```
+You can open Immich to review the queued videos before starting. This dry-run album is automatically removed when you start optimization or run another dry run.
+
 ### Important Details:
-1. **Only Transcoded Videos Are Added:** Videos that are skipped (e.g. already HEVC, or skipped by Size Guard) are never added to this album.
-2. **Review Playback:** Open this album in the Immich web or mobile app after the process finishes to inspect and verify the newly uploaded videos.
+1. **Only Queued & Transcoded Videos Are Added:** Videos that are skipped (e.g. already HEVC, or skipped by Size Guard) are never added to this album.
+2. **Review Playback:** Open this album in the Immich web or mobile app during or after the process to inspect the queued and newly uploaded videos.
 3. **Delete the Album When Done:** Once you have verified that the transcoded videos play properly, **delete the album in Immich**.
    > **Note:** In Immich, deleting an album deletes **only the album container**. It does **not** delete the video assets inside it.
 

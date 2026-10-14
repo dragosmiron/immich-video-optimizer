@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -1129,10 +1130,16 @@ func TestEstimateSavings(t *testing.T) {
 		t.Errorf("expected 0 saved for probe failed, got ratio=%v, saved=%v", ratio, saved)
 	}
 
-	// 2. Already HEVC -> 0 MB saved
+	// 2. Already HEVC -> 0 MB saved without downscaling
 	ratio, saved = estimateSavings(orig, engine.ProbeDetails{Codec: "HEVC", IsHEVC: true}, "original", false)
 	if ratio != 1.0 || saved != 0 {
 		t.Errorf("expected 0 saved for HEVC, got ratio=%v, saved=%v", ratio, saved)
+	}
+
+	// 2b. Already HEVC with 4K -> 1080p downscale -> ~50% savings
+	ratio, saved = estimateSavings(orig, engine.ProbeDetails{Codec: "HEVC", IsHEVC: true, Resolution: "4K"}, "1080p", false)
+	if ratio != 0.50 || saved != int64(50*1024*1024) {
+		t.Errorf("expected 50MB saved for HEVC 4K -> 1080p, got ratio=%v, saved=%v", ratio, saved)
 	}
 
 	// 3. VP9 / AV1 -> 0 MB saved
@@ -1407,6 +1414,172 @@ func TestAppModel_ThresholdModesAndToggle(t *testing.T) {
 	}
 	if !strings.Contains(browserView, "No video assets were discovered on the Immich server.") {
 		t.Errorf("expected empty browser view in disabled mode to mention no video assets discovered, got: %s", browserView)
+	}
+}
+
+func TestAppModel_ElapsedTimeSubsecondTruncated(t *testing.T) {
+	cfg := &config.Config{
+		URL:    "http://localhost:2283",
+		APIKey: "test-key",
+	}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.state = ViewDashboard
+	m.currentTranscodeName = "my_video.mp4"
+	m.currentTranscodeTime = "00:01:12.966667"
+	m.speed = "1.5x"
+	m.fps = 45.0
+
+	rendered := m.viewDashboard()
+	if !strings.Contains(rendered, "Time: 00:01:12") {
+		t.Errorf("expected time to be truncated to seconds 'Time: 00:01:12', got: %s", rendered)
+	}
+	if strings.Contains(rendered, "00:01:12.966667") {
+		t.Errorf("dashboard should not contain sub-second precision, got: %s", rendered)
+	}
+}
+
+func TestAppModel_EncodingPulsing(t *testing.T) {
+	cfg := &config.Config{
+		URL:    "http://localhost:2283",
+		APIKey: "test-key",
+	}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.state = ViewDashboard
+	m.currentTranscodeName = "my_video.mp4"
+	m.currentTranscodeTime = "00:00:15"
+	m.fps = 30.0
+
+	initialPulse := m.pulseFrame
+	rendered1 := m.viewDashboard()
+	if !strings.Contains(rendered1, "Encoding") {
+		t.Errorf("expected dashboard to contain 'Encoding', got: %s", rendered1)
+	}
+
+	// Dispatch pulseTickMsg
+	newM, _ := m.Update(pulseTickMsg(time.Now()))
+	m = newM.(*AppModel)
+	if m.pulseFrame != initialPulse+1 {
+		t.Errorf("expected pulseFrame to increment to %d, got %d", initialPulse+1, m.pulseFrame)
+	}
+}
+
+func TestAppModel_DryRunAlreadyHEVC_NoDuplication(t *testing.T) {
+	cfg := &config.Config{
+		URL:      "http://localhost:2283",
+		APIKey:   "test-key",
+		SkipHEVC: false, // OFF, so already-HEVC videos will be re-encoded
+	}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.state = ViewDryRun
+
+	v := immich.Asset{
+		ID:               "vid-hevc",
+		OriginalFileName: "already_hevc.mp4",
+		ExifInfo: immich.ExifInfo{
+			FileSizeInByte:  200 * 1024 * 1024,
+			ExifImageWidth:  1920,
+			ExifImageHeight: 1080,
+		},
+	}
+	m.dryRunToProcess = []immich.Asset{v}
+	m.dryRunDetails = map[string]engine.ProbeDetails{
+		"vid-hevc": {Codec: "HEVC", IsHEVC: true, Resolution: "1080p"},
+	}
+	m.dryRunDone = true
+
+	rendered := m.viewDryRun()
+	// Must NOT contain duplicate "0 MB saved"
+	if strings.Contains(rendered, "0 MB saved ⚠️ Already HEVC (0 MB saved)") {
+		t.Errorf("dry run view contained duplicated '0 MB saved', got: %s", rendered)
+	}
+	// Must mention potentially minimal savings
+	if !strings.Contains(rendered, "potentially minimal savings") {
+		t.Errorf("expected dry run view to mention 'potentially minimal savings', got: %s", rendered)
+	}
+	// Must mention Already HEVC
+	if !strings.Contains(rendered, "Already HEVC") {
+		t.Errorf("expected dry run view to mention 'Already HEVC', got: %s", rendered)
+	}
+}
+
+func TestAppModel_DryRunAlbumNotice(t *testing.T) {
+	cfg := &config.Config{
+		URL:    "http://localhost:2283",
+		APIKey: "test-key",
+	}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.state = ViewDryRun
+	m.dryRunAlbumName = "Immich-Optimizer-DryRun-20261014-123456"
+	m.dryRunToProcess = []immich.Asset{
+		{ID: "vid-1", OriginalFileName: "vid1.mp4", ExifInfo: immich.ExifInfo{FileSizeInByte: 1000}},
+	}
+	m.dryRunDetails = map[string]engine.ProbeDetails{
+		"vid-1": {Codec: "H.264", Resolution: "1080p"},
+	}
+	m.dryRunDone = true
+
+	rendered := m.viewDryRun()
+	if !strings.Contains(rendered, "Album created in Immich:") {
+		t.Errorf("expected viewDryRun to contain 'Album created in Immich:', got: %s", rendered)
+	}
+	if !strings.Contains(rendered, "Immich-Optimizer-DryRun-20261014-123456") {
+		t.Errorf("expected viewDryRun to contain album name, got: %s", rendered)
+	}
+	if !strings.Contains(rendered, "(you can open Immich to inspect these videos)") {
+		t.Errorf("expected viewDryRun to contain instruction to inspect videos, got: %s", rendered)
+	}
+}
+
+func TestAppModel_DashboardPulsingWhenNoParts(t *testing.T) {
+	cfg := &config.Config{
+		URL:    "http://localhost:2283",
+		APIKey: "test-key",
+	}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.state = ViewDashboard
+	m.currentTranscodeName = "incoming_video.mp4"
+	// No parts set yet (time, speed, fps all empty)
+	m.currentTranscodeTime = ""
+	m.speed = ""
+	m.fps = 0.0
+
+	rendered := m.viewDashboard()
+	if !strings.Contains(rendered, "Encoding") {
+		t.Errorf("expected dashboard to show 'Encoding' even before first progress tick arrives, got: %s", rendered)
+	}
+}
+
+func TestAppModel_DryRunSummary_PotentiallyMinimalSavings(t *testing.T) {
+	cfg := &config.Config{
+		URL:      "http://localhost:2283",
+		APIKey:   "test-key",
+		SkipHEVC: false,
+	}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.state = ViewDryRun
+	m.dryRunToProcess = []immich.Asset{
+		{ID: "vid-1", OriginalFileName: "already_hevc.mp4", ExifInfo: immich.ExifInfo{FileSizeInByte: 50 * 1024 * 1024}},
+	}
+	m.dryRunDetails = map[string]engine.ProbeDetails{
+		"vid-1": {Codec: "HEVC", IsHEVC: true, Resolution: "1080p"},
+	}
+	m.dryRunDone = true
+
+	rendered := m.viewDryRun()
+	if !strings.Contains(rendered, "Est. Storage Reclaimed:") {
+		t.Errorf("expected viewDryRun to have 'Est. Storage Reclaimed:', got: %s", rendered)
+	}
+	if !strings.Contains(rendered, "potentially minimal savings") {
+		t.Errorf("expected summary Est. Storage Reclaimed to say 'potentially minimal savings' when 0 bytes estimated, got: %s", rendered)
+	}
+	if strings.Contains(rendered, "~0 B (~0% space saved)") {
+		t.Errorf("summary should not contain '~0 B (~0%%%% space saved)', got: %s", rendered)
 	}
 }
 

@@ -160,6 +160,44 @@ func TestAddAssetsToAlbum(t *testing.T) {
 	}
 }
 
+func TestDeleteAlbum(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Errorf("Expected DELETE, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/albums/album-dryrun-1" {
+			t.Errorf("Expected /api/albums/album-dryrun-1, got %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+	err := client.DeleteAlbum("album-dryrun-1")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// Empty albumID should be a no-op
+	if err := client.DeleteAlbum(""); err != nil {
+		t.Errorf("expected empty albumID to return nil, got: %v", err)
+	}
+}
+
+func TestDeleteAlbum_404Ignored(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"message": "Album not found"}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+	err := client.DeleteAlbum("nonexistent-album")
+	if err != nil {
+		t.Fatalf("Expected 404 to be ignored (return nil), got: %v", err)
+	}
+}
+
 func TestDownloadAsset(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
