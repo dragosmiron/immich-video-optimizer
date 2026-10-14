@@ -66,19 +66,25 @@ func BuildFFmpegArgs(opts TranscodeOptions) []string {
 		args = append(args, "-preset", strings.ToLower(opts.Preset))
 	}
 
-	if opts.CRF > 0 || opts.VideoToolboxQuality > 0 {
-		switch opts.Encoder {
-		case "hevc_videotoolbox":
-			vtQuality := opts.VideoToolboxQuality
-			if vtQuality <= 0 {
-				vtQuality = VideoToolboxQuality(opts.CRF)
-			}
+	switch opts.Encoder {
+	case "hevc_videotoolbox":
+		vtQuality := opts.VideoToolboxQuality
+		if vtQuality <= 0 && opts.CRF > 0 {
+			vtQuality = VideoToolboxQuality(opts.CRF)
+		}
+		if vtQuality > 0 {
 			args = append(args, "-q:v", strconv.Itoa(vtQuality))
-		case "hevc_vaapi":
+		}
+	case "hevc_vaapi":
+		if opts.CRF > 0 {
 			args = append(args, "-qp", strconv.Itoa(opts.CRF))
-		case "hevc_nvenc":
+		}
+	case "hevc_nvenc":
+		if opts.CRF > 0 {
 			args = append(args, "-cq", strconv.Itoa(opts.CRF), "-b:v", "0")
-		default:
+		}
+	default:
+		if opts.CRF > 0 {
 			args = append(args, "-crf", strconv.Itoa(opts.CRF))
 		}
 	}

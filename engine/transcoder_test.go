@@ -339,4 +339,54 @@ func TestBuildFFmpegArgs_VideoToolboxQualityOverride(t *testing.T) {
 	}
 }
 
+func TestBuildFFmpegArgs_VideoToolboxQualityOnly_DoesNotEmitZeroCRFForOtherEncoders(t *testing.T) {
+	encoders := []struct {
+		encoder  string
+		badFlags []string
+	}{
+		{"libx265", []string{"-crf"}},
+		{"hevc_vaapi", []string{"-qp"}},
+		{"hevc_nvenc", []string{"-cq"}},
+	}
+
+	for _, tt := range encoders {
+		opts := TranscodeOptions{
+			Input:               "input.mp4",
+			Output:              "output.mp4",
+			Encoder:             tt.encoder,
+			VideoToolboxQuality: 66,
+			CRF:                 0,
+		}
+		args := BuildFFmpegArgs(opts)
+		for _, bad := range tt.badFlags {
+			for _, a := range args {
+				if a == bad {
+					t.Errorf("encoder %s should not have emitted %s when CRF=0, got args: %v", tt.encoder, bad, args)
+				}
+			}
+		}
+	}
+
+	// Verify VideoToolbox still gets -q:v 66 even when CRF=0
+	vtOpts := TranscodeOptions{
+		Input:               "input.mp4",
+		Output:              "output.mp4",
+		Encoder:             "hevc_videotoolbox",
+		VideoToolboxQuality: 66,
+		CRF:                 0,
+	}
+	vtArgs := BuildFFmpegArgs(vtOpts)
+	foundQ := false
+	for i, a := range vtArgs {
+		if a == "-q:v" && i+1 < len(vtArgs) && vtArgs[i+1] == "66" {
+			foundQ = true
+			break
+		}
+	}
+	if !foundQ {
+		t.Errorf("expected VideoToolbox to have -q:v 66 when VideoToolboxQuality=66 and CRF=0, got %v", vtArgs)
+	}
+}
+
+
 
