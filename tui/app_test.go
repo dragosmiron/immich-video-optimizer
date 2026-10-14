@@ -511,24 +511,31 @@ func TestAppModel_PipelineSettings(t *testing.T) {
 	m := NewAppModel(cfg, pipeline)
 	m.state = ViewSettings
 
-	// Move cursor down to index 4 (Pipeline Prefetch)
-	m.settingCursor = 4
-	if m.cfg.EnablePrefetch != true {
+	// Switch to Tab 2: Pipeline & Network using key '3'
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	model := newM.(*AppModel)
+	if model.settingsTab != 2 {
+		t.Fatalf("expected settingsTab 2, got %d", model.settingsTab)
+	}
+
+	// Index 0 in Tab 2 is Pipeline Prefetch
+	model.settingCursor = 0
+	if model.cfg.EnablePrefetch != true {
 		t.Fatalf("expected initial EnablePrefetch true")
 	}
 
 	// Toggle prefetch with Space
-	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
-	model := newM.(*AppModel)
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	model = newM.(*AppModel)
 	if model.cfg.EnablePrefetch != false {
 		t.Errorf("expected EnablePrefetch to toggle to false")
 	}
 
-	// Move down to index 5 (Concurrent Encoders)
+	// Move down to index 1 (Concurrent Encoders)
 	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	model = newM.(*AppModel)
-	if model.settingCursor != 5 {
-		t.Fatalf("expected settingCursor 5, got %d", model.settingCursor)
+	if model.settingCursor != 1 {
+		t.Fatalf("expected settingCursor 1, got %d", model.settingCursor)
 	}
 
 	// Toggle encoders with Space (1 -> 2)
@@ -538,25 +545,11 @@ func TestAppModel_PipelineSettings(t *testing.T) {
 		t.Errorf("expected ConcurrentEncoders 2, got %d", model.cfg.ConcurrentEncoders)
 	}
 
-	// Move down to index 6 (Threshold Mode)
+	// Move down to index 2 (Logging Level)
 	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	model = newM.(*AppModel)
-	if model.settingCursor != 6 {
-		t.Fatalf("expected settingCursor 6, got %d", model.settingCursor)
-	}
-
-	// Move down to index 7 (Threshold Value)
-	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
-	model = newM.(*AppModel)
-	if model.settingCursor != 7 {
-		t.Fatalf("expected settingCursor 7, got %d", model.settingCursor)
-	}
-
-	// Move down to index 8 (Logging Level)
-	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
-	model = newM.(*AppModel)
-	if model.settingCursor != 8 {
-		t.Fatalf("expected settingCursor 8, got %d", model.settingCursor)
+	if model.settingCursor != 2 {
+		t.Fatalf("expected settingCursor 2, got %d", model.settingCursor)
 	}
 
 	// Initial is "info" (or empty default), toggle with Space to "debug"
@@ -580,11 +573,11 @@ func TestAppModel_PipelineSettings(t *testing.T) {
 		t.Errorf("expected LogLevel debug, got %s", model.cfg.LogLevel)
 	}
 
-	// Move down to index 9 (Network Retries)
+	// Move down to index 3 (Network Retries)
 	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	model = newM.(*AppModel)
-	if model.settingCursor != 9 {
-		t.Fatalf("expected settingCursor 9, got %d", model.settingCursor)
+	if model.settingCursor != 3 {
+		t.Fatalf("expected settingCursor 3, got %d", model.settingCursor)
 	}
 
 	// Default is 3, cycling with Right should change to 5
@@ -610,12 +603,15 @@ func TestAppModel_PipelineSettings(t *testing.T) {
 		t.Errorf("expected MaxRetries 3 after space toggle, got %d", model.cfg.MaxRetries)
 	}
 
-	// Move down to index 10 (Exclude Optimized)
-	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	// Switch to Tab 1: Filtering using key '2'
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	model = newM.(*AppModel)
-	if model.settingCursor != 10 {
-		t.Fatalf("expected settingCursor 10, got %d", model.settingCursor)
+	if model.settingsTab != 1 {
+		t.Fatalf("expected settingsTab 1, got %d", model.settingsTab)
 	}
+
+	// Move to index 2 (Exclude Optimized) in Tab 1
+	model.settingCursor = 2
 
 	// Set initial to true and test toggling with Space
 	model.cfg.ExcludeOptimized = true
@@ -625,7 +621,12 @@ func TestAppModel_PipelineSettings(t *testing.T) {
 		t.Errorf("expected ExcludeOptimized false after space toggle")
 	}
 
-	// Toggle back with Right arrow
+	vOff := model.View()
+	if !strings.Contains(vOff, "Exclude Optimized") || !strings.Contains(vOff, "OFF — All videos matching search criteria are included") {
+		t.Errorf("expected viewSettings to show OFF description, got: %s", vOff)
+	}
+
+	// Toggle back to true with Right arrow
 	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRight})
 	model = newM.(*AppModel)
 	if model.cfg.ExcludeOptimized != true {
@@ -637,11 +638,6 @@ func TestAppModel_PipelineSettings(t *testing.T) {
 	model = newM.(*AppModel)
 	if model.cfg.ExcludeOptimized != false {
 		t.Errorf("expected ExcludeOptimized false after left arrow")
-	}
-
-	vOff := model.View()
-	if !strings.Contains(vOff, "Exclude Optimized") || !strings.Contains(vOff, "OFF — All videos matching search criteria are included") {
-		t.Errorf("expected viewSettings to show OFF description, got: %s", vOff)
 	}
 
 	// Toggle back to true with Right arrow
@@ -1343,8 +1339,10 @@ func TestAppModel_MBPerMinDisplayAndSettings(t *testing.T) {
 		t.Errorf("expected browser view to contain 'MB/min'")
 	}
 
-	// 2. Check Settings View displays Threshold (MB/min)
+	// 2. Check Settings View displays Threshold (MB/min) in Tab 1 (Filtering)
 	m.state = ViewSettings
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = newM.(*AppModel)
 	renderedSettings := m.viewSettings()
 	if !strings.Contains(renderedSettings, "Threshold (MB/min):") {
 		t.Errorf("expected settings to contain 'Threshold (MB/min):', got %s", renderedSettings)
@@ -1353,10 +1351,10 @@ func TestAppModel_MBPerMinDisplayAndSettings(t *testing.T) {
 		t.Errorf("expected settings to contain '100 MB/min', got %s", renderedSettings)
 	}
 
-	// 3. Edit Threshold in Settings (row 7)
-	m.settingCursor = 7
+	// 3. Edit Threshold in Settings (Tab 1, row 1)
+	m.settingCursor = 1
 	// Press Enter to focus threshold input
-	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = newM.(*AppModel)
 	if !m.thresholdInput.Focused() {
 		t.Fatalf("expected threshold input to be focused")
@@ -1390,8 +1388,10 @@ func TestAppModel_ThresholdModesAndToggle(t *testing.T) {
 		t.Errorf("expected scan prompt to show 100 MB/min, got: %s", promptView)
 	}
 
-	// Go to Settings
+	// Go to Settings and switch to Tab 1 (Filtering)
 	m.state = ViewSettings
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = newM.(*AppModel)
 	settingsView := m.viewSettings()
 	if !strings.Contains(settingsView, "Threshold Mode:") || !strings.Contains(settingsView, "MB/min") {
 		t.Errorf("expected settings to show Threshold Mode MB/min, got: %s", settingsView)
@@ -1400,9 +1400,9 @@ func TestAppModel_ThresholdModesAndToggle(t *testing.T) {
 		t.Errorf("expected settings to show 100 MB/min, got: %s", settingsView)
 	}
 
-	// Cursor at row 6 (Threshold Mode) - Toggle with Space -> Total MB
-	m.settingCursor = 6
-	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	// Cursor at row 0 in Tab 1 (Threshold Mode) - Toggle with Space -> Total MB
+	m.settingCursor = 0
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
 	m = newM.(*AppModel)
 	if m.cfg.ThresholdMode != "Total MB" {
 		t.Fatalf("expected ThresholdMode Total MB after Space, got: %s", m.cfg.ThresholdMode)
@@ -1420,9 +1420,11 @@ func TestAppModel_ThresholdModesAndToggle(t *testing.T) {
 		t.Errorf("expected scan prompt to show 100 MB (Total File Size), got: %s", promptView)
 	}
 
-	// Go back to settings, toggle with Enter -> Disabled
+	// Go back to settings (switch to Tab 1), toggle with Enter -> Disabled
 	m.state = ViewSettings
-	m.settingCursor = 6
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = newM.(*AppModel)
+	m.settingCursor = 0
 	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = newM.(*AppModel)
 	if m.cfg.ThresholdMode != "Disabled" {
@@ -1441,17 +1443,19 @@ func TestAppModel_ThresholdModesAndToggle(t *testing.T) {
 		t.Errorf("expected scan prompt to show Disabled (All videos), got: %s", promptView)
 	}
 
-	// When Disabled, pressing Enter on row 7 should NOT focus the thresholdInput
+	// When Disabled, pressing Enter on row 1 (Threshold Value) in Tab 1 should NOT focus the thresholdInput
 	m.state = ViewSettings
-	m.settingCursor = 7
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = newM.(*AppModel)
+	m.settingCursor = 1
 	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = newM.(*AppModel)
 	if m.thresholdInput.Focused() {
 		t.Errorf("threshold input should not be focused when ThresholdMode is Disabled")
 	}
 
-	// Row 6: Cycle with Left arrow: Disabled -> Total MB -> MB/min
-	m.settingCursor = 6
+	// Row 0 in Tab 1: Cycle with Left arrow: Disabled -> Total MB -> MB/min
+	m.settingCursor = 0
 	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	m = newM.(*AppModel)
 	if m.cfg.ThresholdMode != "Total MB" {
@@ -1464,7 +1468,7 @@ func TestAppModel_ThresholdModesAndToggle(t *testing.T) {
 		t.Errorf("expected MB/min on Left, got: %s", m.cfg.ThresholdMode)
 	}
 
-	// Row 6: Cycle with Right arrow: MB/min -> Total MB -> Disabled -> MB/min
+	// Row 0 in Tab 1: Cycle with Right arrow: MB/min -> Total MB -> Disabled -> MB/min
 	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
 	m = newM.(*AppModel)
 	if m.cfg.ThresholdMode != "Total MB" {
@@ -1805,21 +1809,25 @@ func TestAppModel_VideoQualitySettings(t *testing.T) {
 		t.Errorf("expected Enter on level 1 to cycle to 2, got %d", m.cfg.Quality())
 	}
 
-	// 7. Verify settings navigation boundary clamping (0 to 10) and view rendering for all rows
-	for cursorIdx := 0; cursorIdx <= 10; cursorIdx++ {
-		m.settingCursor = cursorIdx
-		rendered := m.viewSettings()
-		if len(rendered) == 0 {
-			t.Errorf("expected non-empty settings view at cursor %d", cursorIdx)
+	// 7. Verify settings navigation boundary clamping and view rendering for all tabs and rows
+	for tabIdx := 0; tabIdx < 3; tabIdx++ {
+		m.settingsTab = tabIdx
+		for cursorIdx := 0; cursorIdx <= m.settingsMaxCursor(); cursorIdx++ {
+			m.settingCursor = cursorIdx
+			rendered := m.viewSettings()
+			if len(rendered) == 0 {
+				t.Errorf("expected non-empty settings view at tab %d cursor %d", tabIdx, cursorIdx)
+			}
 		}
 	}
 
+	m.settingsTab = 0
 	for i := 0; i < 20; i++ {
 		newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 		m = newM.(*AppModel)
 	}
-	if m.settingCursor != 10 {
-		t.Errorf("expected settingCursor clamped to 10 at bottom, got %d", m.settingCursor)
+	if m.settingCursor != 3 {
+		t.Errorf("expected settingCursor clamped to 3 at bottom of tab 0, got %d", m.settingCursor)
 	}
 	for i := 0; i < 20; i++ {
 		newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
@@ -1837,6 +1845,101 @@ func TestAppModel_VideoQualitySettings(t *testing.T) {
 	}
 	if loaded.VideoQuality != 2 {
 		t.Errorf("expected saved config to have VideoQuality 2, got %d", loaded.VideoQuality)
+	}
+}
+
+func TestAppModel_SettingsTabsNavigation(t *testing.T) {
+	cfg := config.DefaultConfig()
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.state = ViewSettings
+
+	// Initial tab is 0 (Encoding)
+	if m.settingsTab != 0 {
+		t.Fatalf("expected initial settingsTab 0, got %d", m.settingsTab)
+	}
+
+	// 1. Tab key cycles forward: 0 -> 1 -> 2 -> 0
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = newM.(*AppModel)
+	if m.settingsTab != 1 {
+		t.Errorf("expected tab 1 after [Tab], got %d", m.settingsTab)
+	}
+
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = newM.(*AppModel)
+	if m.settingsTab != 2 {
+		t.Errorf("expected tab 2 after [Tab], got %d", m.settingsTab)
+	}
+
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = newM.(*AppModel)
+	if m.settingsTab != 0 {
+		t.Errorf("expected tab 0 after wrap-around [Tab], got %d", m.settingsTab)
+	}
+
+	// 2. Shift+Tab cycles backward: 0 -> 2 -> 1 -> 0
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m = newM.(*AppModel)
+	if m.settingsTab != 2 {
+		t.Errorf("expected tab 2 after [Shift+Tab], got %d", m.settingsTab)
+	}
+
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m = newM.(*AppModel)
+	if m.settingsTab != 1 {
+		t.Errorf("expected tab 1 after [Shift+Tab], got %d", m.settingsTab)
+	}
+
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m = newM.(*AppModel)
+	if m.settingsTab != 0 {
+		t.Errorf("expected tab 0 after [Shift+Tab], got %d", m.settingsTab)
+	}
+
+	// 3. Number keys switch directly to tabs: '1', '2', '3'
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = newM.(*AppModel)
+	if m.settingsTab != 1 {
+		t.Errorf("expected tab 1 after pressing '2', got %d", m.settingsTab)
+	}
+
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	m = newM.(*AppModel)
+	if m.settingsTab != 2 {
+		t.Errorf("expected tab 2 after pressing '3', got %d", m.settingsTab)
+	}
+
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	m = newM.(*AppModel)
+	if m.settingsTab != 0 {
+		t.Errorf("expected tab 0 after pressing '1', got %d", m.settingsTab)
+	}
+
+	// 4. Cursor clamping when switching to a tab with fewer items
+	// In Tab 0, set cursor to 3 (Skip HEVC)
+	m.settingCursor = 3
+	// Switch to Tab 1 (Filtering), which only has 3 items (max index 2)
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = newM.(*AppModel)
+	if m.settingCursor != 2 {
+		t.Errorf("expected cursor clamped to 2 in Tab 1, got %d", m.settingCursor)
+	}
+
+	// 5. When threshold input is focused, typing numbers feeds the input, does NOT switch tabs
+	m.settingCursor = 1 // Threshold Value row
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newM.(*AppModel)
+	if !m.thresholdInput.Focused() {
+		t.Fatalf("expected threshold input focused")
+	}
+
+	// Type '3' while focused
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	m = newM.(*AppModel)
+	// Must still be on Tab 1
+	if m.settingsTab != 1 {
+		t.Errorf("expected settingsTab to stay 1 while typing into input, got %d", m.settingsTab)
 	}
 }
 

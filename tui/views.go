@@ -550,86 +550,31 @@ func (m *AppModel) viewSettings() string {
 	b := strings.Builder{}
 	b.WriteString(styles.Title.Render("⚙ Settings & Preferences"))
 	b.WriteString("\n\n")
-	b.WriteString("Use [↑/↓] to navigate, [←/→] to change options, [Enter/Space] to toggle/select.\n\n")
 
-	// descriptions shown under the focused row
-	descriptions := []string{
-		// 0 — Resolution
-		"Controls the maximum output resolution.\n" +
-			"  • Original — keeps the same dimensions as the source (recommended)\n" +
-			"  • 4K / 1440p / 1080p / 720p — downscales if the source is larger; never upscales",
-		// 1 — Video Quality
-		func() string {
-			return m.cfg.QualityDescription()
-		}(),
-		// 2 — Size Guard
-		func() string {
-			if m.cfg.SizeGuard {
-				return "ON  — If the transcoded file ends up larger than the original, the replacement\n" +
-					"       is skipped and the original is kept untouched. Prevents accidental bloat."
-			}
-			return "OFF — The transcoded file will always replace the original, even if it is larger.\n" +
-				"       Use this only if you need a specific codec regardless of file size."
-		}(),
-		// 3 — Skip HEVC
-		func() string {
-			if m.cfg.SkipHEVC {
-				return "ON  — Videos already encoded in HEVC/H.265 format are skipped to avoid\n" +
-					"       unnecessary re-encoding."
-			}
-			return "OFF — All eligible videos will be processed and re-encoded, even if already HEVC."
-		}(),
-		// 4 — Pipeline Prefetch
-		func() string {
-			if m.cfg.EnablePrefetch {
-				return "ON  — Downloads the next video in background while transcoding current video.\n" +
-					"       Eliminates download wait time without exceeding disk bounds (max 1 file)."
-			}
-			return "OFF — Sequential mode. Downloads, transcodes, and uploads strictly one at a time."
-		}(),
-		// 5 — Concurrent Encoders
-		"Controls how many ffmpeg instances encode simultaneously.\n" +
-			"  • 1 — Default. Best for hardware encoders (VideoToolbox / NVENC) and CPU thermals\n" +
-			"  • 2 — Parallel encoding. High throughput on multi-core systems",
-		// 6 — Threshold Mode
-		"Strategy used to filter videos before optimization.\n" +
-			"  • MB/min   — Filters videos by bitrate density (skips low-bitrate videos)\n" +
-			"  • Total MB — Filters videos by total file size threshold\n" +
-			"  • Disabled — Includes all videos without any size/density filtering",
-		// 7 — Threshold Value
-		func() string {
-			switch m.cfg.ThresholdMode {
-			case config.ThresholdModeDisabled:
-				return "Threshold filtering is disabled. All video assets in your library will be scanned."
-			case config.ThresholdModeTotalMB:
-				return "Minimum total file size in megabytes (MB). Videos smaller than this\n" +
-					"  threshold are skipped entirely (e.g. 500 MB)."
-			default:
-				return "Minimum size per minute of video (MB/min). Videos with a bitrate density below\n" +
-					"  this threshold are skipped entirely (e.g. 100 MB/min).\n" +
-					"  Filters out low-bitrate videos regardless of video duration."
-			}
-		}(),
-		// 8 — Log Level
-		"Controls detail of output logs. Set to Debug for full FFmpeg & ExifTool command lines,\n" +
-			"  stderr outputs, and diagnostic traces to identify error root causes.\n" +
-			"  Logs written to: ~/.config/immich-video-optimizer/optimizer.log",
-		// 9 — Network Retries
-		"Number of automatic retry attempts with backoff for failed downloads and uploads.\n" +
-			"  • 0 — Disabled. Fails immediately on first error\n" +
-			"  • 1 to 5 — Retries automatically with exponential backoff on transient network drops",
-		// 10 — Exclude Already Optimized (Uses Tags)
-		func() string {
-			if m.cfg.ExcludeOptimized {
-				return "ON  — Enables and uses Immich tags ('immich-optimizer') to track and exclude\n" +
-					"       already optimized videos from search. Ideal for recurring runs as your\n" +
-					"       library grows on remaining videos.\n" +
-					"       Requires 'Tags' enabled in Immich (Account Settings → Features → Tags)."
-			}
-			return "OFF — All videos matching search criteria are included, even if previously\n" +
-				"       tagged as optimized."
-		}(),
+	// Tab headers
+	tabNames := []string{"1. Encoding", "2. Filtering", "3. Pipeline & Network"}
+	activeTabStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#FFFFFF")).
+		Background(lipgloss.Color("#2563EB")).
+		Padding(0, 2)
+
+	inactiveTabStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#64748B", Dark: "#94A3B8"}).
+		Background(lipgloss.AdaptiveColor{Light: "#E2E8F0", Dark: "#1E293B"}).
+		Padding(0, 2)
+
+	var renderedTabs []string
+	for i, name := range tabNames {
+		if i == m.settingsTab {
+			renderedTabs = append(renderedTabs, activeTabStyle.Render(name))
+		} else {
+			renderedTabs = append(renderedTabs, inactiveTabStyle.Render(name))
+		}
 	}
+	b.WriteString(strings.Join(renderedTabs, " "))
+	b.WriteString("\n\n")
+	b.WriteString(styles.Subtext.Render("Tabs: [Tab] or [1, 2, 3]  •  Navigate: [↑/↓]  •  Change: [←/→]  •  Toggle/Edit: [Space/Enter]") + "\n\n")
 
 	isFocused := func(idx int) bool { return m.settingCursor == idx }
 
@@ -640,137 +585,193 @@ func (m *AppModel) viewSettings() string {
 		return "  "
 	}
 
-	writeRow := func(idx int, label, valueStr string) {
+	writeRow := func(idx int, label, valueStr, desc string) {
 		b.WriteString(cursor(idx) + label + styles.Value.Render(valueStr) + "\n")
-		if isFocused(idx) {
-			b.WriteString(styles.Subtext.Render("    └ "+descriptions[idx]) + "\n")
+		if isFocused(idx) && desc != "" {
+			b.WriteString(styles.Subtext.Render("    └ "+desc) + "\n")
 		}
 		b.WriteString("\n")
 	}
 
-	// Row 0 — Resolution
-	writeRow(0,
-		"Target Resolution:   ",
-		m.cfg.Resolution+"  ← / → to change  [Original, 4K, 1440p, 1080p, 720p]",
-	)
+	switch m.settingsTab {
+	case 0:
+		// Tab 0: Encoding
+		// Row 0 — Resolution
+		writeRow(0,
+			"Target Resolution:   ",
+			m.cfg.Resolution+"  ← / → to change  [Original, 4K, 1440p, 1080p, 720p]",
+			"Controls the maximum output resolution.\n"+
+				"  • Original — keeps the same dimensions as the source (recommended)\n"+
+				"  • 4K / 1440p / 1080p / 720p — downscales if the source is larger; never upscales",
+		)
 
-	// Row 1 — Video Quality
-	writeRow(1,
-		"Video Quality:       ",
-		fmt.Sprintf("[%d] %s  ← / → to change  [1: Max Savings ➔ 10: Max Quality]", m.cfg.Quality(), m.cfg.QualityLabel()),
-	)
+		// Row 1 — Video Quality
+		writeRow(1,
+			"Video Quality:       ",
+			fmt.Sprintf("[%d] %s  ← / → to change  [1: Max Savings ➔ 10: Max Quality]", m.cfg.Quality(), m.cfg.QualityLabel()),
+			m.cfg.QualityDescription(),
+		)
 
-	// Row 2 — Size Guard
-	sgState := "[✓] ON"
-	if !m.cfg.SizeGuard {
-		sgState = "[ ] OFF"
-	}
-	writeRow(2,
-		"Size Guard:          ",
-		sgState+"  [Space / Enter] to toggle",
-	)
-
-	// Row 3 — Skip HEVC
-	hevcState := "[✓] ON"
-	if !m.cfg.SkipHEVC {
-		hevcState = "[ ] OFF"
-	}
-	writeRow(3,
-		"Skip HEVC Videos:    ",
-		hevcState+"  [Space / Enter] to toggle",
-	)
-
-	// Row 4 — Pipeline Prefetch
-	prefetchState := "[✓] ON"
-	if !m.cfg.EnablePrefetch {
-		prefetchState = "[ ] OFF"
-	}
-	writeRow(4,
-		"Pipeline Prefetch:   ",
-		prefetchState+"  [Space / Enter] to toggle",
-	)
-
-	// Row 5 — Concurrent Encoders
-	encCount := m.cfg.ConcurrentEncoders
-	if encCount <= 0 {
-		encCount = 1
-	}
-	writeRow(5,
-		"Concurrent Encoders: ",
-		fmt.Sprintf("%d  ← / → to change  [1, 2]", encCount),
-	)
-
-	// Row 6 — Threshold Mode
-	modeStr := m.cfg.ThresholdMode
-	if modeStr == "" {
-		modeStr = config.ThresholdModeMBPerMin
-	}
-	writeRow(6,
-		"Threshold Mode:      ",
-		modeStr+"  ← / → / [Space / Enter] to change  [MB/min, Total MB, Disabled]",
-	)
-
-	// Row 7 — Threshold Value
-	thresholdLabel := "Threshold (MB/min):  "
-	thresholdDisplay := m.cfg.SizeThreshold + " MB/min"
-	switch m.cfg.ThresholdMode {
-	case config.ThresholdModeDisabled:
-		thresholdLabel = "Threshold:           "
-		thresholdDisplay = "Disabled (All videos scanned)"
-	case config.ThresholdModeTotalMB:
-		thresholdLabel = "Threshold (Total MB): "
-		thresholdDisplay = m.cfg.SizeThreshold + " MB"
-	default:
-		thresholdLabel = "Threshold (MB/min):  "
-		thresholdDisplay = m.cfg.SizeThreshold + " MB/min"
-	}
-
-	b.WriteString(cursor(7) + thresholdLabel)
-	if m.cfg.ThresholdMode == config.ThresholdModeDisabled {
-		b.WriteString(styles.Value.Render(thresholdDisplay) + "\n")
-		if isFocused(7) {
-			b.WriteString(styles.Subtext.Render("    └ "+descriptions[7]) + "\n")
+		// Row 2 — Size Guard
+		sgState := "[✓] ON"
+		if !m.cfg.SizeGuard {
+			sgState = "[ ] OFF"
 		}
-	} else if isFocused(7) && m.thresholdInput.Focused() {
-		b.WriteString(m.thresholdInput.View() + "  " + styles.Subtext.Render("[Enter] to confirm") + "\n")
-		b.WriteString(styles.Subtext.Render("    └ "+descriptions[7]) + "\n")
-	} else if isFocused(7) {
-		b.WriteString(styles.Value.Render(thresholdDisplay) + "  " + styles.Subtext.Render("[Enter] to edit") + "\n")
-		b.WriteString(styles.Subtext.Render("    └ "+descriptions[7]) + "\n")
-	} else {
-		b.WriteString(styles.Value.Render(thresholdDisplay) + "\n")
-	}
-	b.WriteString("\n")
+		sgDesc := "OFF — The transcoded file will always replace the original, even if it is larger.\n" +
+			"       Use this only if you need a specific codec regardless of file size."
+		if m.cfg.SizeGuard {
+			sgDesc = "ON  — If the transcoded file ends up larger than the original, the replacement\n" +
+				"       is skipped and the original is kept untouched. Prevents accidental bloat."
+		}
+		writeRow(2,
+			"Size Guard:          ",
+			sgState+"  [Space / Enter] to toggle",
+			sgDesc,
+		)
 
-	// Row 8 — Log Level
-	logLevelStr := "INFO"
-	if m.cfg.IsDebug() {
-		logLevelStr = "DEBUG"
-	}
-	writeRow(8,
-		"Logging Level:       ",
-		logLevelStr+"  ← / → / [Space / Enter] to toggle  [Info, Debug]",
-	)
+		// Row 3 — Skip HEVC
+		hevcState := "[✓] ON"
+		if !m.cfg.SkipHEVC {
+			hevcState = "[ ] OFF"
+		}
+		hevcDesc := "OFF — All eligible videos will be processed and re-encoded, even if already HEVC."
+		if m.cfg.SkipHEVC {
+			hevcDesc = "ON  — Videos already encoded in HEVC/H.265 format are skipped to avoid\n" +
+				"       unnecessary re-encoding."
+		}
+		writeRow(3,
+			"Skip HEVC Videos:    ",
+			hevcState+"  [Space / Enter] to toggle",
+			hevcDesc,
+		)
 
-	// Row 9 — Network Retries
-	retryStr := fmt.Sprintf("%d", m.cfg.MaxRetries)
-	if m.cfg.MaxRetries == 0 {
-		retryStr = "0 (Disabled)"
-	}
-	writeRow(9,
-		"Network Retries:     ",
-		retryStr+"  ← / → / [Space / Enter] to change  [0, 1, 2, 3, 5]",
-	)
+	case 1:
+		// Tab 1: Filtering
+		// Row 0 — Threshold Mode
+		modeStr := m.cfg.ThresholdMode
+		if modeStr == "" {
+			modeStr = config.ThresholdModeMBPerMin
+		}
+		writeRow(0,
+			"Threshold Mode:      ",
+			modeStr+"  ← / → / [Space / Enter] to change  [MB/min, Total MB, Disabled]",
+			"Strategy used to filter videos before optimization.\n"+
+				"  • MB/min   — Filters videos by bitrate density (skips low-bitrate videos)\n"+
+				"  • Total MB — Filters videos by total file size threshold\n"+
+				"  • Disabled — Includes all videos without any size/density filtering",
+		)
 
-	// Row 10 — Exclude Already Optimized (Uses Tags)
-	excludeOptState := "[✓] ON"
-	if !m.cfg.ExcludeOptimized {
-		excludeOptState = "[ ] OFF"
+		// Row 1 — Threshold Value
+		thresholdLabel := "Threshold (MB/min):  "
+		thresholdDisplay := m.cfg.SizeThreshold + " MB/min"
+		threshDesc := "Minimum size per minute of video (MB/min). Videos with a bitrate density below\n" +
+			"  this threshold are skipped entirely (e.g. 100 MB/min).\n" +
+			"  Filters out low-bitrate videos regardless of video duration."
+		switch m.cfg.ThresholdMode {
+		case config.ThresholdModeDisabled:
+			thresholdLabel = "Threshold:           "
+			thresholdDisplay = "Disabled (All videos scanned)"
+			threshDesc = "Threshold filtering is disabled. All video assets in your library will be scanned."
+		case config.ThresholdModeTotalMB:
+			thresholdLabel = "Threshold (Total MB): "
+			thresholdDisplay = m.cfg.SizeThreshold + " MB"
+			threshDesc = "Minimum total file size in megabytes (MB). Videos smaller than this\n" +
+				"  threshold are skipped entirely (e.g. 500 MB)."
+		}
+
+		b.WriteString(cursor(1) + thresholdLabel)
+		if m.cfg.ThresholdMode == config.ThresholdModeDisabled {
+			b.WriteString(styles.Value.Render(thresholdDisplay) + "\n")
+			if isFocused(1) {
+				b.WriteString(styles.Subtext.Render("    └ "+threshDesc) + "\n")
+			}
+		} else if isFocused(1) && m.thresholdInput.Focused() {
+			b.WriteString(m.thresholdInput.View() + "  " + styles.Subtext.Render("[Enter] to confirm") + "\n")
+			b.WriteString(styles.Subtext.Render("    └ "+threshDesc) + "\n")
+		} else if isFocused(1) {
+			b.WriteString(styles.Value.Render(thresholdDisplay) + "  " + styles.Subtext.Render("[Enter] to edit") + "\n")
+			b.WriteString(styles.Subtext.Render("    └ "+threshDesc) + "\n")
+		} else {
+			b.WriteString(styles.Value.Render(thresholdDisplay) + "\n")
+		}
+		b.WriteString("\n")
+
+		// Row 2 — Exclude Optimized
+		excludeOptState := "[✓] ON"
+		if !m.cfg.ExcludeOptimized {
+			excludeOptState = "[ ] OFF"
+		}
+		eoDesc := "OFF — All videos matching search criteria are included, even if previously\n" +
+			"       tagged as optimized."
+		if m.cfg.ExcludeOptimized {
+			eoDesc = "ON  — Enables and uses Immich tags ('immich-optimizer') to track and exclude\n" +
+				"       already optimized videos from search. Ideal for recurring runs as your\n" +
+				"       library grows on remaining videos.\n" +
+				"       Requires 'Tags' enabled in Immich (Account Settings → Features → Tags)."
+		}
+		writeRow(2,
+			"Exclude Optimized:   ",
+			excludeOptState+"  [Space / Enter] to toggle",
+			eoDesc,
+		)
+
+	case 2:
+		// Tab 2: Pipeline & Network
+		// Row 0 — Pipeline Prefetch
+		prefetchState := "[✓] ON"
+		if !m.cfg.EnablePrefetch {
+			prefetchState = "[ ] OFF"
+		}
+		prefetchDesc := "OFF — Sequential mode. Downloads, transcodes, and uploads strictly one at a time."
+		if m.cfg.EnablePrefetch {
+			prefetchDesc = "ON  — Downloads the next video in background while transcoding current video.\n" +
+				"       Eliminates download wait time without exceeding disk bounds (max 1 file)."
+		}
+		writeRow(0,
+			"Pipeline Prefetch:   ",
+			prefetchState+"  [Space / Enter] to toggle",
+			prefetchDesc,
+		)
+
+		// Row 1 — Concurrent Encoders
+		encCount := m.cfg.ConcurrentEncoders
+		if encCount <= 0 {
+			encCount = 1
+		}
+		writeRow(1,
+			"Concurrent Encoders: ",
+			fmt.Sprintf("%d  ← / → to change  [1, 2]", encCount),
+			"Controls how many ffmpeg instances encode simultaneously.\n"+
+				"  • 1 — Default. Best for hardware encoders (VideoToolbox / NVENC) and CPU thermals\n"+
+				"  • 2 — Parallel encoding. High throughput on multi-core systems",
+		)
+
+		// Row 2 — Logging Level
+		logLevelStr := "INFO"
+		if m.cfg.IsDebug() {
+			logLevelStr = "DEBUG"
+		}
+		writeRow(2,
+			"Logging Level:       ",
+			logLevelStr+"  ← / → / [Space / Enter] to toggle  [Info, Debug]",
+			"Controls detail of output logs. Set to Debug for full FFmpeg & ExifTool command lines,\n"+
+				"  stderr outputs, and diagnostic traces to identify error root causes.\n"+
+				"  Logs written to: ~/.config/immich-video-optimizer/optimizer.log",
+		)
+
+		// Row 3 — Network Retries
+		retryStr := fmt.Sprintf("%d", m.cfg.MaxRetries)
+		if m.cfg.MaxRetries == 0 {
+			retryStr = "0 (Disabled)"
+		}
+		writeRow(3,
+			"Network Retries:     ",
+			retryStr+"  ← / → / [Space / Enter] to change  [0, 1, 2, 3, 5]",
+			"Number of automatic retry attempts with backoff for failed downloads and uploads.\n"+
+				"  • 0 — Disabled. Fails immediately on first error\n"+
+				"  • 1 to 5 — Retries automatically with exponential backoff on transient network drops",
+		)
 	}
-	writeRow(10,
-		"Exclude Optimized:   ",
-		excludeOptState+"  [Space / Enter] to toggle",
-	)
 
 	b.WriteString("\n")
 	b.WriteString(styles.Subtext.Render("[Esc] Save & Return"))

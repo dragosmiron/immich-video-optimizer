@@ -130,6 +130,7 @@ type AppModel struct {
 	isSearching    bool
 
 	// Settings
+	settingsTab    int // 0: Encoding, 1: Filtering, 2: Pipeline & Network
 	settingCursor  int
 	resolutions    []string
 	thresholdInput textinput.Model // typeable threshold in Settings
@@ -1052,6 +1053,7 @@ func (m *AppModel) updateBrowser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "s", "S":
 		m.state = ViewSettings
+		m.settingsTab = 0
 		m.settingCursor = 0
 		return m, nil
 
@@ -1175,6 +1177,7 @@ func (m *AppModel) updateDryRun(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.dryRunCancel()
 		}
 		m.state = ViewSettings
+		m.settingsTab = 0
 		m.settingCursor = 0
 		return m, nil
 
@@ -1194,73 +1197,67 @@ func (m *AppModel) updateDryRun(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-
-	// When the threshold row (index 7) is focused and user is typing into it,
-	// Enter confirms the value; everything else feeds the input.
-	if m.settingCursor == 7 && m.thresholdInput.Focused() {
-		if msg.String() == "enter" {
-			m.thresholdInput.Blur()
-			thresh := strings.TrimSpace(m.thresholdInput.Value())
-			if thresh == "" {
-				thresh = "100"
-				m.thresholdInput.SetValue(thresh)
-			}
-			m.cfg.SizeThreshold = thresh
-		} else {
-			var cmd tea.Cmd
-			m.thresholdInput, cmd = m.thresholdInput.Update(msg)
-			return m, cmd
-		}
-		return m, nil
+func (m *AppModel) settingsMaxCursor() int {
+	switch m.settingsTab {
+	case 1:
+		return 2 // Tab 1 (Filtering): 0: Mode, 1: Value, 2: Exclude Optimized
+	case 2:
+		return 3 // Tab 2 (Pipeline & Network): 0: Prefetch, 1: Encoders, 2: Log Level, 3: Retries
+	default:
+		return 3 // Tab 0 (Encoding): 0: Resolution, 1: Quality, 2: Size Guard, 3: Skip HEVC
 	}
+}
 
-	switch msg.String() {
-	case "q", "esc":
-		_ = config.SaveConfig(m.cfg)
-		if len(m.videos) > 0 {
-			m.state = ViewBrowser
-		} else {
-			m.state = ViewScanPrompt
-		}
+func (m *AppModel) switchSettingsTab(newTab int) {
+	if newTab < 0 {
+		newTab = 0
+	} else if newTab > 2 {
+		newTab = 2
+	}
+	m.settingsTab = newTab
+	if m.thresholdInput.Focused() {
+		m.thresholdInput.Blur()
+	}
+	max := m.settingsMaxCursor()
+	if m.settingCursor > max {
+		m.settingCursor = max
+	}
+}
 
-	case "up", "k":
-		if m.settingCursor > 0 {
-			m.settingCursor--
-		}
+func (m *AppModel) handleSettingsOptionChange(dir int) {
+	thresholdModes := []string{config.ThresholdModeMBPerMin, config.ThresholdModeTotalMB, config.ThresholdModeDisabled}
+	retryOptions := []int{0, 1, 2, 3, 5}
 
-	case "down", "j":
-		if m.settingCursor < 10 {
-			m.settingCursor++
-		}
-
-	case "left", "h":
-		thresholdModes := []string{config.ThresholdModeMBPerMin, config.ThresholdModeTotalMB, config.ThresholdModeDisabled}
-		retryOptions := []int{0, 1, 2, 3, 5}
-		if m.settingCursor == 0 {
+	switch m.settingsTab {
+	case 0: // Encoding
+		switch m.settingCursor {
+		case 0: // Resolution
 			for i, r := range m.resolutions {
-				if r == m.cfg.Resolution && i > 0 {
-					m.cfg.Resolution = m.resolutions[i-1]
+				if r == m.cfg.Resolution {
+					target := i + dir
+					if target >= 0 && target < len(m.resolutions) {
+						m.cfg.Resolution = m.resolutions[target]
+					}
 					break
 				}
 			}
-		} else if m.settingCursor == 1 {
-			q := m.cfg.Quality() - 1
+		case 1: // Video Quality
+			q := m.cfg.Quality() + dir
 			if q < 1 {
 				q = 1
+			} else if q > 10 {
+				q = 10
 			}
 			m.cfg.VideoQuality = q
-		} else if m.settingCursor == 2 {
+		case 2: // Size Guard
 			m.cfg.SizeGuard = !m.cfg.SizeGuard
-		} else if m.settingCursor == 3 {
+		case 3: // Skip HEVC
 			m.cfg.SkipHEVC = !m.cfg.SkipHEVC
-		} else if m.settingCursor == 4 {
-			m.cfg.EnablePrefetch = !m.cfg.EnablePrefetch
-		} else if m.settingCursor == 5 {
-			if m.cfg.ConcurrentEncoders > 1 {
-				m.cfg.ConcurrentEncoders = 1
-			}
-		} else if m.settingCursor == 6 {
+		}
+
+	case 1: // Filtering
+		switch m.settingCursor {
+		case 0: // Threshold Mode
 			currIdx := 0
 			for i, mode := range thresholdModes {
 				if mode == m.cfg.ThresholdMode {
@@ -1268,51 +1265,76 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
-			m.cfg.ThresholdMode = thresholdModes[(currIdx-1+len(thresholdModes))%len(thresholdModes)]
-		} else if m.settingCursor == 8 {
-			m.cfg.LogLevel = "info"
+			m.cfg.ThresholdMode = thresholdModes[(currIdx+dir+len(thresholdModes))%len(thresholdModes)]
+		case 1: // Threshold Value
+			// Focusing handled via enter / space
+		case 2: // Exclude Optimized
+			m.cfg.ExcludeOptimized = !m.cfg.ExcludeOptimized
+		}
+
+	case 2: // Pipeline & Network
+		switch m.settingCursor {
+		case 0: // Pipeline Prefetch
+			m.cfg.EnablePrefetch = !m.cfg.EnablePrefetch
+		case 1: // Concurrent Encoders
+			if dir < 0 {
+				m.cfg.ConcurrentEncoders = 1
+			} else {
+				m.cfg.ConcurrentEncoders = 2
+			}
+		case 2: // Logging Level
+			if dir < 0 {
+				m.cfg.LogLevel = "info"
+			} else {
+				m.cfg.LogLevel = "debug"
+			}
 			logger.SetLevelString(m.cfg.LogLevel)
-		} else if m.settingCursor == 9 {
+		case 3: // Network Retries
 			for i, val := range retryOptions {
-				if val == m.cfg.MaxRetries && i > 0 {
-					m.cfg.MaxRetries = retryOptions[i-1]
-					if m.pipeline != nil && m.pipeline.Client() != nil {
-						m.pipeline.Client().SetMaxRetries(m.cfg.MaxRetries)
+				if val == m.cfg.MaxRetries {
+					target := i + dir
+					if target >= 0 && target < len(retryOptions) {
+						m.cfg.MaxRetries = retryOptions[target]
+						if m.pipeline != nil && m.pipeline.Client() != nil {
+							m.pipeline.Client().SetMaxRetries(m.cfg.MaxRetries)
+						}
 					}
 					break
 				}
 			}
-		} else if m.settingCursor == 10 {
-			m.cfg.ExcludeOptimized = !m.cfg.ExcludeOptimized
 		}
+	}
+}
 
-	case "right", "l":
-		thresholdModes := []string{config.ThresholdModeMBPerMin, config.ThresholdModeTotalMB, config.ThresholdModeDisabled}
-		retryOptions := []int{0, 1, 2, 3, 5}
-		if m.settingCursor == 0 {
+func (m *AppModel) handleSettingsOptionToggle() (tea.Model, tea.Cmd) {
+	thresholdModes := []string{config.ThresholdModeMBPerMin, config.ThresholdModeTotalMB, config.ThresholdModeDisabled}
+	retryOptions := []int{0, 1, 2, 3, 5}
+
+	switch m.settingsTab {
+	case 0: // Encoding
+		switch m.settingCursor {
+		case 0: // Resolution
 			for i, r := range m.resolutions {
-				if r == m.cfg.Resolution && i < len(m.resolutions)-1 {
-					m.cfg.Resolution = m.resolutions[i+1]
+				if r == m.cfg.Resolution {
+					m.cfg.Resolution = m.resolutions[(i+1)%len(m.resolutions)]
 					break
 				}
 			}
-		} else if m.settingCursor == 1 {
+		case 1: // Video Quality
 			q := m.cfg.Quality() + 1
 			if q > 10 {
-				q = 10
+				q = 1
 			}
 			m.cfg.VideoQuality = q
-		} else if m.settingCursor == 2 {
+		case 2: // Size Guard
 			m.cfg.SizeGuard = !m.cfg.SizeGuard
-		} else if m.settingCursor == 3 {
+		case 3: // Skip HEVC
 			m.cfg.SkipHEVC = !m.cfg.SkipHEVC
-		} else if m.settingCursor == 4 {
-			m.cfg.EnablePrefetch = !m.cfg.EnablePrefetch
-		} else if m.settingCursor == 5 {
-			if m.cfg.ConcurrentEncoders < 2 {
-				m.cfg.ConcurrentEncoders = 2
-			}
-		} else if m.settingCursor == 6 {
+		}
+
+	case 1: // Filtering
+		switch m.settingCursor {
+		case 0: // Threshold Mode
 			currIdx := 0
 			for i, mode := range thresholdModes {
 				if mode == m.cfg.ThresholdMode {
@@ -1321,66 +1343,32 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.cfg.ThresholdMode = thresholdModes[(currIdx+1)%len(thresholdModes)]
-		} else if m.settingCursor == 8 {
-			m.cfg.LogLevel = "debug"
-			logger.SetLevelString(m.cfg.LogLevel)
-		} else if m.settingCursor == 9 {
-			for i, val := range retryOptions {
-				if val == m.cfg.MaxRetries && i < len(retryOptions)-1 {
-					m.cfg.MaxRetries = retryOptions[i+1]
-					if m.pipeline != nil && m.pipeline.Client() != nil {
-						m.pipeline.Client().SetMaxRetries(m.cfg.MaxRetries)
-					}
-					break
-				}
+		case 1: // Threshold Value
+			if m.cfg.ThresholdMode != config.ThresholdModeDisabled {
+				return m, m.thresholdInput.Focus()
 			}
-		} else if m.settingCursor == 10 {
+		case 2: // Exclude Optimized
 			m.cfg.ExcludeOptimized = !m.cfg.ExcludeOptimized
 		}
 
-	case " ", "enter":
-		if m.settingCursor == 1 {
-			q := m.cfg.Quality() + 1
-			if q > 10 {
-				q = 1
-			}
-			m.cfg.VideoQuality = q
-		} else if m.settingCursor == 2 {
-			m.cfg.SizeGuard = !m.cfg.SizeGuard
-		} else if m.settingCursor == 3 {
-			m.cfg.SkipHEVC = !m.cfg.SkipHEVC
-		} else if m.settingCursor == 4 {
+	case 2: // Pipeline & Network
+		switch m.settingCursor {
+		case 0: // Pipeline Prefetch
 			m.cfg.EnablePrefetch = !m.cfg.EnablePrefetch
-		} else if m.settingCursor == 5 {
+		case 1: // Concurrent Encoders
 			if m.cfg.ConcurrentEncoders <= 1 {
 				m.cfg.ConcurrentEncoders = 2
 			} else {
 				m.cfg.ConcurrentEncoders = 1
 			}
-		} else if m.settingCursor == 6 {
-			thresholdModes := []string{config.ThresholdModeMBPerMin, config.ThresholdModeTotalMB, config.ThresholdModeDisabled}
-			currIdx := 0
-			for i, mode := range thresholdModes {
-				if mode == m.cfg.ThresholdMode {
-					currIdx = i
-					break
-				}
-			}
-			m.cfg.ThresholdMode = thresholdModes[(currIdx+1)%len(thresholdModes)]
-		} else if m.settingCursor == 7 {
-			if m.cfg.ThresholdMode != config.ThresholdModeDisabled {
-				// Activate the threshold text input
-				return m, m.thresholdInput.Focus()
-			}
-		} else if m.settingCursor == 8 {
+		case 2: // Logging Level
 			if m.cfg.IsDebug() {
 				m.cfg.LogLevel = "info"
 			} else {
 				m.cfg.LogLevel = "debug"
 			}
 			logger.SetLevelString(m.cfg.LogLevel)
-		} else if m.settingCursor == 9 {
-			retryOptions := []int{0, 1, 2, 3, 5}
+		case 3: // Network Retries
 			currIdx := 0
 			for i, val := range retryOptions {
 				if val == m.cfg.MaxRetries {
@@ -1392,10 +1380,85 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.pipeline != nil && m.pipeline.Client() != nil {
 				m.pipeline.Client().SetMaxRetries(m.cfg.MaxRetries)
 			}
-		} else if m.settingCursor == 10 {
-			m.cfg.ExcludeOptimized = !m.cfg.ExcludeOptimized
 		}
 	}
+	return m, nil
+}
+
+func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// When the threshold row (Tab 1, index 1) is focused and user is typing into it,
+	// Enter confirms the value; Esc cancels editing; everything else feeds the input.
+	if m.settingsTab == 1 && m.settingCursor == 1 && m.thresholdInput.Focused() {
+		switch msg.String() {
+		case "enter":
+			m.thresholdInput.Blur()
+			thresh := strings.TrimSpace(m.thresholdInput.Value())
+			if thresh == "" {
+				thresh = "100"
+				m.thresholdInput.SetValue(thresh)
+			}
+			m.cfg.SizeThreshold = thresh
+			return m, nil
+		case "esc":
+			m.thresholdInput.Blur()
+			return m, nil
+		default:
+			var cmd tea.Cmd
+			m.thresholdInput, cmd = m.thresholdInput.Update(msg)
+			return m, cmd
+		}
+	}
+
+	switch msg.String() {
+	case "q", "esc":
+		_ = config.SaveConfig(m.cfg)
+		if len(m.videos) > 0 {
+			m.state = ViewBrowser
+		} else {
+			m.state = ViewScanPrompt
+		}
+		return m, nil
+
+	case "tab":
+		m.switchSettingsTab((m.settingsTab + 1) % 3)
+		return m, nil
+
+	case "shift+tab":
+		m.switchSettingsTab((m.settingsTab - 1 + 3) % 3)
+		return m, nil
+
+	case "1":
+		m.switchSettingsTab(0)
+		return m, nil
+
+	case "2":
+		m.switchSettingsTab(1)
+		return m, nil
+
+	case "3":
+		m.switchSettingsTab(2)
+		return m, nil
+
+	case "up", "k":
+		if m.settingCursor > 0 {
+			m.settingCursor--
+		}
+
+	case "down", "j":
+		if m.settingCursor < m.settingsMaxCursor() {
+			m.settingCursor++
+		}
+
+	case "left", "h":
+		m.handleSettingsOptionChange(-1)
+
+	case "right", "l":
+		m.handleSettingsOptionChange(1)
+
+	case " ", "enter":
+		return m.handleSettingsOptionToggle()
+	}
+
 	return m, nil
 }
 
