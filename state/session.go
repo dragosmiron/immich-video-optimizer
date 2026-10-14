@@ -31,6 +31,7 @@ type VideoState struct {
 	ModifiedAt    string      `json:"modified_at,omitempty"`
 	DeviceAssetID string      `json:"device_asset_id,omitempty"`
 	DeviceID      string      `json:"device_id,omitempty"`
+	IsFavorite    bool        `json:"is_favorite,omitempty"`
 }
 
 type Session struct {

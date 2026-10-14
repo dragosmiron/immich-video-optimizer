@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -219,6 +220,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 			ModifiedAt:    v.FileModifiedAt,
 			DeviceAssetID: v.DeviceAssetID,
 			DeviceID:      v.DeviceID,
+			IsFavorite:    v.IsFavorite,
 		})
 	}
 	_ = state.SaveSession(sess)
@@ -526,6 +528,34 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 			continue
 		}
 
+		// Query original asset's albums and favorite status before replacement/deletion
+		origAlbums, err := p.client.GetAssetAlbumsWithContext(ctx, item.Asset.ID)
+		if err != nil {
+			item.Cleanup()
+			if ctx.Err() != nil {
+				continue
+			}
+			logger.Error("Failed to query albums for original asset %s (%s): %v", item.Asset.OriginalFileName, item.Asset.ID, err)
+			sess.MarkFailed(item.Asset.ID, fmt.Sprintf("failed to query albums: %v", err))
+			_ = state.SaveSession(sess)
+			emit(PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: fmt.Errorf("failed to query albums: %w", err)})
+			continue
+		}
+
+		isFavorite := item.Asset.IsFavorite
+		if !isFavorite {
+			origAsset, err := p.client.GetAssetWithContext(ctx, item.Asset.ID)
+			if err != nil {
+				if ctx.Err() != nil {
+					item.Cleanup()
+					continue
+				}
+				logger.Debug("Could not query asset info for %s: %v", item.Asset.ID, err)
+			} else if origAsset != nil {
+				isFavorite = origAsset.IsFavorite
+			}
+		}
+
 		emit(PipelineStageMsg{Stage: "uploading", VideoName: item.Asset.OriginalFileName, VideoID: item.Asset.ID})
 
 		newAsset, err := p.client.UploadReplacementAssetWithContext(ctx, item.TranscodedPath, item.Asset)
@@ -569,7 +599,57 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		}
 
 		if albumID != "" {
-			_ = p.client.AddAssetsToAlbum(albumID, []string{newAsset.ID})
+			_ = p.client.AddAssetsToAlbumWithContext(ctx, albumID, []string{newAsset.ID})
+		}
+
+		// Add replacement asset to all existing albums of the original asset (excluding tracking album)
+		var albumTransferErr error
+		seenAlbums := make(map[string]bool)
+		for _, alb := range origAlbums {
+			if alb.ID == "" || alb.ID == albumID || strings.HasPrefix(alb.AlbumName, "Immich-Optimizer-") || seenAlbums[alb.ID] {
+				continue
+			}
+			seenAlbums[alb.ID] = true
+			if err := p.client.AddAssetsToAlbumWithContext(ctx, alb.ID, []string{newAsset.ID}); err != nil {
+				logger.Error("Failed to add new asset %s to original album %s (%s): %v", newAsset.ID, alb.AlbumName, alb.ID, err)
+				albumTransferErr = err
+				break
+			}
+		}
+
+		// Transfer favorite status if original was favorited
+		var favTransferErr error
+		if isFavorite {
+			if err := p.client.SetAssetFavoriteWithContext(ctx, newAsset.ID, true); err != nil {
+				logger.Error("Failed to transfer favorite status to new asset %s: %v", newAsset.ID, err)
+				favTransferErr = err
+			}
+		}
+
+		// Safety guard: original asset is ONLY deleted after replacement is uploaded,
+		// added to all original albums, and favorite status is transferred.
+		if albumTransferErr != nil || favTransferErr != nil {
+			item.Cleanup()
+			if ctx.Err() != nil {
+				// Paused mid-transfer; leave as StatusPending for clean resume
+				continue
+			}
+			errDesc := "failed to transfer album membership"
+			if favTransferErr != nil && albumTransferErr == nil {
+				errDesc = "failed to transfer favorite status"
+			} else if albumTransferErr != nil && favTransferErr != nil {
+				errDesc = "failed to transfer album membership and favorite status"
+			}
+			fullErr := fmt.Errorf("%s; original asset preserved", errDesc)
+			logger.Error("Safety guard triggered for %s (%s): %v; aborting deletion of original", item.Asset.OriginalFileName, item.Asset.ID, fullErr)
+			sess.MarkFailed(item.Asset.ID, fullErr.Error())
+			_ = state.SaveSession(sess)
+			emit(PipelineVideoCompleteMsg{
+				VideoID:   item.Asset.ID,
+				VideoName: item.Asset.OriginalFileName,
+				Err:       fullErr,
+			})
+			continue
 		}
 
 		emit(PipelineStageMsg{Stage: "finalizing", VideoName: item.Asset.OriginalFileName, VideoID: item.Asset.ID})

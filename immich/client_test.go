@@ -718,3 +718,236 @@ func TestScanVideos_MBPerMinFilter(t *testing.T) {
 		t.Fatalf("expected 2 videos for lowercase 'total mb', got %d (err: %v)", len(resMBLower.Videos), err)
 	}
 }
+
+func TestGetAssetAlbums(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") != "secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Method != http.MethodGet || r.URL.Path != "/api/albums" {
+			t.Errorf("Unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		assetID := r.URL.Query().Get("assetId")
+		if assetID == "asset-none" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("[]"))
+			return
+		}
+		if assetID == "asset-empty-body" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if assetID == "asset-null" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("null"))
+			return
+		}
+		if assetID == "asset-err" {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"message": "internal error"}`))
+			return
+		}
+
+		if assetID != "asset-123" {
+			t.Errorf("Expected query assetId=asset-123, got %s", assetID)
+		}
+
+		albums := []Album{
+			{ID: "album-1", AlbumName: "Trip 2024"},
+			{ID: "album-2", AlbumName: "Favorites"},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(albums)
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+
+	// 1. Success case
+	albums, err := client.GetAssetAlbumsWithContext(context.Background(), "asset-123")
+	if err != nil {
+		t.Fatalf("GetAssetAlbumsWithContext failed: %v", err)
+	}
+	if len(albums) != 2 {
+		t.Fatalf("Expected 2 albums, got %d", len(albums))
+	}
+	if albums[0].ID != "album-1" || albums[0].AlbumName != "Trip 2024" {
+		t.Errorf("Unexpected album 0: %+v", albums[0])
+	}
+	if albums[1].ID != "album-2" || albums[1].AlbumName != "Favorites" {
+		t.Errorf("Unexpected album 1: %+v", albums[1])
+	}
+
+	// 2. Convenience wrapper
+	albumsConv, err := client.GetAssetAlbums("asset-123")
+	if err != nil || len(albumsConv) != 2 {
+		t.Fatalf("GetAssetAlbums wrapper failed: %v, len=%d", err, len(albumsConv))
+	}
+
+	// 3. Empty albums list
+	emptyAlbums, err := client.GetAssetAlbums("asset-none")
+	if err != nil {
+		t.Fatalf("GetAssetAlbums failed for empty list: %v", err)
+	}
+	if len(emptyAlbums) != 0 {
+		t.Errorf("Expected 0 albums, got %d", len(emptyAlbums))
+	}
+
+	// 4. Empty body (200 with no content)
+	emptyBodyAlbums, err := client.GetAssetAlbums("asset-empty-body")
+	if err != nil {
+		t.Fatalf("GetAssetAlbums failed on empty body: %v", err)
+	}
+	if len(emptyBodyAlbums) != 0 {
+		t.Errorf("Expected 0 albums on empty body, got %d", len(emptyBodyAlbums))
+	}
+
+	// 5. Null body response ("null")
+	nullBodyAlbums, err := client.GetAssetAlbums("asset-null")
+	if err != nil {
+		t.Fatalf("GetAssetAlbums failed on null body: %v", err)
+	}
+	if nullBodyAlbums == nil || len(nullBodyAlbums) != 0 {
+		t.Errorf("Expected non-nil empty slice on null body, got %v", nullBodyAlbums)
+	}
+
+	// 5. Empty assetID validation
+	if _, err := client.GetAssetAlbums(""); err == nil {
+		t.Errorf("Expected error for empty assetID")
+	}
+
+	// 6. Server error handling
+	if _, err := client.GetAssetAlbums("asset-err"); err == nil {
+		t.Errorf("Expected error for 500 response")
+	}
+}
+
+func TestSetAssetFavorite(t *testing.T) {
+	var lastReceivedBody map[string]interface{}
+	var lastPath string
+	var lastMethod string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") != "secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		lastMethod = r.Method
+		lastPath = r.URL.Path
+
+		if r.URL.Path == "/api/assets/asset-err" {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"message": "update failed"}`))
+			return
+		}
+
+		_ = json.NewDecoder(r.Body).Decode(&lastReceivedBody)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"id": "asset-123"}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+
+	// 1. Success set favorite = true
+	err := client.SetAssetFavoriteWithContext(context.Background(), "asset-123", true)
+	if err != nil {
+		t.Fatalf("SetAssetFavoriteWithContext failed: %v", err)
+	}
+	if lastMethod != http.MethodPut {
+		t.Errorf("Expected method PUT, got %s", lastMethod)
+	}
+	if lastPath != "/api/assets/asset-123" {
+		t.Errorf("Expected path /api/assets/asset-123, got %s", lastPath)
+	}
+	if lastReceivedBody["isFavorite"] != true {
+		t.Errorf("Expected isFavorite=true in payload, got %v", lastReceivedBody["isFavorite"])
+	}
+
+	// 2. Convenience wrapper with favorite = false
+	err = client.SetAssetFavorite("asset-123", false)
+	if err != nil {
+		t.Fatalf("SetAssetFavorite failed: %v", err)
+	}
+	if lastReceivedBody["isFavorite"] != false {
+		t.Errorf("Expected isFavorite=false in payload, got %v", lastReceivedBody["isFavorite"])
+	}
+
+	// 3. Empty assetID
+	if err := client.SetAssetFavorite("", true); err == nil {
+		t.Errorf("Expected error for empty assetID")
+	}
+
+	// 4. Server error
+	if err := client.SetAssetFavorite("asset-err", true); err == nil {
+		t.Errorf("Expected error on server failure")
+	}
+}
+
+func TestAsset_IsFavoriteJSON(t *testing.T) {
+	// JSON with isFavorite: true
+	jsonTrue := `{"id": "v1", "type": "VIDEO", "isFavorite": true}`
+	var a1 Asset
+	if err := json.Unmarshal([]byte(jsonTrue), &a1); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+	if !a1.IsFavorite {
+		t.Errorf("Expected a1.IsFavorite == true")
+	}
+
+	// JSON with isFavorite: false
+	jsonFalse := `{"id": "v2", "type": "VIDEO", "isFavorite": false}`
+	var a2 Asset
+	if err := json.Unmarshal([]byte(jsonFalse), &a2); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+	if a2.IsFavorite {
+		t.Errorf("Expected a2.IsFavorite == false")
+	}
+
+	// JSON with isFavorite omitted
+	jsonOmitted := `{"id": "v3", "type": "VIDEO"}`
+	var a3 Asset
+	if err := json.Unmarshal([]byte(jsonOmitted), &a3); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+	if a3.IsFavorite {
+		t.Errorf("Expected a3.IsFavorite == false when omitted")
+	}
+}
+
+func TestGetAsset(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/assets/asset-fav" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id": "asset-fav", "type": "VIDEO", "isFavorite": true, "originalFileName": "clip.mp4"}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+
+	asset, err := client.GetAssetWithContext(context.Background(), "asset-fav")
+	if err != nil {
+		t.Fatalf("GetAssetWithContext failed: %v", err)
+	}
+	if asset.ID != "asset-fav" || !asset.IsFavorite || asset.OriginalFileName != "clip.mp4" {
+		t.Errorf("Unexpected asset returned: %+v", asset)
+	}
+
+	assetConv, err := client.GetAsset("asset-fav")
+	if err != nil || assetConv.ID != "asset-fav" || !assetConv.IsFavorite {
+		t.Errorf("GetAsset wrapper failed: %v, %+v", err, assetConv)
+	}
+
+	if _, err := client.GetAsset(""); err == nil {
+		t.Errorf("Expected error for empty assetID")
+	}
+}
+

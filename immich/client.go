@@ -9,6 +9,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -149,6 +150,7 @@ type Asset struct {
 	FileCreatedAt    string          `json:"fileCreatedAt,omitempty"`
 	FileModifiedAt   string          `json:"fileModifiedAt,omitempty"`
 	OriginalFileName string          `json:"originalFileName,omitempty"`
+	IsFavorite       bool            `json:"isFavorite"`
 	ExifInfo         ExifInfo        `json:"exifInfo,omitempty"`
 }
 
@@ -539,15 +541,60 @@ func (c *Client) CreateTrackingAlbum(name string) (*Album, error) {
 	return &album, nil
 }
 
-// AddAssetsToAlbum adds the given asset IDs to the specified album
-func (c *Client) AddAssetsToAlbum(albumID string, assetIDs []string) error {
-	if albumID == "" || len(assetIDs) == 0 {
-		return nil
+// GetAssetAlbumsWithContext returns all albums containing the specified asset with context cancellation.
+// Queries GET /api/albums?assetId={assetID}.
+func (c *Client) GetAssetAlbumsWithContext(ctx context.Context, assetID string) ([]Album, error) {
+	if assetID == "" {
+		return nil, errors.New("assetID cannot be empty")
 	}
-	payload := map[string][]string{"ids": assetIDs}
-	body, _ := json.Marshal(payload)
-	url := fmt.Sprintf("%s/api/albums/%s/assets", c.baseURL, albumID)
-	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(body))
+	urlStr := fmt.Sprintf("%s/api/albums?assetId=%s", c.baseURL, url.QueryEscape(assetID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+	if len(strings.TrimSpace(string(body))) == 0 {
+		return []Album{}, nil
+	}
+
+	var albums []Album
+	if err := json.Unmarshal(body, &albums); err != nil {
+		return nil, fmt.Errorf("failed to decode albums: %w", err)
+	}
+	if albums == nil {
+		albums = []Album{}
+	}
+	return albums, nil
+}
+
+// GetAssetAlbums returns all albums containing the specified asset.
+func (c *Client) GetAssetAlbums(assetID string) ([]Album, error) {
+	return c.GetAssetAlbumsWithContext(context.Background(), assetID)
+}
+
+// SetAssetFavoriteWithContext updates the favorite status of an asset with context cancellation.
+// Immich API uses PUT /api/assets/{assetID} with payload {"isFavorite": isFavorite}.
+func (c *Client) SetAssetFavoriteWithContext(ctx context.Context, assetID string, isFavorite bool) error {
+	if assetID == "" {
+		return errors.New("assetID cannot be empty")
+	}
+	payload := map[string]bool{"isFavorite": isFavorite}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	urlStr := fmt.Sprintf("%s/api/assets/%s", c.baseURL, url.PathEscape(assetID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, urlStr, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -558,7 +605,73 @@ func (c *Client) AddAssetsToAlbum(albumID string, assetIDs []string) error {
 		return err
 	}
 	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
+}
+
+// SetAssetFavorite updates the favorite status of an asset.
+func (c *Client) SetAssetFavorite(assetID string, isFavorite bool) error {
+	return c.SetAssetFavoriteWithContext(context.Background(), assetID, isFavorite)
+}
+
+// GetAssetWithContext retrieves asset metadata by asset ID with context cancellation.
+func (c *Client) GetAssetWithContext(ctx context.Context, assetID string) (*Asset, error) {
+	if assetID == "" {
+		return nil, errors.New("assetID cannot be empty")
+	}
+	urlStr := fmt.Sprintf("%s/api/assets/%s", c.baseURL, url.PathEscape(assetID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var asset Asset
+	if err := json.NewDecoder(resp.Body).Decode(&asset); err != nil {
+		return nil, fmt.Errorf("failed to decode asset: %w", err)
+	}
+	return &asset, nil
+}
+
+// GetAsset retrieves asset metadata by asset ID.
+func (c *Client) GetAsset(assetID string) (*Asset, error) {
+	return c.GetAssetWithContext(context.Background(), assetID)
+}
+
+// AddAssetsToAlbumWithContext adds the given asset IDs to the specified album with context cancellation
+func (c *Client) AddAssetsToAlbumWithContext(ctx context.Context, albumID string, assetIDs []string) error {
+	if albumID == "" || len(assetIDs) == 0 {
+		return nil
+	}
+	payload := map[string][]string{"ids": assetIDs}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	urlStr := fmt.Sprintf("%s/api/albums/%s/assets", c.baseURL, url.PathEscape(albumID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, urlStr, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return nil
+}
+
+// AddAssetsToAlbum adds the given asset IDs to the specified album
+func (c *Client) AddAssetsToAlbum(albumID string, assetIDs []string) error {
+	return c.AddAssetsToAlbumWithContext(context.Background(), albumID, assetIDs)
 }
 
 // DeleteAlbum deletes the album with the specified ID

@@ -883,6 +883,7 @@ func (m *AppModel) updateResumePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.FileModifiedAt = vs.ModifiedAt
 			a.DeviceAssetID = vs.DeviceAssetID
 			a.DeviceID = vs.DeviceID
+			a.IsFavorite = vs.IsFavorite
 			toProcess = append(toProcess, a)
 		}
 		if len(toProcess) > 0 {

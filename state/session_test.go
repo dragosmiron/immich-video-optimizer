@@ -43,6 +43,7 @@ func TestSessionSaveLoadClear(t *testing.T) {
 				ModifiedAt:    "2026-01-01T12:00:00Z",
 				DeviceAssetID: "dev-asset-1",
 				DeviceID:      "phone-1",
+				IsFavorite:    true,
 			},
 		},
 		TotalVideos: 1,
@@ -68,7 +69,7 @@ func TestSessionSaveLoadClear(t *testing.T) {
 		t.Errorf("Expected 1 video, got %d", len(loadedSession.Videos))
 	}
 	v1 := loadedSession.Videos["vid1"]
-	if v1.Width != 3840 || v1.Height != 2160 || v1.CreatedAt != "2026-01-01T12:00:00Z" || v1.DeviceAssetID != "dev-asset-1" {
+	if v1.Width != 3840 || v1.Height != 2160 || v1.CreatedAt != "2026-01-01T12:00:00Z" || v1.DeviceAssetID != "dev-asset-1" || !v1.IsFavorite {
 		t.Errorf("Metadata fields were not preserved in loaded session: %+v", v1)
 	}
 

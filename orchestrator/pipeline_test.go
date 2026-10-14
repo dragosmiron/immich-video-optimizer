@@ -1456,5 +1456,676 @@ func TestPipeline_UnbufferedChannel(t *testing.T) {
 	}
 }
 
+func TestPipeline_PreservesAlbumsAndFavorite(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	var mu sync.Mutex
+	var orderOfEvents []string
+	var albumsAddedTo = make(map[string][]string)
+	favoriteUpdated := false
+	deletedIDs := make([]string, 0)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		// 1. Download original video
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/original") {
+			w.Header().Set("Content-Type", "video/mp4")
+			w.Write([]byte("original-test-video-content"))
+			return
+		}
+
+		// 2. Query original asset's albums
+		if r.Method == http.MethodGet && r.URL.Path == "/api/albums" {
+			assetID := r.URL.Query().Get("assetId")
+			if assetID == "asset-orig" {
+				orderOfEvents = append(orderOfEvents, "query-albums")
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode([]immich.Album{
+					{ID: "album-vacation", AlbumName: "Vacation"},
+					{ID: "album-family", AlbumName: "Family"},
+				})
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("[]"))
+			return
+		}
+
+		// 3. Create tracking album
+		if r.Method == http.MethodPost && r.URL.Path == "/api/albums" {
+			orderOfEvents = append(orderOfEvents, "create-tracking-album")
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(immich.Album{ID: "album-tracking-99", AlbumName: "Immich-Optimizer-InProgress"})
+			return
+		}
+
+		// 4. Upload replacement asset
+		if r.Method == http.MethodPost && r.URL.Path == "/api/assets" {
+			orderOfEvents = append(orderOfEvents, "upload-replacement")
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(immich.Asset{ID: "asset-replacement-888", Type: "VIDEO"})
+			return
+		}
+
+		// 5. Add asset to album (tracking album or user albums)
+		if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/assets") && strings.HasPrefix(r.URL.Path, "/api/albums/") {
+			albumID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/albums/"), "/assets")
+			var payload struct {
+				IDs []string `json:"ids"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			albumsAddedTo[albumID] = append(albumsAddedTo[albumID], payload.IDs...)
+			orderOfEvents = append(orderOfEvents, "add-to-album:"+albumID)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		// 6. Set favorite on replacement asset
+		if r.Method == http.MethodPut && r.URL.Path == "/api/assets/asset-replacement-888" {
+			var payload struct {
+				IsFavorite bool `json:"isFavorite"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			if payload.IsFavorite {
+				favoriteUpdated = true
+				orderOfEvents = append(orderOfEvents, "set-favorite")
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		// 7. Delete original asset
+		if r.Method == http.MethodDelete && r.URL.Path == "/api/assets" {
+			var payload struct {
+				IDs []string `json:"ids"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			deletedIDs = append(deletedIDs, payload.IDs...)
+			orderOfEvents = append(orderOfEvents, "delete-original")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		// 8. Rename album on finish
+		if r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/albums/") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	fakeFFmpeg := filepath.Join(tempHome, "fake_ffmpeg")
+	script := `#!/bin/sh
+for arg do last_arg="$arg"; done
+echo 'small' > "$last_arg"
+exit 0
+`
+	if err := os.WriteFile(fakeFFmpeg, []byte(script), 0755); err != nil {
+		t.Fatalf("Failed to write fake ffmpeg: %v", err)
+	}
+
+	fakeExifTool := filepath.Join(tempHome, "fake_exiftool")
+	if err := os.WriteFile(fakeExifTool, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatalf("Failed to write fake exiftool: %v", err)
+	}
+
+	cfg := &config.Config{
+		URL:                ts.URL,
+		APIKey:             "test-key",
+		SkipHEVC:           false,
+		ConcurrentEncoders: 1,
+	}
+	binaries := &engine.BinaryManager{
+		FFmpegPath:   fakeFFmpeg,
+		ExifToolPath: fakeExifTool,
+	}
+
+	p, err := NewPipelineWithBinaries(cfg, binaries)
+	if err != nil {
+		t.Fatalf("Failed to create pipeline: %v", err)
+	}
+	p.Client().SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: ts.Config.Handler},
+	})
+
+	videos := []immich.Asset{
+		{
+			ID:               "asset-orig",
+			OriginalFileName: "orig.mp4",
+			Type:             "VIDEO",
+			Size:             10000,
+			IsFavorite:       true,
+		},
+	}
+
+	ch := make(chan interface{}, 20)
+	var completeErr error
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for msg := range ch {
+			if vMsg, ok := msg.(PipelineVideoCompleteMsg); ok && vMsg.Err != nil {
+				completeErr = vMsg.Err
+			}
+		}
+	}()
+
+	p.Run(context.Background(), videos, ch)
+	wg.Wait()
+
+	if completeErr != nil {
+		t.Fatalf("Pipeline failed unexpectedly: %v", completeErr)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Verify replacement asset was added to user albums
+	if ids, ok := albumsAddedTo["album-vacation"]; !ok || len(ids) == 0 || ids[len(ids)-1] != "asset-replacement-888" {
+		t.Errorf("Expected asset-replacement-888 to be added to album-vacation, got %v", albumsAddedTo["album-vacation"])
+	}
+	if ids, ok := albumsAddedTo["album-family"]; !ok || len(ids) == 0 || ids[len(ids)-1] != "asset-replacement-888" {
+		t.Errorf("Expected asset-replacement-888 to be added to album-family, got %v", albumsAddedTo["album-family"])
+	}
+
+	// Verify replacement asset was added to tracking album
+	if ids, ok := albumsAddedTo["album-tracking-99"]; !ok || len(ids) == 0 || ids[len(ids)-1] != "asset-replacement-888" {
+		t.Errorf("Expected asset-replacement-888 to be added to album-tracking-99, got %v", albumsAddedTo["album-tracking-99"])
+	}
+
+	// Verify favorite status was updated on replacement asset
+	if !favoriteUpdated {
+		t.Errorf("Expected favorite status to be transferred to replacement asset")
+	}
+
+	// Verify original asset was deleted
+	if len(deletedIDs) == 0 || deletedIDs[0] != "asset-orig" {
+		t.Errorf("Expected asset-orig to be deleted, got %v", deletedIDs)
+	}
+
+	// Verify order of operations:
+	// query-albums -> upload-replacement -> add-to-album -> set-favorite -> delete-original
+	var uploadIdx, addVacationIdx, addFamilyIdx, favIdx, deleteIdx int = -1, -1, -1, -1, -1
+	for i, ev := range orderOfEvents {
+		switch ev {
+		case "upload-replacement":
+			uploadIdx = i
+		case "add-to-album:album-vacation":
+			addVacationIdx = i
+		case "add-to-album:album-family":
+			addFamilyIdx = i
+		case "set-favorite":
+			favIdx = i
+		case "delete-original":
+			deleteIdx = i
+		}
+	}
+
+	if uploadIdx == -1 || addVacationIdx == -1 || addFamilyIdx == -1 || favIdx == -1 || deleteIdx == -1 {
+		t.Fatalf("Missing events in orderOfEvents: %v", orderOfEvents)
+	}
+
+	if !(uploadIdx < addVacationIdx && uploadIdx < addFamilyIdx && uploadIdx < favIdx) {
+		t.Errorf("Album additions and favorite setting must occur after upload. Order: %v", orderOfEvents)
+	}
+	if !(addVacationIdx < deleteIdx && addFamilyIdx < deleteIdx && favIdx < deleteIdx) {
+		t.Errorf("Delete must occur strictly AFTER album additions and favorite transfer! Order: %v", orderOfEvents)
+	}
+}
+
+func TestPipeline_AlbumTransferFailureAbortsDeletion(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	var deleteCalled bool
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/original") {
+			w.Header().Set("Content-Type", "video/mp4")
+			w.Write([]byte("fake video content"))
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/albums" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]immich.Album{
+				{ID: "album-broken", AlbumName: "Broken Album"},
+			})
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/albums" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(immich.Album{ID: "album-tracking-fail", AlbumName: "Immich-Optimizer"})
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/assets" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(immich.Asset{ID: "asset-replacement-123", Type: "VIDEO"})
+			return
+		}
+		// Failure when adding to album-broken
+		if r.Method == http.MethodPut && r.URL.Path == "/api/albums/album-broken/assets" {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"message": "failed to add to album"}`))
+			return
+		}
+		if r.Method == http.MethodDelete && r.URL.Path == "/api/assets" {
+			deleteCalled = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	fakeFFmpeg := filepath.Join(tempHome, "fake_ffmpeg")
+	script := "#!/bin/sh\nfor arg do last_arg=\"$arg\"; done\necho 'small' > \"$last_arg\"\nexit 0\n"
+	_ = os.WriteFile(fakeFFmpeg, []byte(script), 0755)
+
+	fakeExifTool := filepath.Join(tempHome, "fake_exiftool")
+	_ = os.WriteFile(fakeExifTool, []byte("#!/bin/sh\nexit 0\n"), 0755)
+
+	cfg := &config.Config{
+		URL:                ts.URL,
+		APIKey:             "test-key",
+		ConcurrentEncoders: 1,
+	}
+	binaries := &engine.BinaryManager{
+		FFmpegPath:   fakeFFmpeg,
+		ExifToolPath: fakeExifTool,
+	}
+
+	p, err := NewPipelineWithBinaries(cfg, binaries)
+	if err != nil {
+		t.Fatalf("Failed to create pipeline: %v", err)
+	}
+	p.Client().SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: ts.Config.Handler},
+	})
+
+	videos := []immich.Asset{
+		{
+			ID:               "asset-fail-album",
+			OriginalFileName: "fail.mp4",
+			Type:             "VIDEO",
+			Size:             5000,
+		},
+	}
+
+	ch := make(chan interface{}, 20)
+	var gotError error
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for msg := range ch {
+			if vMsg, ok := msg.(PipelineVideoCompleteMsg); ok && vMsg.Err != nil {
+				gotError = vMsg.Err
+			}
+		}
+	}()
+
+	p.Run(context.Background(), videos, ch)
+	wg.Wait()
+
+	if gotError == nil {
+		t.Fatalf("Expected pipeline to report error when album transfer fails")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if deleteCalled {
+		t.Errorf("CRITICAL SAFETY BUG: original asset was deleted even though album transfer failed!")
+	}
+}
+
+func TestPipeline_FavoriteTransferFailureAbortsDeletion(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	var deleteCalled bool
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/original") {
+			w.Header().Set("Content-Type", "video/mp4")
+			w.Write([]byte("fake video content"))
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/albums" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("[]"))
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/albums" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(immich.Album{ID: "album-tracking-fav", AlbumName: "Immich-Optimizer"})
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/assets" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(immich.Asset{ID: "asset-replacement-fav", Type: "VIDEO"})
+			return
+		}
+		// Failure when setting favorite status
+		if r.Method == http.MethodPut && r.URL.Path == "/api/assets/asset-replacement-fav" {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"message": "failed to favorite asset"}`))
+			return
+		}
+		if r.Method == http.MethodDelete && r.URL.Path == "/api/assets" {
+			deleteCalled = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	fakeFFmpeg := filepath.Join(tempHome, "fake_ffmpeg")
+	script := "#!/bin/sh\nfor arg do last_arg=\"$arg\"; done\necho 'small' > \"$last_arg\"\nexit 0\n"
+	_ = os.WriteFile(fakeFFmpeg, []byte(script), 0755)
+
+	fakeExifTool := filepath.Join(tempHome, "fake_exiftool")
+	_ = os.WriteFile(fakeExifTool, []byte("#!/bin/sh\nexit 0\n"), 0755)
+
+	cfg := &config.Config{
+		URL:                ts.URL,
+		APIKey:             "test-key",
+		ConcurrentEncoders: 1,
+	}
+	binaries := &engine.BinaryManager{
+		FFmpegPath:   fakeFFmpeg,
+		ExifToolPath: fakeExifTool,
+	}
+
+	p, err := NewPipelineWithBinaries(cfg, binaries)
+	if err != nil {
+		t.Fatalf("Failed to create pipeline: %v", err)
+	}
+	p.Client().SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: ts.Config.Handler},
+	})
+
+	videos := []immich.Asset{
+		{
+			ID:               "asset-fav-fail",
+			OriginalFileName: "favfail.mp4",
+			Type:             "VIDEO",
+			Size:             5000,
+			IsFavorite:       true,
+		},
+	}
+
+	ch := make(chan interface{}, 20)
+	var gotError error
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for msg := range ch {
+			if vMsg, ok := msg.(PipelineVideoCompleteMsg); ok && vMsg.Err != nil {
+				gotError = vMsg.Err
+			}
+		}
+	}()
+
+	p.Run(context.Background(), videos, ch)
+	wg.Wait()
+
+	if gotError == nil {
+		t.Fatalf("Expected pipeline to report error when favorite transfer fails")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if deleteCalled {
+		t.Errorf("CRITICAL SAFETY BUG: original asset was deleted even though favorite transfer failed!")
+	}
+}
+
+func TestPipeline_UnfavoritedAsset_DoesNotSetFavorite(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	var setFavoriteCalled bool
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/original") {
+			w.Header().Set("Content-Type", "video/mp4")
+			w.Write([]byte("fake video content"))
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/albums" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("[]"))
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/assets/asset-unfav" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(immich.Asset{ID: "asset-unfav", Type: "VIDEO", IsFavorite: false})
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/albums" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(immich.Album{ID: "album-tracking-unfav", AlbumName: "Immich-Optimizer"})
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/assets" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(immich.Asset{ID: "asset-replacement-unfav", Type: "VIDEO"})
+			return
+		}
+		if r.Method == http.MethodPut && r.URL.Path == "/api/assets/asset-replacement-unfav" {
+			setFavoriteCalled = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == http.MethodDelete && r.URL.Path == "/api/assets" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	fakeFFmpeg := filepath.Join(tempHome, "fake_ffmpeg")
+	script := "#!/bin/sh\nfor arg do last_arg=\"$arg\"; done\necho 'small' > \"$last_arg\"\nexit 0\n"
+	_ = os.WriteFile(fakeFFmpeg, []byte(script), 0755)
+
+	fakeExifTool := filepath.Join(tempHome, "fake_exiftool")
+	_ = os.WriteFile(fakeExifTool, []byte("#!/bin/sh\nexit 0\n"), 0755)
+
+	cfg := &config.Config{
+		URL:                ts.URL,
+		APIKey:             "test-key",
+		ConcurrentEncoders: 1,
+	}
+	binaries := &engine.BinaryManager{
+		FFmpegPath:   fakeFFmpeg,
+		ExifToolPath: fakeExifTool,
+	}
+
+	p, err := NewPipelineWithBinaries(cfg, binaries)
+	if err != nil {
+		t.Fatalf("Failed to create pipeline: %v", err)
+	}
+	p.Client().SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: ts.Config.Handler},
+	})
+
+	videos := []immich.Asset{
+		{
+			ID:               "asset-unfav",
+			OriginalFileName: "unfav.mp4",
+			Type:             "VIDEO",
+			Size:             5000,
+			IsFavorite:       false,
+		},
+	}
+
+	ch := make(chan interface{}, 20)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range ch {
+		}
+	}()
+
+	p.Run(context.Background(), videos, ch)
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if setFavoriteCalled {
+		t.Errorf("Expected SetAssetFavorite NOT to be called for unfavorited asset")
+	}
+}
+
+func TestPipeline_FavoriteDiscoveredViaAssetInfo(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	var setFavoriteCalled bool
+	var favoriteAssetID string
+	var deleteCalled bool
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/original") {
+			w.Header().Set("Content-Type", "video/mp4")
+			w.Write([]byte("fake video content"))
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/albums" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("[]"))
+			return
+		}
+		// Asset info query: search metadata lacked isFavorite (false), but server says true!
+		if r.Method == http.MethodGet && r.URL.Path == "/api/assets/asset-meta-missing-fav" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(immich.Asset{
+				ID:         "asset-meta-missing-fav",
+				Type:       "VIDEO",
+				IsFavorite: true,
+			})
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/albums" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(immich.Album{ID: "album-tracking-fav-info", AlbumName: "Immich-Optimizer"})
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/assets" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(immich.Asset{ID: "asset-replacement-meta-fav", Type: "VIDEO"})
+			return
+		}
+		if r.Method == http.MethodPut && r.URL.Path == "/api/assets/asset-replacement-meta-fav" {
+			var payload struct {
+				IsFavorite bool `json:"isFavorite"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			if payload.IsFavorite {
+				setFavoriteCalled = true
+				favoriteAssetID = "asset-replacement-meta-fav"
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == http.MethodDelete && r.URL.Path == "/api/assets" {
+			deleteCalled = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	fakeFFmpeg := filepath.Join(tempHome, "fake_ffmpeg")
+	script := "#!/bin/sh\nfor arg do last_arg=\"$arg\"; done\necho 'small' > \"$last_arg\"\nexit 0\n"
+	_ = os.WriteFile(fakeFFmpeg, []byte(script), 0755)
+
+	fakeExifTool := filepath.Join(tempHome, "fake_exiftool")
+	_ = os.WriteFile(fakeExifTool, []byte("#!/bin/sh\nexit 0\n"), 0755)
+
+	cfg := &config.Config{
+		URL:                ts.URL,
+		APIKey:             "test-key",
+		ConcurrentEncoders: 1,
+	}
+	binaries := &engine.BinaryManager{
+		FFmpegPath:   fakeFFmpeg,
+		ExifToolPath: fakeExifTool,
+	}
+
+	p, err := NewPipelineWithBinaries(cfg, binaries)
+	if err != nil {
+		t.Fatalf("Failed to create pipeline: %v", err)
+	}
+	p.Client().SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: ts.Config.Handler},
+	})
+
+	// Asset has IsFavorite: false in input (e.g. search metadata didn't populate it)
+	videos := []immich.Asset{
+		{
+			ID:               "asset-meta-missing-fav",
+			OriginalFileName: "missingfav.mp4",
+			Type:             "VIDEO",
+			Size:             5000,
+			IsFavorite:       false,
+		},
+	}
+
+	ch := make(chan interface{}, 20)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range ch {
+		}
+	}()
+
+	p.Run(context.Background(), videos, ch)
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if !setFavoriteCalled || favoriteAssetID != "asset-replacement-meta-fav" {
+		t.Errorf("Expected SetAssetFavorite to be called for replacement asset after querying asset info, called=%v, asset=%s", setFavoriteCalled, favoriteAssetID)
+	}
+	if !deleteCalled {
+		t.Errorf("Expected original asset to be deleted after successful favorite transfer")
+	}
+}
+
+
+
 
 
