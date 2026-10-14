@@ -708,8 +708,9 @@ func (m *AppModel) viewSettings() string {
 			"       tagged as optimized."
 		if m.cfg.ExcludeOptimized {
 			eoDesc = "ON  — Enables and uses Immich tags ('immich-optimizer') to track and exclude\n" +
-				"       already optimized videos from search. Automatically enables Tags in your\n" +
-				"       Immich account preferences so tags appear in the sidebar and info panels."
+				"       already optimized videos from search. Ideal for recurring runs as your\n" +
+				"       library grows on remaining videos.\n" +
+				"       Requires 'Tags' enabled in Immich (Account Settings → Features → Tags)."
 		}
 		writeRow(2,
 			"Exclude Optimized:   ",
