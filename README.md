@@ -8,7 +8,7 @@ A terminal client for [Immich](https://immich.app/) that reduces storage usage b
 
 - **Hardware Acceleration:** Apple Silicon & Intel (`hevc_videotoolbox`), NVIDIA (`hevc_nvenc`), and Intel Linux (`hevc_vaapi`), with CPU fallback (`libx265`).
 - **Full Metadata & State Preservation:** Preserves camera make/model, original shooting dates, GPS coordinates, original filenames, user album memberships, and favorite status.
-- **Smart Filtering & Remote Probing:** Filter scans by bitrate density (`MB/min`) or total file size. Automatically detects and skips existing HEVC videos without downloading them.
+- **Smart Filtering & Remote Probing:** Filter scans by bitrate density (`MB/min`), total file size, or date range (`YYYY-MM-DD`). Automatically detects and skips existing HEVC videos without downloading them.
 - **External Library Safety:** Automatically excludes read-only and external library assets from scans to protect external storage mounts.
 - **Incremental Scans (Tagging):** Tags replaced videos (`immich-optimizer`) so previously optimized videos can be skipped on future scans.
 - **Dry Run & Size Guard:** Preview estimated space savings before encoding. If a re-encoded video ends up larger than the original, replacement is skipped automatically.
@@ -81,7 +81,7 @@ go build -o immich-video-optimizer .
 Launch `./immich-video-optimizer` (pass `--config` or `-c` anytime to update your server URL or API key). All keyboard shortcuts are shown at the bottom of the terminal UI.
 
 1. **Connect:** Enter your Immich URL (e.g. `http://192.168.1.100:2283`) and **API Key** (created in Immich under *Account Settings → API Keys*). Saved to `~/.config/immich-video-optimizer/config.yaml`.
-2. **Scan & Tune:** Review videos exceeding your threshold (defaults to `100 MB/min` to catch high-bitrate clips). Open **Settings** (organized into `Encoding`, `Filtering`, and `Pipeline` tabs) to customize quality (1–10), resolution, or exclude already-optimized videos. Run a **Dry Run** to preview estimated savings.
+2. **Scan & Tune:** Review videos exceeding your threshold (defaults to `100 MB/min` to catch high-bitrate clips). Open **Settings** (organized into `Encoding`, `Filtering`, and `Pipeline` tabs) to customize quality (1–10), resolution, set date ranges, or exclude already-optimized videos. Run a **Dry Run** to preview estimated savings.
 3. **Optimize:** Start the batch and monitor progress in real time. You can safely pause at any time and resume the session later.
 
 ---
