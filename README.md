@@ -86,6 +86,18 @@ Launch `./immich-video-optimizer` (pass `--config` or `-c` anytime to update you
 
 ---
 
+## 📱 Note for Mobile Users: "Free Up Space"
+
+If you use the Immich mobile app's **"Free up space"** feature, run it on your phone **before** optimizing videos on your server.
+
+Immich matches phone files to server assets using exact file checksums (SHA-1). Because re-encoding produces a new checksum:
+- The mobile app will display the optimized video as cloud-only.
+- The original video on your phone will become unlinked, so "Free up space" won't delete it automatically (you would need to delete it manually from your gallery app). The phone will not re-upload it.
+
+If you don't use the "Free up space" feature, you can ignore this.
+
+---
+
 ## 🗂️ Tracking Albums & Safety
 
 ### Zero-Data-Loss Replacement
