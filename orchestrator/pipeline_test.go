@@ -53,10 +53,10 @@ func TestSizeGuard(t *testing.T) {
 	// We will create a dummy httptest server that serves a tiny original video
 	// and accepts the replacement upload. If size guard works, the replacement
 	// will be aborted because the transcoded file will be larger.
-	
+
 	// Create dummy video file
 	dummyVideo := []byte("dummy video content")
-	
+
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" && r.URL.Path == "/api/assets/asset-1/original" {
 			w.Write(dummyVideo)
@@ -93,7 +93,7 @@ func TestSizeGuard(t *testing.T) {
 	if err := os.WriteFile(fakeFFmpeg, []byte(script), 0755); err != nil {
 		t.Fatalf("Failed to create fake ffmpeg script: %v", err)
 	}
-	
+
 	fakeExifTool := filepath.Join(tempDir, "exiftool")
 	if err := os.WriteFile(fakeExifTool, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
 		t.Fatalf("Failed to create fake exiftool script: %v", err)
@@ -120,14 +120,14 @@ func TestSizeGuard(t *testing.T) {
 	pipeline.Client().SetHTTPClient(&http.Client{
 		Transport: &testRoundTripper{handler: ts.Config.Handler},
 	})
-	
+
 	videos, err := pipeline.QueryVideos(0)
 	if err != nil {
 		t.Fatalf("Failed to query videos: %v", err)
 	}
 
 	ch := make(chan interface{}, 100)
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -148,7 +148,7 @@ func TestSizeGuard(t *testing.T) {
 
 	pipeline.Run(ctx, videos, ch)
 	wg.Wait()
-	
+
 	if !skipped {
 		t.Errorf("Expected video to be skipped due to size guard")
 	}
@@ -2321,12 +2321,12 @@ func TestRollbackReplacementOnAlbumTransferFailure(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		URL:           ts.URL,
-		APIKey:        "test-key",
-		SizeGuard:     false,
-		SkipHEVC:      false,
-		Preset:        "fast",
-		Resolution:    "Original",
+		URL:        ts.URL,
+		APIKey:     "test-key",
+		SizeGuard:  false,
+		SkipHEVC:   false,
+		Preset:     "fast",
+		Resolution: "Original",
 	}
 
 	p, err := NewPipelineWithBinaries(cfg, &engine.BinaryManager{
@@ -2425,12 +2425,12 @@ func TestRollbackReplacementOnDeleteOriginalFailure(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		URL:           ts.URL,
-		APIKey:        "test-key",
-		SizeGuard:     false,
-		SkipHEVC:      false,
-		Preset:        "fast",
-		Resolution:    "Original",
+		URL:        ts.URL,
+		APIKey:     "test-key",
+		SizeGuard:  false,
+		SkipHEVC:   false,
+		Preset:     "fast",
+		Resolution: "Original",
 	}
 
 	p, err := NewPipelineWithBinaries(cfg, &engine.BinaryManager{
@@ -2517,10 +2517,3 @@ func TestPipeline_ScanVideosWithDateFilter(t *testing.T) {
 		t.Fatalf("expected only v-2, got %+v", res.Videos)
 	}
 }
-
-
-
-
-
-
-

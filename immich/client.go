@@ -51,8 +51,8 @@ func NewClient(baseURL, apiKey string) *Client {
 	baseURL = strings.TrimRight(baseURL, "/")
 	baseURL = strings.TrimSuffix(baseURL, "/api")
 	return &Client{
-		baseURL: baseURL,
-		apiKey:  strings.TrimSpace(apiKey),
+		baseURL:    baseURL,
+		apiKey:     strings.TrimSpace(apiKey),
 		httpClient: &http.Client{
 			// No global timeout so large multi-GB video downloads and uploads are not cut off.
 			// Individual API calls and transfers manage deadlines via Context.
@@ -477,7 +477,7 @@ func (c *Client) ScanVideosWithOptions(ctx context.Context, mode string, thresho
 			payload["takenAfter"] = tAfter.Format(time.RFC3339)
 		}
 		if !tBeforeEnd.IsZero() {
-			payload["takenBefore"] = tBeforeEnd.Format(time.RFC3339Nano)
+			payload["takenBefore"] = tBeforeEnd.Format(time.RFC3339)
 		}
 		body, _ := json.Marshal(payload)
 
@@ -516,8 +516,11 @@ func (c *Client) ScanVideosWithOptions(ctx context.Context, mode string, thresho
 				continue
 			}
 
-			if a.IsExternalLibrary() || a.IsTrashed || a.IsLivePhoto() {
+			if a.IsExternalLibrary() {
 				res.SkippedExternal++
+				continue
+			}
+			if a.IsTrashed || a.IsLivePhoto() {
 				continue
 			}
 
@@ -536,6 +539,7 @@ func (c *Client) ScanVideosWithOptions(ctx context.Context, mode string, thresho
 						parsedTime, parseErr = time.Parse(time.RFC3339, dateStr)
 					}
 					if parseErr == nil {
+						parsedTime = parsedTime.In(time.Local)
 						if !tAfter.IsZero() && parsedTime.Before(tAfter) {
 							res.SkippedDateFilter++
 							continue

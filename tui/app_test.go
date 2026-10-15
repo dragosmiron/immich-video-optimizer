@@ -238,7 +238,6 @@ func TestAppModel_SelectionShortcuts(t *testing.T) {
 	}
 }
 
-
 func TestAppModel_DynamicDisplayInDashboard(t *testing.T) {
 	cfg := &config.Config{URL: "http://localhost:2283", APIKey: "test-key"}
 	pipeline, _ := orchestrator.NewPipeline(cfg)
@@ -1526,8 +1525,13 @@ func TestAppModel_RenderScanSummary_ExternalLibrary(t *testing.T) {
 	}
 	m.state = ViewBrowser
 	summary := m.renderScanSummary()
-	if !strings.Contains(summary, "External library videos:           8 (skipped — read-only)") {
-		t.Errorf("expected summary to contain external library skipped count, got: %s", summary)
+	// External/trashed/live-photo counts are not shown in the summary (not useful to the user).
+	if strings.Contains(summary, "External library") {
+		t.Errorf("external library count should not appear in summary, got: %s", summary)
+	}
+	// Basic sanity: total and non-video counts are still present.
+	if !strings.Contains(summary, "25") {
+		t.Errorf("expected total assets count in summary, got: %s", summary)
 	}
 }
 
@@ -2011,8 +2015,6 @@ func TestAppModel_UpdateAvailableBanner(t *testing.T) {
 	}
 }
 
-
-
 func TestAppModel_SettingsDateFilters(t *testing.T) {
 	cfg := &config.Config{
 		URL:    "http://localhost:2283",
@@ -2121,9 +2123,3 @@ func TestAppModel_NoVideosAdjustFilteringSettingsTab(t *testing.T) {
 		t.Errorf("expected settingsTab 1 (Filtering), got %d", m.settingsTab)
 	}
 }
-
-
-
-
-
-

@@ -1147,6 +1147,67 @@ func TestScanVideos_DateFilter(t *testing.T) {
 	}
 }
 
+func TestScanVideos_DateFilter_EmptyFileCreatedAt(t *testing.T) {
+	// An asset with no fileCreatedAt passes through the client-side check;
+	// the server-side takenAfter/takenBefore already filtered it correctly.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/search/metadata" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"assets": {"items": [{"id": "v-no-date", "type": "VIDEO", "size": 300000000, "duration": "0:01:00"}]}}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+	res, err := client.ScanVideosWithOptions(context.Background(), "Disabled", 0, ScanOptions{
+		DateAfter:  "2023-01-01",
+		DateBefore: "2023-12-31",
+	})
+	if err != nil {
+		t.Fatalf("ScanVideosWithOptions failed: %v", err)
+	}
+	if res.SkippedDateFilter != 0 {
+		t.Errorf("expected 0 skipped for missing fileCreatedAt, got %d", res.SkippedDateFilter)
+	}
+	if len(res.Videos) != 1 || res.Videos[0].ID != "v-no-date" {
+		t.Fatalf("expected v-no-date to pass through, got %+v", res.Videos)
+	}
+}
+
+func TestScanVideos_DateFilter_LocalTimezone(t *testing.T) {
+	// A video shot at 00:30 local time is stored as UTC. With a filter starting on that
+	// same date, it must be included — not dropped because the UTC value shows the day before.
+	localMidnight := time.Date(2023, 6, 15, 0, 30, 0, 0, time.Local)
+	utcStr := localMidnight.UTC().Format(time.RFC3339)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/search/metadata" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"assets": {"items": [{"id": "v-boundary", "type": "VIDEO", "size": 300000000, "duration": "0:01:00", "fileCreatedAt": "` + utcStr + `"}]}}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+	res, err := client.ScanVideosWithOptions(context.Background(), "Disabled", 0, ScanOptions{
+		DateAfter:  "2023-06-15",
+		DateBefore: "2023-06-15",
+	})
+	if err != nil {
+		t.Fatalf("ScanVideosWithOptions failed: %v", err)
+	}
+	if res.SkippedDateFilter != 0 {
+		t.Errorf("expected boundary video (00:30 local) to be included, got skipped")
+	}
+	if len(res.Videos) != 1 || res.Videos[0].ID != "v-boundary" {
+		t.Fatalf("expected v-boundary included, got %+v", res.Videos)
+	}
+}
+
 func TestAsset_IsExternalLibrary(t *testing.T) {
 	libID := "uuid-1234"
 	emptyLibID := ""
@@ -1362,5 +1423,3 @@ func TestGetOptimizerTaggedAssetIDs(t *testing.T) {
 		t.Errorf("expected 3 IDs (v-1, v-2, v-3), got %+v", ids)
 	}
 }
-
-
