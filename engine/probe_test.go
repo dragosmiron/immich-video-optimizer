@@ -50,6 +50,15 @@ func TestParseVideoDetails(t *testing.T) {
 			expectedRes:  "1440p",
 			expectedHEVC: false,
 		},
+		{
+			name: "Cover art thumbnail before HEVC stream",
+			output: `Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'sample.mp4':
+  Stream #0:0: Video: mjpeg (Baseline), yuvj420p(pc, bt470bg/unknown/unknown), 320x240 [attached pic]
+  Stream #0:1: Video: hevc (Main), yuv420p(tv), 3840x2160 [SAR 1:1 DAR 16:9], 60 fps`,
+			expectedCodec: "HEVC",
+			expectedRes:  "4K",
+			expectedHEVC: true,
+		},
 	}
 
 	for _, tt := range tests {

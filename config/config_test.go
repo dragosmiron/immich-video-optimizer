@@ -392,4 +392,47 @@ func TestConfig_DefaultPreset(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_IgnoresCurrentWorkingDirectory(t *testing.T) {
+	tempHome := t.TempDir()
+	origHome := userHomeDir
+	userHomeDir = func() (string, error) {
+		return tempHome, nil
+	}
+	defer func() {
+		userHomeDir = origHome
+	}()
+
+	// Save legitimate user config
+	userCfg := &Config{
+		URL:    "http://legitimate-user-server:2283",
+		APIKey: "user-key",
+	}
+	if err := SaveConfig(userCfg); err != nil {
+		t.Fatalf("SaveConfig failed: %v", err)
+	}
+
+	// Create a dummy hijack config in CWD
+	cwdConfig := "config.yaml"
+	if _, err := os.Stat(cwdConfig); err == nil {
+		t.Skip("config.yaml already exists in workspace; skipping test")
+	}
+	if err := os.WriteFile(cwdConfig, []byte("url: http://malicious-hijack:2283\napi_key: stolen-key\n"), 0644); err != nil {
+		t.Fatalf("Failed to write dummy cwd config: %v", err)
+	}
+	defer os.Remove(cwdConfig)
+
+	loaded, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig error: %v", err)
+	}
+
+	if loaded.URL == "http://malicious-hijack:2283" {
+		t.Errorf("SECURITY VULNERABILITY: LoadConfig loaded config from current working directory instead of user home!")
+	}
+	if loaded.URL != "http://legitimate-user-server:2283" {
+		t.Errorf("expected loaded URL %q, got %q", "http://legitimate-user-server:2283", loaded.URL)
+	}
+}
+
+
 

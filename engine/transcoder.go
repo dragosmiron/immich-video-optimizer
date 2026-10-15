@@ -93,13 +93,13 @@ func BuildFFmpegArgs(opts TranscodeOptions) []string {
 	if opts.Resolution != "" && opts.Resolution != "Original" {
 		switch opts.Resolution {
 		case "4K":
-			scale = "-2:'min(ih,2160)'"
+			scale = "'if(gt(iw,ih),-2,min(iw,2160))':'if(gt(iw,ih),min(ih,2160),-2)'"
 		case "1440p":
-			scale = "-2:'min(ih,1440)'"
+			scale = "'if(gt(iw,ih),-2,min(iw,1440))':'if(gt(iw,ih),min(ih,1440),-2)'"
 		case "1080p":
-			scale = "-2:'min(ih,1080)'"
+			scale = "'if(gt(iw,ih),-2,min(iw,1080))':'if(gt(iw,ih),min(ih,1080),-2)'"
 		case "720p":
-			scale = "-2:'min(ih,720)'"
+			scale = "'if(gt(iw,ih),-2,min(iw,720))':'if(gt(iw,ih),min(ih,720),-2)'"
 		}
 	}
 
@@ -305,74 +305,3 @@ func VideoToolboxQuality(crf int) int {
 	return q
 }
 
-// QualityLevelToCRF maps quality levels 1-10 to CRF values.
-// Range: 1 (CRF 32) to 10 (CRF 18). Default (6): CRF 26.
-func QualityLevelToCRF(level int) int {
-	if level == 0 {
-		level = 6
-	} else if level < 1 {
-		level = 1
-	} else if level > 10 {
-		level = 10
-	}
-	switch level {
-	case 1:
-		return 32
-	case 2:
-		return 31
-	case 3:
-		return 30
-	case 4:
-		return 29
-	case 5:
-		return 28
-	case 6:
-		return 26
-	case 7:
-		return 24
-	case 8:
-		return 22
-	case 9:
-		return 20
-	case 10:
-		return 18
-	default:
-		return 26
-	}
-}
-
-// QualityLevelToVideoToolbox maps quality levels 1-10 to VideoToolbox -q:v values (1-100).
-// Range: 1 (VT 50) to 10 (VT 85). Default (6): VT 66.
-func QualityLevelToVideoToolbox(level int) int {
-	if level == 0 {
-		level = 6
-	} else if level < 1 {
-		level = 1
-	} else if level > 10 {
-		level = 10
-	}
-	switch level {
-	case 1:
-		return 50
-	case 2:
-		return 53
-	case 3:
-		return 56
-	case 4:
-		return 59
-	case 5:
-		return 62
-	case 6:
-		return 66
-	case 7:
-		return 72
-	case 8:
-		return 76
-	case 9:
-		return 80
-	case 10:
-		return 85
-	default:
-		return 66
-	}
-}

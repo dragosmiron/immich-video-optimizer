@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"time"
 )
 
 //go:embed bin/*
@@ -35,7 +36,7 @@ func getCacheDir() (string, error) {
 
 func extractBinary(name string, cacheDir string) (string, error) {
 	outPath := filepath.Join(cacheDir, name)
-	if _, err := os.Stat(outPath); err == nil {
+	if info, err := os.Stat(outPath); err == nil && info.Size() > 0 {
 		return outPath, nil // Already extracted
 	}
 
@@ -63,12 +64,12 @@ func findOrExtractBinary(name string, cacheDir string) (string, error) {
 
 	// Fallback to check if it's already in cache without embedding
 	path := filepath.Join(cacheDir, name)
-	if _, err := os.Stat(path); err == nil {
+	if info, err := os.Stat(path); err == nil && info.Size() > 0 {
 		return path, nil
 	}
 	if runtime.GOOS == "windows" {
 		exePath := filepath.Join(cacheDir, name+".exe")
-		if _, err := os.Stat(exePath); err == nil {
+		if info, err := os.Stat(exePath); err == nil && info.Size() > 0 {
 			return exePath, nil
 		}
 	}
@@ -98,7 +99,8 @@ func downloadStaticFFmpeg(cacheDir string) (string, error) {
 		return "", fmt.Errorf("unsupported platform for auto-download: %s_%s", runtime.GOOS, runtime.GOARCH)
 	}
 
-	resp, err := http.Get(downloadURL)
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Get(downloadURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to download ffmpeg: %w", err)
 	}
@@ -115,14 +117,25 @@ func downloadStaticFFmpeg(cacheDir string) (string, error) {
 	defer gzReader.Close()
 
 	targetPath := filepath.Join(cacheDir, "ffmpeg")
-	outFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	tmpPath := filepath.Join(cacheDir, fmt.Sprintf("ffmpeg.tmp-%d", os.Getpid()))
+	outFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {
 		return "", fmt.Errorf("failed to create target binary: %w", err)
 	}
-	defer outFile.Close()
+	defer func() {
+		_ = outFile.Close()
+		_ = os.Remove(tmpPath)
+	}()
 
 	if _, err := io.Copy(outFile, gzReader); err != nil {
 		return "", fmt.Errorf("failed to extract gzip stream: %w", err)
+	}
+	if err := outFile.Close(); err != nil {
+		return "", fmt.Errorf("failed to close binary: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		return "", fmt.Errorf("failed to rename binary: %w", err)
 	}
 
 	return targetPath, nil

@@ -1719,7 +1719,10 @@ func TestPipeline_AlbumTransferFailureAbortsDeletion(t *testing.T) {
 			return
 		}
 		if r.Method == http.MethodDelete && r.URL.Path == "/api/assets" {
-			deleteCalled = true
+			body, _ := io.ReadAll(r.Body)
+			if strings.Contains(string(body), "asset-fail-album") {
+				deleteCalled = true
+			}
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -1827,7 +1830,10 @@ func TestPipeline_FavoriteTransferFailureAbortsDeletion(t *testing.T) {
 			return
 		}
 		if r.Method == http.MethodDelete && r.URL.Path == "/api/assets" {
-			deleteCalled = true
+			body, _ := io.ReadAll(r.Body)
+			if strings.Contains(string(body), "asset-fav-fail") {
+				deleteCalled = true
+			}
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -2261,6 +2267,213 @@ func TestPipeline_TagsReplacementAssetWhenExcludeOptimized(t *testing.T) {
 		t.Errorf("Expected replacement asset to be tagged: assetTagged=%v, assetID=%s, tagID=%s", assetTagged, taggedAssetID, taggedTagID)
 	}
 }
+
+func TestRollbackReplacementOnAlbumTransferFailure(t *testing.T) {
+	var mu sync.Mutex
+	var replacementUploaded bool
+	var replacementRolledBack bool
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if r.Method == "GET" && r.URL.Path == "/api/assets/asset-rollback/original" {
+			w.Write([]byte("fake video bytes"))
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/api/assets" {
+			replacementUploaded = true
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "new-asset-leak", "originalFileName": "test.mp4"}`))
+			return
+		}
+		if r.Method == "GET" && r.URL.Path == "/api/albums" {
+			// Asset belongs to an existing album
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`[{"id": "user-album-1", "albumName": "Summer Vacation"}]`))
+			return
+		}
+		if r.Method == "PUT" && r.URL.Path == "/api/albums/user-album-1/assets" {
+			// Album transfer fails!
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if r.Method == "DELETE" && r.URL.Path == "/api/assets" {
+			body, _ := io.ReadAll(r.Body)
+			if strings.Contains(string(body), "new-asset-leak") {
+				replacementRolledBack = true
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	tempDir := t.TempDir()
+	fakeFFmpeg := filepath.Join(tempDir, "fake_ffmpeg")
+	if err := os.WriteFile(fakeFFmpeg, []byte("#!/bin/sh\nfor arg do last_arg=\"$arg\"; done\necho 'transcoded' > \"$last_arg\"\nexit 0\n"), 0755); err != nil {
+		t.Fatalf("Failed to create fake ffmpeg: %v", err)
+	}
+	fakeExifTool := filepath.Join(tempDir, "exiftool")
+	if err := os.WriteFile(fakeExifTool, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatalf("Failed to create fake exiftool: %v", err)
+	}
+
+	cfg := &config.Config{
+		URL:           ts.URL,
+		APIKey:        "test-key",
+		SizeGuard:     false,
+		SkipHEVC:      false,
+		Preset:        "fast",
+		Resolution:    "Original",
+	}
+
+	p, err := NewPipelineWithBinaries(cfg, &engine.BinaryManager{
+		FFmpegPath:   fakeFFmpeg,
+		ExifToolPath: fakeExifTool,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create pipeline: %v", err)
+	}
+	p.Client().SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: ts.Config.Handler},
+	})
+
+	videos := []immich.Asset{
+		{
+			ID:               "asset-rollback",
+			OriginalFileName: "test.mp4",
+			Type:             "VIDEO",
+			Size:             5000,
+		},
+	}
+
+	ch := make(chan interface{}, 20)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range ch {
+		}
+	}()
+
+	p.Run(context.Background(), videos, ch)
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if !replacementUploaded {
+		t.Fatalf("Expected replacement to be uploaded first")
+	}
+	if !replacementRolledBack {
+		t.Errorf("Expected replacement asset 'new-asset-leak' to be rolled back via DELETE /api/assets when album transfer failed")
+	}
+}
+
+func TestRollbackReplacementOnDeleteOriginalFailure(t *testing.T) {
+	var mu sync.Mutex
+	var replacementRolledBack bool
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if r.Method == "GET" && r.URL.Path == "/api/assets/asset-delete-fail/original" {
+			w.Write([]byte("fake video bytes"))
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/api/assets" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "new-asset-to-delete", "originalFileName": "test.mp4"}`))
+			return
+		}
+		if r.Method == "GET" && r.URL.Path == "/api/albums" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`[]`))
+			return
+		}
+		if r.Method == "DELETE" && r.URL.Path == "/api/assets" {
+			body, _ := io.ReadAll(r.Body)
+			// Fail deletion of original asset
+			if strings.Contains(string(body), "asset-delete-fail") {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			// Succeed deletion of replacement rollback
+			if strings.Contains(string(body), "new-asset-to-delete") {
+				replacementRolledBack = true
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	tempDir := t.TempDir()
+	fakeFFmpeg := filepath.Join(tempDir, "fake_ffmpeg")
+	if err := os.WriteFile(fakeFFmpeg, []byte("#!/bin/sh\nfor arg do last_arg=\"$arg\"; done\necho 'transcoded' > \"$last_arg\"\nexit 0\n"), 0755); err != nil {
+		t.Fatalf("Failed to create fake ffmpeg: %v", err)
+	}
+	fakeExifTool := filepath.Join(tempDir, "exiftool")
+	if err := os.WriteFile(fakeExifTool, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatalf("Failed to create fake exiftool: %v", err)
+	}
+
+	cfg := &config.Config{
+		URL:           ts.URL,
+		APIKey:        "test-key",
+		SizeGuard:     false,
+		SkipHEVC:      false,
+		Preset:        "fast",
+		Resolution:    "Original",
+	}
+
+	p, err := NewPipelineWithBinaries(cfg, &engine.BinaryManager{
+		FFmpegPath:   fakeFFmpeg,
+		ExifToolPath: fakeExifTool,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create pipeline: %v", err)
+	}
+	p.Client().SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: ts.Config.Handler},
+	})
+
+	videos := []immich.Asset{
+		{
+			ID:               "asset-delete-fail",
+			OriginalFileName: "test.mp4",
+			Type:             "VIDEO",
+			Size:             5000,
+		},
+	}
+
+	ch := make(chan interface{}, 20)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range ch {
+		}
+	}()
+
+	p.Run(context.Background(), videos, ch)
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if !replacementRolledBack {
+		t.Errorf("Expected replacement asset 'new-asset-to-delete' to be rolled back when original deletion failed")
+	}
+}
+
+
 
 
 

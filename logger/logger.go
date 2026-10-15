@@ -77,10 +77,17 @@ func getLogPath(filename string) string {
 	return filepath.Join(dir, filename)
 }
 
+const maxLogFileSize = 10 * 1024 * 1024 // 10MB
+
 func writeToFile(filename, line string) {
 	path := getLogPath(filename)
 	if path == "" {
 		return
+	}
+	if fi, err := os.Stat(path); err == nil && fi.Size() > maxLogFileSize {
+		oldPath := path + ".1"
+		_ = os.Remove(oldPath)
+		_ = os.Rename(path, oldPath)
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err == nil {

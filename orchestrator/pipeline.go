@@ -133,6 +133,17 @@ func (p *Pipeline) renameAlbumToCompleted(albumID string) {
 	}
 }
 
+func (p *Pipeline) rollbackAsset(assetID string) {
+	if assetID == "" || p.client == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := p.client.DeleteAssetWithContext(ctx, assetID); err != nil {
+		logger.Error("Failed to rollback replacement asset %s: %v", assetID, err)
+	}
+}
+
 func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- interface{}) {
 	defer close(ch)
 
@@ -525,6 +536,16 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		close(uploadQueue)
 	}()
 
+	var optimizerTagID string
+	if p.cfg != nil && p.cfg.ExcludeOptimized {
+		tag, err := p.client.GetOrCreateTagWithContext(ctx, "immich-optimizer")
+		if err != nil {
+			logger.Error("Failed to get/create 'immich-optimizer' tag: %v (ensure Tags are enabled in Immich Account Settings)", err)
+		} else if tag != nil {
+			optimizerTagID = tag.ID
+		}
+	}
+
 	// Worker 3: Uploader & Finalizer
 	for item := range uploadQueue {
 		if ctx.Err() != nil {
@@ -630,10 +651,17 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 			}
 		}
 
+		if ctx.Err() != nil && (albumTransferErr == nil && favTransferErr == nil) {
+			item.Cleanup()
+			p.rollbackAsset(newAsset.ID)
+			continue
+		}
+
 		// Safety guard: original asset is ONLY deleted after replacement is uploaded,
 		// added to all original albums, and favorite status is transferred.
 		if albumTransferErr != nil || favTransferErr != nil {
 			item.Cleanup()
+			p.rollbackAsset(newAsset.ID)
 			if ctx.Err() != nil {
 				// Paused mid-transfer; leave as StatusPending for clean resume
 				continue
@@ -658,8 +686,21 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 
 		emit(PipelineStageMsg{Stage: "finalizing", VideoName: item.Asset.OriginalFileName, VideoID: item.Asset.ID})
 
-		if err := p.client.DeleteAssetWithContext(ctx, item.Asset.ID); err != nil {
+		// Use a detached short-timeout context so a pause during final deletion
+		// completes cleanly rather than leaving duplicate assets or marking failed.
+		deleteCtx := ctx
+		if ctx.Err() != nil {
+			var cancel context.CancelFunc
+			deleteCtx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+		}
+
+		if err := p.client.DeleteAssetWithContext(deleteCtx, item.Asset.ID); err != nil {
 			item.Cleanup()
+			p.rollbackAsset(newAsset.ID)
+			if ctx.Err() != nil {
+				continue
+			}
 			logger.Error("Failed to delete original asset %s (%s): %v", item.Asset.OriginalFileName, item.Asset.ID, err)
 			sess.MarkFailed(item.Asset.ID, fmt.Sprintf("failed to delete original asset: %v", err))
 			_ = state.SaveSession(sess)
@@ -673,16 +714,11 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		_ = state.SaveSession(sess)
 
 		// Tag replacement asset with 'immich-optimizer' if enabled
-		if p.cfg != nil && p.cfg.ExcludeOptimized {
-			tag, err := p.client.GetOrCreateTagWithContext(ctx, "immich-optimizer")
-			if err != nil {
-				logger.Error("Failed to get/create 'immich-optimizer' tag: %v (ensure Tags are enabled in Immich Account Settings)", err)
-			} else if tag != nil {
-				if err := p.client.TagAssetWithContext(ctx, tag.ID, newAsset.ID); err != nil {
-					logger.Error("Failed to tag %s with 'immich-optimizer': %v", newAsset.ID, err)
-				} else {
-					logger.Info("Tagged %s with '%s'", item.Asset.OriginalFileName, tag.Name)
-				}
+		if optimizerTagID != "" {
+			if err := p.client.TagAssetWithContext(ctx, optimizerTagID, newAsset.ID); err != nil {
+				logger.Error("Failed to tag %s with 'immich-optimizer': %v", newAsset.ID, err)
+			} else {
+				logger.Info("Tagged %s with 'immich-optimizer'", item.Asset.OriginalFileName)
 			}
 		}
 

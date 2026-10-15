@@ -203,7 +203,6 @@ func LoadConfig() (*Config, error) {
 	v := viper.New()
 	v.SetConfigName("config")
 	v.SetConfigType("yaml")
-	v.AddConfigPath(".")
 
 	if home, err := userHomeDir(); err == nil {
 		v.AddConfigPath(filepath.Join(home, ".config", "immich-video-optimizer"))

@@ -57,7 +57,7 @@ func TestBuildFFmpegArgs(t *testing.T) {
 				AudioCopy:  true,
 				Resolution: "1080p",
 			},
-			expected: []string{"-y", "-i", "in.mp4", "-c:v", "hevc_videotoolbox", "-tag:v", "hvc1", "-allow_sw", "1", "-vf", "scale=-2:'min(ih,1080)'", "-c:a", "copy", "out.mp4"},
+			expected: []string{"-y", "-i", "in.mp4", "-c:v", "hevc_videotoolbox", "-tag:v", "hvc1", "-allow_sw", "1", "-vf", "scale='if(gt(iw,ih),-2,min(iw,1080))':'if(gt(iw,ih),min(ih,1080),-2)'", "-c:a", "copy", "out.mp4"},
 		},
 		{
 			name: "hevc_nvenc with CRF and Preset",
@@ -180,7 +180,7 @@ func TestBuildFFmpegArgs_VAAPI(t *testing.T) {
 	if !strings.Contains(joined, "-qp 28") {
 		t.Errorf("expected -qp 28 in args, got: %s", joined)
 	}
-	if !strings.Contains(joined, "scale=-2:'min(ih,1080)',format=nv12,hwupload") {
+	if !strings.Contains(joined, "scale='if(gt(iw,ih),-2,min(iw,1080))':'if(gt(iw,ih),min(ih,1080),-2)',format=nv12,hwupload") {
 		t.Errorf("expected VAAPI filter with scale and hwupload, got: %s", joined)
 	}
 }
@@ -270,47 +270,6 @@ func TestVideoToolboxQuality(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("VideoToolboxQuality(%d) = %d, expected %d", tt.crf, got, tt.expected)
 		}
-	}
-}
-
-func TestQualityLevelToCRF_And_VideoToolbox(t *testing.T) {
-	expectedCRF := map[int]int{
-		1: 32, 2: 31, 3: 30, 4: 29, 5: 28,
-		6: 26, 7: 24, 8: 22, 9: 20, 10: 18,
-	}
-	expectedVT := map[int]int{
-		1: 50, 2: 53, 3: 56, 4: 59, 5: 62,
-		6: 66, 7: 72, 8: 76, 9: 80, 10: 85,
-	}
-
-	for lvl := 1; lvl <= 10; lvl++ {
-		if got := QualityLevelToCRF(lvl); got != expectedCRF[lvl] {
-			t.Errorf("QualityLevelToCRF(%d) = %d, expected %d", lvl, got, expectedCRF[lvl])
-		}
-		if got := QualityLevelToVideoToolbox(lvl); got != expectedVT[lvl] {
-			t.Errorf("QualityLevelToVideoToolbox(%d) = %d, expected %d", lvl, got, expectedVT[lvl])
-		}
-	}
-
-	// Test boundary clamps
-	if got := QualityLevelToCRF(0); got != 26 {
-		t.Errorf("QualityLevelToCRF(0) = %d, expected default 26", got)
-	}
-	if got := QualityLevelToCRF(-2); got != 32 {
-		t.Errorf("QualityLevelToCRF(-2) = %d, expected 32 (level 1)", got)
-	}
-	if got := QualityLevelToCRF(99); got != 18 {
-		t.Errorf("QualityLevelToCRF(99) = %d, expected 18 (level 10)", got)
-	}
-
-	if got := QualityLevelToVideoToolbox(0); got != 66 {
-		t.Errorf("QualityLevelToVideoToolbox(0) = %d, expected default 66", got)
-	}
-	if got := QualityLevelToVideoToolbox(-2); got != 50 {
-		t.Errorf("QualityLevelToVideoToolbox(-2) = %d, expected 50 (level 1)", got)
-	}
-	if got := QualityLevelToVideoToolbox(99); got != 85 {
-		t.Errorf("QualityLevelToVideoToolbox(99) = %d, expected 85 (level 10)", got)
 	}
 }
 

@@ -33,6 +33,9 @@ func ParseVideoDetails(output string) ProbeDetails {
 		if idx == -1 {
 			continue
 		}
+		if strings.Contains(lower, "attached pic") {
+			continue
+		}
 
 		afterVideo := strings.TrimSpace(line[idx+len("video:"):])
 		codecToken := afterVideo
@@ -103,6 +106,9 @@ func CheckHEVCOutput(output string) bool {
 	lines := strings.Split(lower, "\n")
 	for _, line := range lines {
 		if strings.Contains(line, "video:") {
+			if strings.Contains(line, "attached pic") {
+				continue
+			}
 			if strings.Contains(line, "hevc") ||
 				strings.Contains(line, "h.265") ||
 				strings.Contains(line, "h265") ||

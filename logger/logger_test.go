@@ -77,3 +77,35 @@ func TestLogger_CallbackAndFile(t *testing.T) {
 		t.Errorf("failures.log missing error line: %s", failContent)
 	}
 }
+
+func TestLogger_Rotation(t *testing.T) {
+	tempDir := t.TempDir()
+	userHomeDir = func() (string, error) {
+		return tempDir, nil
+	}
+	defer func() {
+		userHomeDir = os.UserHomeDir
+	}()
+
+	optLogPath := filepath.Join(tempDir, ".config", "immich-video-optimizer", "optimizer.log")
+	_ = os.MkdirAll(filepath.Dir(optLogPath), 0755)
+	huge := make([]byte, maxLogFileSize+10)
+	_ = os.WriteFile(optLogPath, huge, 0644)
+
+	Info("new message after rotation")
+
+	if _, err := os.Stat(optLogPath + ".1"); err != nil {
+		t.Errorf("expected rotated log file %s.1 to exist", optLogPath)
+	}
+
+	data, err := os.ReadFile(optLogPath)
+	if err != nil {
+		t.Fatalf("failed to read new optimizer.log: %v", err)
+	}
+	if !strings.Contains(string(data), "new message after rotation") {
+		t.Errorf("expected new message in optimizer.log, got: %s", string(data))
+	}
+	if len(data) > 1024 {
+		t.Errorf("expected new optimizer.log to be small, got %d bytes", len(data))
+	}
+}

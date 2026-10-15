@@ -512,67 +512,13 @@ func (c *Client) ScanVideosWithContext(ctx context.Context, mode string, thresho
 	return res, nil
 }
 
-// QueryVideoAssets returns video assets that exceed the given size threshold in bytes
+// QueryVideoAssets returns video assets that exceed the given size threshold in bytes (legacy helper).
 func (c *Client) QueryVideoAssets(sizeThresholdBytes int64) ([]Asset, error) {
-	res := &QueryResult{}
-	page := 1
-	size := 1000
-
-	for {
-		payload := map[string]interface{}{
-			"page":     page,
-			"size":     size,
-			"withExif": true,
-		}
-		body, _ := json.Marshal(payload)
-
-		req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/search/metadata", bytes.NewReader(body))
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := c.doRequest(req)
-		if err != nil {
-			return nil, err
-		}
-
-		var searchResp struct {
-			Assets struct {
-				Items []Asset `json:"items"`
-			} `json:"assets"`
-		}
-
-		if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
-			resp.Body.Close()
-			return nil, fmt.Errorf("failed to decode response: %w", err)
-		}
-		resp.Body.Close()
-
-		if len(searchResp.Assets.Items) == 0 {
-			break
-		}
-
-		res.TotalAssetsScanned += len(searchResp.Assets.Items)
-
-		for _, a := range searchResp.Assets.Items {
-			if a.Type != "VIDEO" {
-				res.SkippedNonVideo++
-			} else if a.IsExternalLibrary() {
-				res.SkippedExternal++
-			} else if a.GetSize() <= sizeThresholdBytes {
-				res.SkippedBelowSize++
-			} else {
-				res.Videos = append(res.Videos, a)
-			}
-		}
-
-		if len(searchResp.Assets.Items) < size {
-			break
-		}
-		page++
+	thresholdMB := float64(sizeThresholdBytes) / (1024 * 1024)
+	res, err := c.ScanVideos("Total MB", thresholdMB)
+	if err != nil {
+		return nil, err
 	}
-
 	return res.Videos, nil
 }
 
