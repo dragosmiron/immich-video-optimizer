@@ -175,6 +175,18 @@ func (m *AppModel) viewScanPrompt() string {
 		excludeOptText = "Disabled (includes all)"
 	}
 	b.WriteString(fmt.Sprintf("  • Exclude Optimized: %s\n", styles.Value.Render(excludeOptText)))
+
+	var dateFilterDesc string
+	if m.cfg.DateAfter != "" && m.cfg.DateBefore != "" {
+		dateFilterDesc = fmt.Sprintf("%s to %s %s", m.cfg.DateAfter, m.cfg.DateBefore, styles.WarningText.Render("[Filter Active]"))
+	} else if m.cfg.DateAfter != "" {
+		dateFilterDesc = fmt.Sprintf("From %s onwards %s", m.cfg.DateAfter, styles.WarningText.Render("[Filter Active]"))
+	} else if m.cfg.DateBefore != "" {
+		dateFilterDesc = fmt.Sprintf("Up to %s %s", m.cfg.DateBefore, styles.WarningText.Render("[Filter Active]"))
+	} else {
+		dateFilterDesc = "All time"
+	}
+	b.WriteString(fmt.Sprintf("  • Date Filter:       %s\n", styles.Value.Render(dateFilterDesc)))
 	b.WriteString(fmt.Sprintf("  • Encoders:          %s worker(s)\n\n", styles.Value.Render(fmt.Sprintf("%d", m.cfg.ConcurrentEncoders))))
 
 	b.WriteString(styles.SectionHeader.Render("Ready to Scan:"))
@@ -221,6 +233,9 @@ func (m *AppModel) renderScanSummary() string {
 	if r.SkippedAlreadyOptimized > 0 {
 		b.WriteString(fmt.Sprintf("  • Already optimized (tagged):        %d (skipped)\n", r.SkippedAlreadyOptimized))
 	}
+	if r.SkippedDateFilter > 0 {
+		b.WriteString(fmt.Sprintf("  • Outside date filter range:         %d (skipped)\n", r.SkippedDateFilter))
+	}
 	var skippedLabel string
 	switch m.cfg.ThresholdMode {
 	case config.ThresholdModeDisabled:
@@ -260,7 +275,7 @@ func (m *AppModel) viewBrowser() string {
 		b.WriteString(styles.WarningText.Render(noVideosMsg))
 		b.WriteString("\n\n" + subMsg + "\n\n")
 		b.WriteString("Actions:\n")
-		b.WriteString("  [ S ] Adjust Threshold in Settings\n")
+		b.WriteString("  [ S ] Adjust Filtering Settings\n")
 		b.WriteString("  [ R ] Rescan Library\n")
 		b.WriteString("  [ E ] Edit Server Credentials\n")
 		b.WriteString("  [ Q ] Quit\n")
@@ -605,7 +620,7 @@ func (m *AppModel) viewSettings() string {
 	}
 	b.WriteString(strings.Join(renderedTabs, " "))
 	b.WriteString("\n\n")
-	b.WriteString(styles.Subtext.Render("Tabs: [Tab] or [1, 2, 3]  •  Navigate: [↑/↓]  •  Change: [←/→]  •  Toggle/Edit: [Space/Enter]") + "\n\n")
+	b.WriteString(styles.Subtext.Render("Tabs: [Tab] or [1, 2, 3]  •  Navigate: [↑/↓]  •  Change: [←/→]  •  Action/Toggle: [Space/Enter]") + "\n\n")
 
 	isFocused := func(idx int) bool { return m.settingCursor == idx }
 
@@ -745,6 +760,59 @@ func (m *AppModel) viewSettings() string {
 			eoDesc,
 		)
 
+		// Row 3 — Start Date (After)
+		dateAfterLabel := "Start Date (After):  "
+		dateAfterDisplay := m.cfg.DateAfter
+		if dateAfterDisplay == "" {
+			dateAfterDisplay = "Unconstrained (All past)"
+		}
+		dateAfterDesc := "Filter videos taken on or after this date (format: YYYY-MM-DD).\n" +
+			"  Leave empty to include from the beginning of your library."
+		b.WriteString(cursor(3) + dateAfterLabel)
+		if isFocused(3) && m.dateAfterInput.Focused() {
+			b.WriteString(m.dateAfterInput.View() + "  " + styles.Subtext.Render("[Enter] confirm  [Esc] cancel") + "\n")
+			if m.dateError != "" {
+				b.WriteString(styles.ErrorText.Render("    ⚠ "+m.dateError) + "\n")
+			}
+			b.WriteString(styles.Subtext.Render("    └ "+dateAfterDesc) + "\n")
+		} else if isFocused(3) {
+			b.WriteString(styles.Value.Render(dateAfterDisplay) + "  " + styles.Subtext.Render("[Enter] to edit") + "\n")
+			if m.dateError != "" {
+				b.WriteString(styles.ErrorText.Render("    ⚠ "+m.dateError) + "\n")
+			}
+			b.WriteString(styles.Subtext.Render("    └ "+dateAfterDesc) + "\n")
+		} else {
+			b.WriteString(styles.Value.Render(dateAfterDisplay) + "\n")
+		}
+		b.WriteString("\n")
+
+		// Row 4 — End Date (Before)
+		dateBeforeLabel := "End Date (Before):   "
+		dateBeforeDisplay := m.cfg.DateBefore
+		if dateBeforeDisplay == "" {
+			dateBeforeDisplay = "Unconstrained (Up to present)"
+		}
+		dateBeforeDesc := "Filter videos taken on or before this date (format: YYYY-MM-DD).\n" +
+			"  Inclusive of the whole day (up to 23:59:59 in your local timezone).\n" +
+			"  Leave empty to include up to the newest videos."
+		b.WriteString(cursor(4) + dateBeforeLabel)
+		if isFocused(4) && m.dateBeforeInput.Focused() {
+			b.WriteString(m.dateBeforeInput.View() + "  " + styles.Subtext.Render("[Enter] confirm  [Esc] cancel") + "\n")
+			if m.dateError != "" {
+				b.WriteString(styles.ErrorText.Render("    ⚠ "+m.dateError) + "\n")
+			}
+			b.WriteString(styles.Subtext.Render("    └ "+dateBeforeDesc) + "\n")
+		} else if isFocused(4) {
+			b.WriteString(styles.Value.Render(dateBeforeDisplay) + "  " + styles.Subtext.Render("[Enter] to edit") + "\n")
+			if m.dateError != "" {
+				b.WriteString(styles.ErrorText.Render("    ⚠ "+m.dateError) + "\n")
+			}
+			b.WriteString(styles.Subtext.Render("    └ "+dateBeforeDesc) + "\n")
+		} else {
+			b.WriteString(styles.Value.Render(dateBeforeDisplay) + "\n")
+		}
+		b.WriteString("\n")
+
 	case 2:
 		// Tab 2: Pipeline & Network
 		// Row 0 — Pipeline Prefetch
@@ -801,6 +869,7 @@ func (m *AppModel) viewSettings() string {
 				"  • 0 — Disabled. Fails immediately on first error\n"+
 				"  • 1 to 5 — Retries automatically with exponential backoff on transient network drops",
 		)
+
 	}
 
 	b.WriteString("\n")
@@ -1255,3 +1324,5 @@ func (m *AppModel) renderEncodingPulseForFrame(frame int) string {
 func (m *AppModel) renderEncodingPulse() string {
 	return m.renderEncodingPulseForFrame(m.pulseFrame)
 }
+
+

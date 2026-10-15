@@ -132,6 +132,14 @@ type QueryResult struct {
 	SkippedBelowSize        int
 	SkippedAlreadyOptimized int
 	SkippedExternal         int
+	SkippedDateFilter       int
+}
+
+// ScanOptions defines filtering options when scanning assets
+type ScanOptions struct {
+	ExcludeOptimized bool
+	DateAfter        string // YYYY-MM-DD
+	DateBefore       string // YYYY-MM-DD
 }
 
 // Tag represents an Immich tag entity
@@ -161,8 +169,27 @@ type Asset struct {
 	IsFavorite       bool            `json:"isFavorite"`
 	IsReadOnly       bool            `json:"isReadOnly"`
 	IsExternal       bool            `json:"isExternal"`
+	IsTrashed        bool            `json:"isTrashed"`
+	Visibility       string          `json:"visibility,omitempty"`
+	LivePhotoVideoID *string         `json:"livePhotoVideoId,omitempty"`
 	LibraryID        *string         `json:"libraryId,omitempty"`
 	ExifInfo         ExifInfo        `json:"exifInfo,omitempty"`
+	Tags             []Tag           `json:"tags,omitempty"`
+}
+
+// IsLivePhoto returns true if the asset is a Live Photo still image or its hidden motion video component.
+func (a *Asset) IsLivePhoto() bool {
+	return a.Visibility == "hidden" || (a.LivePhotoVideoID != nil && *a.LivePhotoVideoID != "")
+}
+
+// HasTag returns true if the asset has a tag with the specified name (case-insensitive).
+func (a *Asset) HasTag(name string) bool {
+	for _, t := range a.Tags {
+		if strings.EqualFold(strings.TrimSpace(t.Name), name) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsExternalLibrary returns true if the asset belongs to an external library
@@ -398,28 +425,38 @@ func (c *Client) ScanVideos(mode string, threshold float64, excludeOptimized ...
 
 // ScanVideosWithContext returns videos filtered by threshold and mode ("MB/min", "Total MB", "Disabled") along with bulk stats on excluded assets, supporting context cancellation
 func (c *Client) ScanVideosWithContext(ctx context.Context, mode string, threshold float64, excludeOptimized ...bool) (*QueryResult, error) {
-	res := &QueryResult{}
-	page := 1
-	size := 1000
-
 	isExclude := false
 	if len(excludeOptimized) > 0 {
 		isExclude = excludeOptimized[0]
 	}
+	return c.ScanVideosWithOptions(ctx, mode, threshold, ScanOptions{ExcludeOptimized: isExclude})
+}
+
+// ScanVideosWithOptions returns videos filtered by threshold, mode, exclude tag, and date constraints
+func (c *Client) ScanVideosWithOptions(ctx context.Context, mode string, threshold float64, opts ScanOptions) (*QueryResult, error) {
+	res := &QueryResult{}
+	page := 1
+	size := 1000
+
+	isExclude := opts.ExcludeOptimized
+
+	var tAfter, tBeforeEnd time.Time
+	if opts.DateAfter != "" {
+		if t, err := time.ParseInLocation("2006-01-02", opts.DateAfter, time.Local); err == nil {
+			tAfter = t
+		}
+	}
+	if opts.DateBefore != "" {
+		if t, err := time.ParseInLocation("2006-01-02", opts.DateBefore, time.Local); err == nil {
+			tBeforeEnd = t.Add(24*time.Hour - time.Nanosecond)
+		}
+	}
 
 	var taggedIDs map[string]bool
 	if isExclude {
-		tags, err := c.GetTagsWithContext(ctx)
+		ids, err := c.GetOptimizerTaggedAssetIDs(ctx)
 		if err == nil {
-			for _, t := range tags {
-				if strings.EqualFold(t.Name, "immich-optimizer") {
-					ids, err := c.GetTaggedAssetIDsWithContext(ctx, t.ID)
-					if err == nil {
-						taggedIDs = ids
-					}
-					break
-				}
-			}
+			taggedIDs = ids
 		} else {
 			logger.Debug("Could not fetch tags for exclusion: %v", err)
 		}
@@ -431,9 +468,16 @@ func (c *Client) ScanVideosWithContext(ctx context.Context, mode string, thresho
 		}
 
 		payload := map[string]interface{}{
+			"type":     "VIDEO",
 			"page":     page,
 			"size":     size,
 			"withExif": true,
+		}
+		if !tAfter.IsZero() {
+			payload["takenAfter"] = tAfter.Format(time.RFC3339)
+		}
+		if !tBeforeEnd.IsZero() {
+			payload["takenBefore"] = tBeforeEnd.Format(time.RFC3339Nano)
 		}
 		body, _ := json.Marshal(payload)
 
@@ -472,14 +516,36 @@ func (c *Client) ScanVideosWithContext(ctx context.Context, mode string, thresho
 				continue
 			}
 
-			if a.IsExternalLibrary() {
+			if a.IsExternalLibrary() || a.IsTrashed || a.IsLivePhoto() {
 				res.SkippedExternal++
 				continue
 			}
 
-			if isExclude && taggedIDs != nil && taggedIDs[a.ID] {
+			if isExclude && ((taggedIDs != nil && taggedIDs[a.ID]) || a.HasTag("immich-optimizer")) {
 				res.SkippedAlreadyOptimized++
 				continue
+			}
+
+			if !tAfter.IsZero() || !tBeforeEnd.IsZero() {
+				dateStr := a.FileCreatedAt
+				if dateStr != "" {
+					var parsedTime time.Time
+					var parseErr error
+					parsedTime, parseErr = time.Parse(time.RFC3339Nano, dateStr)
+					if parseErr != nil {
+						parsedTime, parseErr = time.Parse(time.RFC3339, dateStr)
+					}
+					if parseErr == nil {
+						if !tAfter.IsZero() && parsedTime.Before(tAfter) {
+							res.SkippedDateFilter++
+							continue
+						}
+						if !tBeforeEnd.IsZero() && parsedTime.After(tBeforeEnd) {
+							res.SkippedDateFilter++
+							continue
+						}
+					}
+				}
 			}
 
 			var skipBelow bool
@@ -1040,7 +1106,7 @@ func (c *Client) GetOrCreateTagWithContext(ctx context.Context, name string) (*T
 	tags, err := c.GetTagsWithContext(ctx)
 	if err == nil {
 		for _, t := range tags {
-			if strings.EqualFold(t.Name, name) {
+			if strings.EqualFold(strings.TrimSpace(t.Name), strings.TrimSpace(name)) {
 				return &t, nil
 			}
 		}
@@ -1123,5 +1189,25 @@ func (c *Client) GetTaggedAssetIDsWithContext(ctx context.Context, tagID string)
 		page++
 	}
 
+	return tagged, nil
+}
+
+// GetOptimizerTaggedAssetIDs retrieves all asset IDs associated with any tag named 'immich-optimizer'.
+func (c *Client) GetOptimizerTaggedAssetIDs(ctx context.Context) (map[string]bool, error) {
+	tags, err := c.GetTagsWithContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tagged := make(map[string]bool)
+	for _, t := range tags {
+		if strings.EqualFold(strings.TrimSpace(t.Name), "immich-optimizer") {
+			ids, err := c.GetTaggedAssetIDsWithContext(ctx, t.ID)
+			if err == nil {
+				for id := range ids {
+					tagged[id] = true
+				}
+			}
+		}
+	}
 	return tagged, nil
 }

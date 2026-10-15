@@ -2013,6 +2013,117 @@ func TestAppModel_UpdateAvailableBanner(t *testing.T) {
 
 
 
+func TestAppModel_SettingsDateFilters(t *testing.T) {
+	cfg := &config.Config{
+		URL:    "http://localhost:2283",
+		APIKey: "test-key",
+	}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+
+	// 1. Go to Settings Tab 1 (Filtering), cursor 3 (Start Date)
+	m.state = ViewSettings
+	m.settingsTab = 1
+	m.settingCursor = 3
+
+	// Press Enter to focus start date input
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newM.(*AppModel)
+	if !m.dateAfterInput.Focused() {
+		t.Fatalf("expected dateAfterInput to be focused")
+	}
+
+	// Type invalid date and press Enter
+	m.dateAfterInput.SetValue("invalid-date")
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newM.(*AppModel)
+	if m.dateError == "" {
+		t.Errorf("expected validation error for invalid date, got none")
+	}
+	if !m.dateAfterInput.Focused() {
+		t.Errorf("expected dateAfterInput to stay focused on error")
+	}
+
+	// Type valid start date and press Enter
+	m.dateAfterInput.SetValue("2023-01-01")
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newM.(*AppModel)
+	if m.dateError != "" {
+		t.Errorf("unexpected error on valid date: %s", m.dateError)
+	}
+	if m.cfg.DateAfter != "2023-01-01" {
+		t.Errorf("expected cfg.DateAfter to be 2023-01-01, got %s", m.cfg.DateAfter)
+	}
+	if m.dateAfterInput.Focused() {
+		t.Errorf("expected dateAfterInput to be blurred after saving")
+	}
+
+	// 2. Cursor 4 (End Date)
+	m.settingCursor = 4
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newM.(*AppModel)
+	if !m.dateBeforeInput.Focused() {
+		t.Fatalf("expected dateBeforeInput to be focused")
+	}
+
+	// Type date before start date
+	m.dateBeforeInput.SetValue("2022-12-31")
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newM.(*AppModel)
+	if m.dateError == "" {
+		t.Errorf("expected validation error for end date before start date, got none")
+	}
+
+	// Type valid end date
+	m.dateBeforeInput.SetValue("2023-12-31")
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newM.(*AppModel)
+	if m.dateError != "" {
+		t.Errorf("unexpected error on valid end date: %s", m.dateError)
+	}
+	if m.cfg.DateBefore != "2023-12-31" {
+		t.Errorf("expected cfg.DateBefore to be 2023-12-31, got %s", m.cfg.DateBefore)
+	}
+
+	// 3. Verify Intro page displays active filter
+	m.state = ViewScanPrompt
+	promptView := m.viewScanPrompt()
+	if !strings.Contains(promptView, "2023-01-01 to 2023-12-31") || !strings.Contains(promptView, "Filter Active") {
+		t.Errorf("viewScanPrompt did not display active date range: %s", promptView)
+	}
+}
+
+func TestAppModel_NoVideosAdjustFilteringSettingsTab(t *testing.T) {
+	cfg := &config.Config{
+		URL:    "http://localhost:2283",
+		APIKey: "test-key",
+	}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+
+	m.state = ViewBrowser
+	m.videos = nil
+
+	// Check the view renders the new label
+	v := m.viewBrowser()
+	if !strings.Contains(v, "[ S ] Adjust Filtering Settings") {
+		t.Errorf("expected view to have '[ S ] Adjust Filtering Settings', got: %s", v)
+	}
+
+	// Press 's'
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m = newM.(*AppModel)
+
+	if m.state != ViewSettings {
+		t.Fatalf("expected state ViewSettings, got %v", m.state)
+	}
+	if m.settingsTab != 1 {
+		t.Errorf("expected settingsTab 1 (Filtering), got %d", m.settingsTab)
+	}
+}
+
+
+
 
 
 

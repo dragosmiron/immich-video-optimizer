@@ -81,11 +81,13 @@ func (p *Pipeline) ScanVideos(mode string, threshold float64) (*immich.QueryResu
 }
 
 func (p *Pipeline) ScanVideosWithContext(ctx context.Context, mode string, threshold float64) (*immich.QueryResult, error) {
-	excludeOptimized := false
+	opts := immich.ScanOptions{}
 	if p.cfg != nil {
-		excludeOptimized = p.cfg.ExcludeOptimized
+		opts.ExcludeOptimized = p.cfg.ExcludeOptimized
+		opts.DateAfter = p.cfg.DateAfter
+		opts.DateBefore = p.cfg.DateBefore
 	}
-	return p.client.ScanVideosWithContext(ctx, mode, threshold, excludeOptimized)
+	return p.client.ScanVideosWithOptions(ctx, mode, threshold, opts)
 }
 
 func (p *Pipeline) ValidateConnection() error {
@@ -95,7 +97,6 @@ func (p *Pipeline) ValidateConnection() error {
 func (p *Pipeline) Client() *immich.Client {
 	return p.client
 }
-
 // CleanDryRunAlbum deletes any previously created dry-run tracking album in Immich.
 func (p *Pipeline) CleanDryRunAlbum() {
 	p.dryRunMu.Lock()

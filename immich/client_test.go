@@ -1099,6 +1099,54 @@ func TestScanVideos_ExcludeOptimizedFilter(t *testing.T) {
 	}
 }
 
+func TestScanVideos_DateFilter(t *testing.T) {
+	var capturedPayload map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/search/metadata" {
+			_ = json.NewDecoder(r.Body).Decode(&capturedPayload)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"assets": {
+					"items": [
+						{"id": "v-past", "type": "VIDEO", "size": 300000000, "duration": "0:01:00", "fileCreatedAt": "2022-06-15T12:00:00Z"},
+						{"id": "v-match", "type": "VIDEO", "size": 300000000, "duration": "0:01:00", "fileCreatedAt": "2023-06-15T12:00:00Z"},
+						{"id": "v-future", "type": "VIDEO", "size": 300000000, "duration": "0:01:00", "fileCreatedAt": "2024-06-15T12:00:00Z"}
+					]
+				}
+			}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+
+	opts := ScanOptions{
+		DateAfter:  "2023-01-01",
+		DateBefore: "2023-12-31",
+	}
+
+	res, err := client.ScanVideosWithOptions(context.Background(), "MB/min", 10.0, opts)
+	if err != nil {
+		t.Fatalf("ScanVideosWithOptions failed: %v", err)
+	}
+
+	if _, ok := capturedPayload["takenAfter"]; !ok {
+		t.Errorf("expected takenAfter in search payload, got none")
+	}
+	if _, ok := capturedPayload["takenBefore"]; !ok {
+		t.Errorf("expected takenBefore in search payload, got none")
+	}
+
+	if res.SkippedDateFilter != 2 {
+		t.Errorf("expected 2 videos skipped due to date filter, got %d", res.SkippedDateFilter)
+	}
+	if len(res.Videos) != 1 || res.Videos[0].ID != "v-match" {
+		t.Fatalf("expected only v-match, got %+v", res.Videos)
+	}
+}
+
 func TestAsset_IsExternalLibrary(t *testing.T) {
 	libID := "uuid-1234"
 	emptyLibID := ""
@@ -1213,6 +1261,105 @@ func TestQueryVideoAssets_ExternalLibraryFilter(t *testing.T) {
 	}
 	if len(videos) != 1 || videos[0].ID != "v-internal" {
 		t.Fatalf("expected only v-internal returned, got %+v", videos)
+	}
+}
+
+func TestAsset_HasTag(t *testing.T) {
+	a := Asset{
+		ID: "asset-1",
+		Tags: []Tag{
+			{ID: "t-1", Name: " immich-optimizer "},
+			{ID: "t-2", Name: "nature"},
+		},
+	}
+
+	if !a.HasTag("immich-optimizer") {
+		t.Errorf("expected HasTag('immich-optimizer') to be true")
+	}
+	if !a.HasTag("IMMICH-OPTIMIZER") {
+		t.Errorf("expected HasTag('IMMICH-OPTIMIZER') case-insensitive match")
+	}
+	if !a.HasTag("nature") {
+		t.Errorf("expected HasTag('nature') to be true")
+	}
+	if a.HasTag("vacation") {
+		t.Errorf("expected HasTag('vacation') to be false")
+	}
+
+	emptyAsset := Asset{ID: "asset-2"}
+	if emptyAsset.HasTag("immich-optimizer") {
+		t.Errorf("expected empty tags to return false")
+	}
+}
+
+func TestAsset_IsLivePhoto(t *testing.T) {
+	liveID := "video-123"
+	photoWithCompanion := Asset{
+		ID:               "photo-1",
+		Type:             "IMAGE",
+		LivePhotoVideoID: &liveID,
+	}
+	if !photoWithCompanion.IsLivePhoto() {
+		t.Errorf("expected photo with LivePhotoVideoID to be recognized as Live Photo")
+	}
+
+	hiddenCompanionVideo := Asset{
+		ID:         "video-123",
+		Type:       "VIDEO",
+		Visibility: "hidden",
+	}
+	if !hiddenCompanionVideo.IsLivePhoto() {
+		t.Errorf("expected hidden companion video to be recognized as Live Photo")
+	}
+
+	normalVideo := Asset{
+		ID:         "video-456",
+		Type:       "VIDEO",
+		Visibility: "timeline",
+	}
+	if normalVideo.IsLivePhoto() {
+		t.Errorf("expected regular timeline video not to be recognized as Live Photo")
+	}
+}
+
+func TestGetOptimizerTaggedAssetIDs(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/tags" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`[
+				{"id": "tag-opt-1", "name": "immich-optimizer"},
+				{"id": "tag-opt-2", "name": " immich-optimizer "},
+				{"id": "tag-other", "name": "vacation"}
+			]`))
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/search/metadata" {
+			var body map[string]interface{}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			tagIDs, _ := body["tagIds"].([]interface{})
+			w.Header().Set("Content-Type", "application/json")
+			if len(tagIDs) > 0 && tagIDs[0] == "tag-opt-1" {
+				w.Write([]byte(`{"assets": {"items": [{"id": "v-1"}, {"id": "v-2"}]}}`))
+				return
+			}
+			if len(tagIDs) > 0 && tagIDs[0] == "tag-opt-2" {
+				w.Write([]byte(`{"assets": {"items": [{"id": "v-3"}]}}`))
+				return
+			}
+			w.Write([]byte(`{"assets": {"items": []}}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	client := newTestClient(ts, "secret")
+	ids, err := client.GetOptimizerTaggedAssetIDs(context.Background())
+	if err != nil {
+		t.Fatalf("GetOptimizerTaggedAssetIDs failed: %v", err)
+	}
+	if len(ids) != 3 || !ids["v-1"] || !ids["v-2"] || !ids["v-3"] {
+		t.Errorf("expected 3 IDs (v-1, v-2, v-3), got %+v", ids)
 	}
 }
 

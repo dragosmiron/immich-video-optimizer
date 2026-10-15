@@ -80,6 +80,7 @@ func scanVideosCmd(ctx context.Context, pipeline *orchestrator.Pipeline, mode st
 	}
 }
 
+
 func waitForPipeline(ch chan interface{}) tea.Cmd {
 	return func() tea.Msg {
 		msg, ok := <-ch
@@ -150,10 +151,13 @@ type AppModel struct {
 	isSearching    bool
 
 	// Settings
-	settingsTab    int // 0: Encoding, 1: Filtering, 2: Pipeline & Network
-	settingCursor  int
-	resolutions    []string
-	thresholdInput textinput.Model // typeable threshold in Settings
+	settingsTab     int // 0: Encoding, 1: Filtering, 2: Pipeline & Network
+	settingCursor   int
+	resolutions     []string
+	thresholdInput  textinput.Model // typeable threshold in Settings
+	dateAfterInput  textinput.Model // Start Date (After) in Settings
+	dateBeforeInput textinput.Model // End Date (Before) in Settings
+	dateError       string          // inline validation error for date inputs
 
 	// Dashboard
 	ctx                     context.Context
@@ -317,6 +321,19 @@ func NewAppModel(cfg *config.Config, pipeline *orchestrator.Pipeline, opts ...Op
 	thi.CharLimit = 10
 	thi.Width = 15
 
+	// Date filter inputs used in Settings
+	dai := textinput.New()
+	dai.Placeholder = "YYYY-MM-DD (empty for all)"
+	dai.SetValue(cfg.DateAfter)
+	dai.CharLimit = 10
+	dai.Width = 28
+
+	dbi := textinput.New()
+	dbi.Placeholder = "YYYY-MM-DD (empty for all)"
+	dbi.SetValue(cfg.DateBefore)
+	dbi.CharLimit = 10
+	dbi.Width = 28
+
 	// Search input
 	si := textinput.New()
 	si.Placeholder = "Filter by filename..."
@@ -352,6 +369,8 @@ func NewAppModel(cfg *config.Config, pipeline *orchestrator.Pipeline, opts ...Op
 		urlInput:       ui,
 		tokenInput:     ti,
 		thresholdInput: thi,
+		dateAfterInput: dai,
+		dateBeforeInput: dbi,
 		setupFocus:     0,
 		table:          t,
 		searchInput:    si,
@@ -734,7 +753,6 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.state = ViewSummary
 		}
-		return m, nil
 
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
@@ -1078,9 +1096,21 @@ func (m *AppModel) updateBrowser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "s", "S":
 		m.state = ViewSettings
-		m.settingsTab = 0
+		if len(m.videos) == 0 {
+			m.settingsTab = 1 // Tab 1: Filtering
+		} else {
+			m.settingsTab = 0
+		}
 		m.settingCursor = 0
 		return m, nil
+
+	case "e", "E":
+		if len(m.videos) == 0 {
+			m.state = ViewConnectionSetup
+			m.setupFocus = 0
+			m.updateSetupFocus()
+			return m, nil
+		}
 
 	case "r", "R":
 		m.state = ViewScanPrompt
@@ -1225,7 +1255,7 @@ func (m *AppModel) updateDryRun(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *AppModel) settingsMaxCursor() int {
 	switch m.settingsTab {
 	case 1:
-		return 2 // Tab 1 (Filtering): 0: Mode, 1: Value, 2: Exclude Optimized
+		return 4 // Tab 1 (Filtering): 0: Mode, 1: Value, 2: Exclude Optimized, 3: Start Date, 4: End Date
 	case 2:
 		return 3 // Tab 2 (Pipeline & Network): 0: Prefetch, 1: Encoders, 2: Log Level, 3: Retries
 	default:
@@ -1245,6 +1275,13 @@ func (m *AppModel) switchSettingsTab(newTab int) {
 		if m.thresholdInput.Focused() {
 			m.thresholdInput.Blur()
 		}
+		if m.dateAfterInput.Focused() {
+			m.dateAfterInput.Blur()
+		}
+		if m.dateBeforeInput.Focused() {
+			m.dateBeforeInput.Blur()
+		}
+		m.dateError = ""
 	}
 }
 
@@ -1373,6 +1410,12 @@ func (m *AppModel) handleSettingsOptionToggle() (tea.Model, tea.Cmd) {
 			}
 		case 2: // Exclude Optimized
 			m.cfg.ExcludeOptimized = !m.cfg.ExcludeOptimized
+		case 3: // Start Date (After)
+			m.dateError = ""
+			return m, m.dateAfterInput.Focus()
+		case 4: // End Date (Before)
+			m.dateError = ""
+			return m, m.dateBeforeInput.Focus()
 		}
 
 	case 2: // Pipeline & Network
@@ -1405,11 +1448,13 @@ func (m *AppModel) handleSettingsOptionToggle() (tea.Model, tea.Cmd) {
 				m.pipeline.Client().SetMaxRetries(m.cfg.MaxRetries)
 			}
 		}
+
 	}
 	return m, nil
 }
 
 func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+
 	// When the threshold row (Tab 1, index 1) is focused and user is typing into it,
 	// Enter confirms the value; Esc cancels editing; everything else feeds the input.
 	if m.settingsTab == 1 && m.settingCursor == 1 && m.thresholdInput.Focused() {
@@ -1429,6 +1474,90 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		default:
 			var cmd tea.Cmd
 			m.thresholdInput, cmd = m.thresholdInput.Update(msg)
+			return m, cmd
+		}
+	}
+
+	// Start Date (After) input
+	if m.settingsTab == 1 && m.settingCursor == 3 && m.dateAfterInput.Focused() {
+		switch msg.String() {
+		case "enter":
+			val := strings.TrimSpace(m.dateAfterInput.Value())
+			if val != "" {
+				t, err := time.Parse("2006-01-02", val)
+				if err != nil {
+					m.dateError = "Invalid date format. Expected YYYY-MM-DD"
+					return m, nil
+				}
+				if m.cfg.DateBefore != "" {
+					if tEnd, err := time.Parse("2006-01-02", m.cfg.DateBefore); err == nil {
+						if t.After(tEnd) {
+							m.dateError = "Start date cannot be after end date"
+							return m, nil
+						}
+					}
+				}
+			}
+			m.dateError = ""
+			m.cfg.DateAfter = val
+			m.dateAfterInput.SetValue(val)
+			m.dateAfterInput.Blur()
+			if m.pipeline != nil {
+				m.pipeline.UpdateConfig(m.cfg)
+			}
+			_ = config.SaveConfig(m.cfg)
+			return m, nil
+		case "esc":
+			m.dateError = ""
+			m.dateAfterInput.SetValue(m.cfg.DateAfter)
+			m.dateAfterInput.Blur()
+			return m, nil
+		default:
+			m.dateError = ""
+			var cmd tea.Cmd
+			m.dateAfterInput, cmd = m.dateAfterInput.Update(msg)
+			return m, cmd
+		}
+	}
+
+	// End Date (Before) input
+	if m.settingsTab == 1 && m.settingCursor == 4 && m.dateBeforeInput.Focused() {
+		switch msg.String() {
+		case "enter":
+			val := strings.TrimSpace(m.dateBeforeInput.Value())
+			if val != "" {
+				t, err := time.Parse("2006-01-02", val)
+				if err != nil {
+					m.dateError = "Invalid date format. Expected YYYY-MM-DD"
+					return m, nil
+				}
+				if m.cfg.DateAfter != "" {
+					if tStart, err := time.Parse("2006-01-02", m.cfg.DateAfter); err == nil {
+						if t.Before(tStart) {
+							m.dateError = "End date cannot be before start date"
+							return m, nil
+						}
+					}
+				}
+			}
+			m.dateError = ""
+			m.cfg.DateBefore = val
+			m.dateBeforeInput.SetValue(val)
+			m.dateBeforeInput.Blur()
+			if m.pipeline != nil {
+				m.pipeline.UpdateConfig(m.cfg)
+			}
+			_ = config.SaveConfig(m.cfg)
+			return m, nil
+		case "esc":
+			m.dateError = ""
+			m.dateBeforeInput.SetValue(m.cfg.DateBefore)
+			m.dateBeforeInput.Blur()
+			return m, nil
+		default:
+			m.dateError = ""
+			var cmd tea.Cmd
+			m.dateBeforeInput, cmd = m.dateBeforeInput.Update(msg)
 			return m, cmd
 		}
 	}

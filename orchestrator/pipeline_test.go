@@ -2473,6 +2473,51 @@ func TestRollbackReplacementOnDeleteOriginalFailure(t *testing.T) {
 	}
 }
 
+func TestPipeline_ScanVideosWithDateFilter(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.URL.Path == "/api/search/metadata" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"assets": {
+					"items": [
+						{"id": "v-1", "type": "VIDEO", "size": 1000, "fileCreatedAt": "2023-05-01T12:00:00Z"},
+						{"id": "v-2", "type": "VIDEO", "size": 1000, "fileCreatedAt": "2024-05-01T12:00:00Z"}
+					]
+				}
+			}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	cfg := &config.Config{
+		URL:        ts.URL,
+		APIKey:     "test-key",
+		DateAfter:  "2024-01-01",
+		DateBefore: "2024-12-31",
+	}
+	p, err := NewPipelineWithBinaries(cfg, &engine.BinaryManager{})
+	if err != nil {
+		t.Fatalf("NewPipelineWithBinaries failed: %v", err)
+	}
+	p.Client().SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: ts.Config.Handler},
+	})
+
+	res, err := p.ScanVideosWithContext(context.Background(), "Disabled", 0)
+	if err != nil {
+		t.Fatalf("ScanVideosWithContext failed: %v", err)
+	}
+
+	if res.SkippedDateFilter != 1 {
+		t.Errorf("expected 1 video skipped by date filter, got %d", res.SkippedDateFilter)
+	}
+	if len(res.Videos) != 1 || res.Videos[0].ID != "v-2" {
+		t.Fatalf("expected only v-2, got %+v", res.Videos)
+	}
+}
+
 
 
 

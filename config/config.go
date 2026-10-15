@@ -32,6 +32,8 @@ type Config struct {
 	LogLevel           string `mapstructure:"log_level"`
 	MaxRetries         int    `mapstructure:"max_retries"`
 	ExcludeOptimized   bool   `mapstructure:"exclude_optimized"`
+	DateAfter          string `mapstructure:"date_after"`
+	DateBefore         string `mapstructure:"date_before"`
 }
 
 // IsDebug returns true if the log level is set to debug.
@@ -220,6 +222,8 @@ func LoadConfig() (*Config, error) {
 	v.SetDefault("log_level", "info")
 	v.SetDefault("max_retries", 2)
 	v.SetDefault("exclude_optimized", true)
+	v.SetDefault("date_after", "")
+	v.SetDefault("date_before", "")
 
 	if err := v.ReadInConfig(); err != nil {
 		return DefaultConfig(), err
@@ -300,6 +304,8 @@ func SaveConfig(cfg *Config) error {
 	v.Set("log_level", strings.ToLower(cfg.LogLevel))
 	v.Set("max_retries", cfg.MaxRetries)
 	v.Set("exclude_optimized", cfg.ExcludeOptimized)
+	v.Set("date_after", strings.TrimSpace(cfg.DateAfter))
+	v.Set("date_before", strings.TrimSpace(cfg.DateBefore))
 
 	home, err := userHomeDir()
 	if err != nil {
