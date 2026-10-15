@@ -66,17 +66,12 @@ jobs:
       - name: Extract tag annotation
         id: tag_info
         run: |
-          TAG_MSG=$(git tag -l --format='%(contents)' "${{ github.ref_name }}")
-          {
-            echo "notes<<EOF"
-            echo "$TAG_MSG"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          git tag -l --format='%(contents)' "${{ github.ref_name }}" > release-notes.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          body: ${{ steps.tag_info.outputs.notes }}
+          body_path: release-notes.md
           files: |
             dist/*
-          generate_release_notes: true
+          generate_release_notes: false
