@@ -148,6 +148,12 @@ type Tag struct {
 	Name string `json:"name"`
 }
 
+// AssetStack represents an Immich stack grouping
+type AssetStack struct {
+	ID             string `json:"id"`
+	PrimaryAssetID string `json:"primaryAssetId"`
+}
+
 type ExifInfo struct {
 	FileSizeInByte  int64           `json:"fileSizeInByte"`
 	ExifImageWidth  int             `json:"exifImageWidth,omitempty"`
@@ -175,6 +181,7 @@ type Asset struct {
 	LibraryID        *string         `json:"libraryId,omitempty"`
 	ExifInfo         ExifInfo        `json:"exifInfo,omitempty"`
 	Tags             []Tag           `json:"tags,omitempty"`
+	Stack            *AssetStack     `json:"stack,omitempty"`
 }
 
 // IsLivePhoto returns true if the asset is a Live Photo still image or its hidden motion video component.
@@ -709,6 +716,9 @@ func (c *Client) GetAssetWithContext(ctx context.Context, assetID string) (*Asse
 	if err := json.NewDecoder(resp.Body).Decode(&asset); err != nil {
 		return nil, fmt.Errorf("failed to decode asset: %w", err)
 	}
+	if asset.ID == "" || asset.ID != assetID {
+		return nil, fmt.Errorf("invalid or missing asset details for %s", assetID)
+	}
 	return &asset, nil
 }
 
@@ -1135,6 +1145,53 @@ func (c *Client) TagAssetWithContext(ctx context.Context, tagID, assetID string)
 		return err
 	}
 	defer resp.Body.Close()
+	var results []struct {
+		ID      string `json:"id"`
+		Success bool   `json:"success"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+		return fmt.Errorf("failed to decode tag assignment response: %w", err)
+	}
+	if len(results) == 0 {
+		return errors.New("tag assignment returned no results")
+	}
+	for _, result := range results {
+		if !result.Success || result.ID != assetID {
+			return fmt.Errorf("failed to assign tag %s to asset %s", tagID, result.ID)
+		}
+	}
+	return nil
+}
+
+// CopyAssetStackWithContext copies an asset's stack membership without copying other asset state.
+func (c *Client) CopyAssetStackWithContext(ctx context.Context, sourceID, targetID string) error {
+	if sourceID == "" || targetID == "" {
+		return errors.New("sourceID and targetID cannot be empty")
+	}
+	payload := map[string]interface{}{
+		"sourceId":    sourceID,
+		"targetId":    targetID,
+		"albums":      false,
+		"favorite":    false,
+		"sharedLinks": false,
+		"sidecar":     false,
+		"stack":       true,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/api/assets/copy", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
 }
 

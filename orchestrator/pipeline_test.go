@@ -637,6 +637,10 @@ func TestPipeline_AlbumDoesNotIncludeSkippedVideos(t *testing.T) {
 			w.Header().Set("Content-Type", "video/mp4")
 			w.Write([]byte("SIMULATED_H264"))
 			return
+		case r.Method == "GET" && r.URL.Path == "/api/assets/asset-h264":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "asset-h264", "type": "VIDEO"}`))
+			return
 		case r.Method == "POST" && r.URL.Path == "/api/assets":
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"id": "asset-replacement-new"}`))
@@ -1494,6 +1498,12 @@ func TestPipeline_PreservesAlbumsAndFavorite(t *testing.T) {
 			return
 		}
 
+		if r.Method == http.MethodGet && r.URL.Path == "/api/assets/asset-orig" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(immich.Asset{ID: "asset-orig", Type: "VIDEO", IsFavorite: true})
+			return
+		}
+
 		// 3. Create tracking album
 		if r.Method == http.MethodPost && r.URL.Path == "/api/albums" {
 			orderOfEvents = append(orderOfEvents, "create-tracking-album")
@@ -2150,6 +2160,11 @@ func TestPipeline_TagsReplacementAssetWhenExcludeOptimized(t *testing.T) {
 			w.Write([]byte("fake-video-data"))
 			return
 		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/assets/asset-orig-to-tag" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(immich.Asset{ID: "asset-orig-to-tag", Type: "VIDEO"})
+			return
+		}
 		if r.Method == http.MethodGet && r.URL.Path == "/api/albums" {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte("[]"))
@@ -2203,7 +2218,8 @@ func TestPipeline_TagsReplacementAssetWhenExcludeOptimized(t *testing.T) {
 				taggedAssetID = body.IDs[0]
 				assetTagged = true
 			}
-			w.WriteHeader(http.StatusOK)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`[{"id":"new-tagged-asset-id","success":true}]`))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -2279,6 +2295,11 @@ func TestRollbackReplacementOnAlbumTransferFailure(t *testing.T) {
 
 		if r.Method == "GET" && r.URL.Path == "/api/assets/asset-rollback/original" {
 			w.Write([]byte("fake video bytes"))
+			return
+		}
+		if r.Method == "GET" && r.URL.Path == "/api/assets/asset-rollback" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "asset-rollback", "type": "VIDEO"}`))
 			return
 		}
 		if r.Method == "POST" && r.URL.Path == "/api/assets" {
@@ -2382,6 +2403,11 @@ func TestRollbackReplacementOnDeleteOriginalFailure(t *testing.T) {
 
 		if r.Method == "GET" && r.URL.Path == "/api/assets/asset-delete-fail/original" {
 			w.Write([]byte("fake video bytes"))
+			return
+		}
+		if r.Method == "GET" && r.URL.Path == "/api/assets/asset-delete-fail" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "asset-delete-fail", "type": "VIDEO"}`))
 			return
 		}
 		if r.Method == "POST" && r.URL.Path == "/api/assets" {

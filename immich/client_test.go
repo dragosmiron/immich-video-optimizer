@@ -952,6 +952,114 @@ func TestGetAsset(t *testing.T) {
 	}
 }
 
+func TestGetAssetRejectsInvalidResponses(t *testing.T) {
+	tests := []struct {
+		name         string
+		responseBody string
+		assetID      string
+	}{
+		{
+			name:         "empty body",
+			responseBody: "",
+			assetID:      "asset-empty",
+		},
+		{
+			name:         "whitespace body",
+			responseBody: "   \n\t ",
+			assetID:      "asset-space",
+		},
+		{
+			name:         "null body",
+			responseBody: "null",
+			assetID:      "asset-null",
+		},
+		{
+			name:         "empty json object",
+			responseBody: "{}",
+			assetID:      "asset-empty-obj",
+		},
+		{
+			name:         "mismatched asset id",
+			responseBody: `{"id": "different-id", "type": "VIDEO"}`,
+			assetID:      "expected-id",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.responseBody))
+			}))
+			defer server.Close()
+
+			client := newTestClient(server, "secret")
+			asset, err := client.GetAssetWithContext(context.Background(), tc.assetID)
+			if err == nil {
+				t.Fatalf("expected error for %s, got asset: %+v", tc.name, asset)
+			}
+		})
+	}
+}
+
+func TestCopyAssetStack(t *testing.T) {
+	var capturedMethod, capturedPath, capturedContentType string
+	var payload struct {
+		SourceID    string `json:"sourceId"`
+		TargetID    string `json:"targetId"`
+		Albums      bool   `json:"albums"`
+		Favorite    bool   `json:"favorite"`
+		SharedLinks bool   `json:"sharedLinks"`
+		Sidecar     bool   `json:"sidecar"`
+		Stack       bool   `json:"stack"`
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		capturedContentType = r.Header.Get("Content-Type")
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+
+	// 1. Successful stack copy
+	err := client.CopyAssetStackWithContext(context.Background(), "src-1", "dst-2")
+	if err != nil {
+		t.Fatalf("CopyAssetStackWithContext failed: %v", err)
+	}
+	if capturedMethod != http.MethodPut || capturedPath != "/api/assets/copy" {
+		t.Errorf("unexpected method/path: %s %s", capturedMethod, capturedPath)
+	}
+	if capturedContentType != "application/json" {
+		t.Errorf("unexpected Content-Type: %s", capturedContentType)
+	}
+	if payload.SourceID != "src-1" || payload.TargetID != "dst-2" || !payload.Stack || payload.Albums || payload.Favorite || payload.SharedLinks || payload.Sidecar {
+		t.Errorf("unexpected copy payload: %+v", payload)
+	}
+
+	// 2. Empty ID validation
+	if err := client.CopyAssetStackWithContext(context.Background(), "", "dst-2"); err == nil {
+		t.Error("expected error for empty sourceID")
+	}
+	if err := client.CopyAssetStackWithContext(context.Background(), "src-1", ""); err == nil {
+		t.Error("expected error for empty targetID")
+	}
+
+	// 3. API error response
+	errServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer errServer.Close()
+
+	errClient := newTestClient(errServer, "secret")
+	if err := errClient.CopyAssetStackWithContext(context.Background(), "src-1", "dst-2"); err == nil {
+		t.Error("expected error on HTTP 500 response")
+	}
+}
+
 func TestGetTagsAndCreateTag(t *testing.T) {
 	var createdName string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1017,7 +1125,7 @@ func TestTagAsset(t *testing.T) {
 				assetID = body.IDs[0]
 			}
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`[{"id": "tag-1", "success": true}]`))
+			w.Write([]byte(`[{"id": "asset-456", "success": true}]`))
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -1031,6 +1139,19 @@ func TestTagAsset(t *testing.T) {
 	}
 	if taggedID != "tag-123" || assetID != "asset-456" {
 		t.Errorf("TagAsset mismatch: tagID=%s, assetID=%s", taggedID, assetID)
+	}
+}
+
+func TestTagAssetReportsPerAssetFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{"id":"asset-456","success":false}]`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+	if err := client.TagAssetWithContext(context.Background(), "tag-123", "asset-456"); err == nil {
+		t.Fatal("expected per-asset tag failure to return an error")
 	}
 }
 

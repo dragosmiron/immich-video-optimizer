@@ -1,13 +1,13 @@
 # 🎬 Immich Video Optimizer
 
-A terminal client for [Immich](https://immich.app/) that reduces storage usage by re-encoding videos to HEVC (H.265) using local hardware acceleration, while preserving original metadata, creation dates, GPS coordinates, album memberships, and favorite status.
+A terminal client for [Immich](https://immich.app/) that reduces storage usage by re-encoding videos to HEVC (H.265) using local hardware acceleration, while preserving original metadata, creation dates, GPS coordinates, album memberships, tags, stack membership, and favorite status.
 
 ---
 
 ## ✨ Features
 
 - **Hardware Acceleration:** Apple Silicon & Intel (`hevc_videotoolbox`), NVIDIA (`hevc_nvenc`), and Intel Linux (`hevc_vaapi`), with CPU fallback (`libx265`).
-- **Full Metadata & State Preservation:** Preserves camera make/model, original shooting dates, GPS coordinates, original filenames, user album memberships, and favorite status.
+- **Full Metadata & State Preservation:** Preserves camera make/model, original shooting dates, GPS coordinates, original filenames, user album memberships, tags, stack membership, and favorite status.
 - **Smart Filtering & Remote Probing:** Filter scans by bitrate density (`MB/min`), total file size, or date range (`YYYY-MM-DD`). Automatically detects and skips existing HEVC videos without downloading them.
 - **External Library Safety:** Automatically excludes read-only and external library assets from scans to protect external storage mounts.
 - **Incremental Scans (Tagging):** Tags replaced videos (`immich-optimizer`) so previously optimized videos can be skipped on future scans.
