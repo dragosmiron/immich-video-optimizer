@@ -313,7 +313,7 @@ func SaveConfig(cfg *Config) error {
 	}
 
 	configDir := filepath.Join(home, ".config", "immich-video-optimizer")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0700); err != nil {
 		return err
 	}
 

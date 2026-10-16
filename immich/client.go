@@ -359,6 +359,7 @@ func ParseDurationSeconds(raw json.RawMessage) float64 {
 	s = strings.ReplaceAll(s, ",", ".")
 	val, err := strconv.ParseFloat(s, 64)
 	if err == nil && val > 0 {
+		// shortcut: values >86400 assumed milliseconds; videos longer than 24h 0m 1s are misread as ~86s
 		if val > 86400 {
 			return val / 1000.0
 		}

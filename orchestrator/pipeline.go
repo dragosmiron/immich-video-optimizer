@@ -51,6 +51,17 @@ func NewPipelineWithBinaries(cfg *config.Config, binaries *engine.BinaryManager)
 	if err := os.MkdirAll(tempDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create temp dir: %w", err)
 	}
+	// Remove any stale temp files left by a previous hard-killed run.
+	// Only touch files older than 1 hour so we don't interfere with an
+	// active or just-finished pipeline in the same process.
+	for _, pattern := range []string{"orig_*.mp4", "opt_*.mp4"} {
+		matches, _ := filepath.Glob(filepath.Join(tempDir, pattern))
+		for _, f := range matches {
+			if info, err := os.Stat(f); err == nil && time.Since(info.ModTime()) > time.Hour {
+				_ = os.Remove(f)
+			}
+		}
+	}
 	return &Pipeline{
 		cfg:      cfg,
 		client:   client,
@@ -716,22 +727,25 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		// Use a detached short-timeout context so a pause during final deletion
 		// completes cleanly rather than leaving duplicate assets or marking failed.
 		deleteCtx := ctx
+		var deleteCancel context.CancelFunc
 		if ctx.Err() != nil {
-			var cancel context.CancelFunc
-			deleteCtx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
+			deleteCtx, deleteCancel = context.WithTimeout(context.Background(), 10*time.Second)
 		}
 
-		if err := p.client.DeleteAssetWithContext(deleteCtx, item.Asset.ID); err != nil {
+		deleteErr := p.client.DeleteAssetWithContext(deleteCtx, item.Asset.ID)
+		if deleteCancel != nil {
+			deleteCancel()
+		}
+		if deleteErr != nil {
 			item.Cleanup()
 			p.rollbackAsset(newAsset.ID)
 			if ctx.Err() != nil {
 				continue
 			}
-			logger.Error("Failed to delete original asset %s (%s): %v", item.Asset.OriginalFileName, item.Asset.ID, err)
-			sess.MarkFailed(item.Asset.ID, fmt.Sprintf("failed to delete original asset: %v", err))
+			logger.Error("Failed to delete original asset %s (%s): %v", item.Asset.OriginalFileName, item.Asset.ID, deleteErr)
+			sess.MarkFailed(item.Asset.ID, fmt.Sprintf("failed to delete original asset: %v", deleteErr))
 			_ = state.SaveSession(sess)
-			emit(PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: fmt.Errorf("failed to delete original asset: %w", err)})
+			emit(PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: fmt.Errorf("failed to delete original asset: %w", deleteErr)})
 			continue
 		}
 
