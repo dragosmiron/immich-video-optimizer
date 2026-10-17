@@ -676,6 +676,9 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		var stackTransferErr error
 		if albumTransferErr == nil && favTransferErr == nil && tagsTransferErr == nil && origAsset.Stack != nil {
 			stackTransferErr = p.client.CopyAssetStackWithContext(ctx, item.Asset.ID, newAsset.ID)
+			if stackTransferErr == nil && origAsset.Stack.PrimaryAssetID == item.Asset.ID && origAsset.Stack.ID != "" {
+				stackTransferErr = p.client.UpdateStackPrimaryAssetWithContext(ctx, origAsset.Stack.ID, newAsset.ID)
+			}
 		}
 
 		if ctx.Err() != nil && (albumTransferErr == nil && favTransferErr == nil && tagsTransferErr == nil && stackTransferErr == nil) {

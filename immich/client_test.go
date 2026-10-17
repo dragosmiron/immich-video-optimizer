@@ -1060,6 +1060,56 @@ func TestCopyAssetStack(t *testing.T) {
 	}
 }
 
+func TestUpdateStackPrimaryAsset(t *testing.T) {
+	var capturedMethod, capturedPath, capturedContentType string
+	var payload struct {
+		PrimaryAssetID string `json:"primaryAssetId"`
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		capturedContentType = r.Header.Get("Content-Type")
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+
+	// 1. Success
+	if err := client.UpdateStackPrimaryAssetWithContext(context.Background(), "stack-123", "asset-456"); err != nil {
+		t.Fatalf("UpdateStackPrimaryAssetWithContext failed: %v", err)
+	}
+	if capturedMethod != http.MethodPut || capturedPath != "/api/stacks/stack-123" {
+		t.Errorf("unexpected method/path: %s %s", capturedMethod, capturedPath)
+	}
+	if capturedContentType != "application/json" {
+		t.Errorf("unexpected Content-Type: %s", capturedContentType)
+	}
+	if payload.PrimaryAssetID != "asset-456" {
+		t.Errorf("unexpected payload: %+v", payload)
+	}
+
+	// 2. Validation
+	if err := client.UpdateStackPrimaryAssetWithContext(context.Background(), "", "asset-456"); err == nil {
+		t.Error("expected error for empty stackID")
+	}
+	if err := client.UpdateStackPrimaryAssetWithContext(context.Background(), "stack-123", ""); err == nil {
+		t.Error("expected error for empty primaryAssetID")
+	}
+
+	// 3. Error response
+	errServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer errServer.Close()
+	errClient := newTestClient(errServer, "secret")
+	if err := errClient.UpdateStackPrimaryAssetWithContext(context.Background(), "stack-123", "asset-456"); err == nil {
+		t.Error("expected error on HTTP 500 response")
+	}
+}
+
 func TestGetTagsAndCreateTag(t *testing.T) {
 	var createdName string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

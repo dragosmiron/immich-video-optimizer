@@ -1196,6 +1196,32 @@ func (c *Client) CopyAssetStackWithContext(ctx context.Context, sourceID, target
 	return nil
 }
 
+// UpdateStackPrimaryAssetWithContext updates the primary asset ID of a stack.
+func (c *Client) UpdateStackPrimaryAssetWithContext(ctx context.Context, stackID, primaryAssetID string) error {
+	if stackID == "" || primaryAssetID == "" {
+		return errors.New("stackID and primaryAssetID cannot be empty")
+	}
+	payload := map[string]string{
+		"primaryAssetId": primaryAssetID,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/api/stacks/"+url.PathEscape(stackID), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return nil
+}
+
 // GetTaggedAssetIDsWithContext retrieves all asset IDs that have the specified tag ID
 func (c *Client) GetTaggedAssetIDsWithContext(ctx context.Context, tagID string) (map[string]bool, error) {
 	tagged := make(map[string]bool)

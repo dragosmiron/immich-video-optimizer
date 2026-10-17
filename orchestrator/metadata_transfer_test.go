@@ -53,6 +53,16 @@ func TestPipelineCopiesTagsAndStackBeforeDeletingOriginal(t *testing.T) {
 			}
 			events = append(events, "stack")
 			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/stacks/stack-1":
+			var body struct {
+				PrimaryAssetID string `json:"primaryAssetId"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body.PrimaryAssetID != "replacement" {
+				t.Errorf("unexpected stack update payload: %+v", body)
+			}
+			events = append(events, "stack-primary")
+			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/api/albums/"):
 			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodDelete && r.URL.Path == "/api/assets":
@@ -78,7 +88,7 @@ func TestPipelineCopiesTagsAndStackBeforeDeletingOriginal(t *testing.T) {
 	if !deletedOriginal || rolledBack {
 		t.Fatalf("expected original deletion only; deletedOriginal=%v rolledBack=%v", deletedOriginal, rolledBack)
 	}
-	if strings.Join(events, ",") != "get-original,tag:tag-a,tag:tag-b,stack,delete-original" {
+	if strings.Join(events, ",") != "get-original,tag:tag-a,tag:tag-b,stack,stack-primary,delete-original" {
 		t.Fatalf("unexpected transfer order: %v", events)
 	}
 }
@@ -160,7 +170,7 @@ func runMetadataTransferTestPipeline(p *Pipeline) error {
 }
 
 func TestPipeline_TagOrStackTransferFailureRollsBackReplacement(t *testing.T) {
-	for _, failingPath := range []string{"/api/tags/tag-a/assets", "/api/assets/copy"} {
+	for _, failingPath := range []string{"/api/tags/tag-a/assets", "/api/assets/copy", "/api/stacks/stack-1"} {
 		t.Run(strings.TrimPrefix(failingPath, "/api/"), func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			var originalDeleted, replacementRolledBack bool
@@ -265,9 +275,10 @@ func TestPipelineSafetyGuardErrorDescriptions(t *testing.T) {
 		origJSON    string
 		failAlbum   bool
 		failFav     bool
-		failTag     bool
-		failStack   bool
-		expectedErr string
+		failTag          bool
+		failStack        bool
+		failStackPrimary bool
+		expectedErr      string
 	}{
 		{
 			name:        "album only",
@@ -292,6 +303,12 @@ func TestPipelineSafetyGuardErrorDescriptions(t *testing.T) {
 			origJSON:    `{"id":"original","type":"VIDEO","stack":{"id":"s1","primaryAssetId":"original"}}`,
 			failStack:   true,
 			expectedErr: "failed to transfer stack membership; original asset preserved",
+		},
+		{
+			name:             "stack primary only",
+			origJSON:         `{"id":"original","type":"VIDEO","stack":{"id":"s1","primaryAssetId":"original"}}`,
+			failStackPrimary: true,
+			expectedErr:      "failed to transfer stack membership; original asset preserved",
 		},
 	}
 
@@ -338,6 +355,12 @@ func TestPipelineSafetyGuardErrorDescriptions(t *testing.T) {
 						return
 					}
 					w.WriteHeader(http.StatusNoContent)
+				case r.Method == http.MethodPut && r.URL.Path == "/api/stacks/s1":
+					if tc.failStackPrimary {
+						w.WriteHeader(http.StatusInternalServerError)
+						return
+					}
+					w.WriteHeader(http.StatusOK)
 				case r.Method == http.MethodDelete && r.URL.Path == "/api/assets":
 					w.WriteHeader(http.StatusOK)
 				default:
@@ -355,5 +378,52 @@ func TestPipelineSafetyGuardErrorDescriptions(t *testing.T) {
 				t.Fatalf("error mismatch:\n  got:  %q\n  want: %q", err.Error(), tc.expectedErr)
 			}
 		})
+	}
+}
+
+func TestPipelineNonPrimaryStackMemberDoesNotUpdatePrimary(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var stackPrimaryCalled, copyCalled, originalDeleted bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/assets/original/original":
+			w.Header().Set("Content-Type", "video/mp4")
+			_, _ = w.Write([]byte("source"))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/albums":
+			_, _ = w.Write([]byte("[]"))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/assets/original":
+			// Original is a stack member, but NOT the primary asset
+			_, _ = w.Write([]byte(`{"id":"original","type":"VIDEO","isFavorite":false,"stack":{"id":"stack-1","primaryAssetId":"other-asset"}}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/albums":
+			_, _ = w.Write([]byte(`{"id":"tracking"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/assets":
+			_, _ = w.Write([]byte(`{"id":"replacement","type":"VIDEO"}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/api/assets/copy":
+			copyCalled = true
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/api/stacks/"):
+			stackPrimaryCalled = true
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/assets":
+			originalDeleted = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	p := newMetadataTransferTestPipeline(t, server)
+	if err := runMetadataTransferTestPipeline(p); err != nil {
+		t.Fatalf("pipeline failed: %v", err)
+	}
+	if !copyCalled {
+		t.Error("expected CopyAssetStack to be called")
+	}
+	if stackPrimaryCalled {
+		t.Error("stack primary update should not be called when original asset is not primary")
+	}
+	if !originalDeleted {
+		t.Error("expected original asset to be deleted")
 	}
 }
