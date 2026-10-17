@@ -16,6 +16,7 @@ import (
 	"immich-video-optimizer/config"
 	"immich-video-optimizer/engine"
 	"immich-video-optimizer/immich"
+	"immich-video-optimizer/state"
 )
 
 func TestMain(m *testing.M) {
@@ -2541,5 +2542,80 @@ func TestPipeline_ScanVideosWithDateFilter(t *testing.T) {
 	}
 	if len(res.Videos) != 1 || res.Videos[0].ID != "v-2" {
 		t.Fatalf("expected only v-2, got %+v", res.Videos)
+	}
+}
+
+func TestRunUploader_NilAlbumID(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/albums") {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]immich.Album{})
+			return
+		}
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/assets/") {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(&immich.Asset{ID: "test-asset", OriginalFileName: "test.mp4"})
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/assets" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "new-asset"}`))
+			return
+		}
+		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/assets/") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	cfg := &config.Config{URL: ts.URL, APIKey: "test-key"}
+	p, err := NewPipelineWithBinaries(cfg, &engine.BinaryManager{})
+	if err != nil {
+		t.Fatalf("NewPipelineWithBinaries failed: %v", err)
+	}
+	p.Client().SetHTTPClient(&http.Client{
+		Transport: &testRoundTripper{handler: ts.Config.Handler},
+	})
+
+	uploadQueue := make(chan *WorkItem, 1)
+	tmpFile, err := os.CreateTemp(t.TempDir(), "transcoded-*.mp4")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	_ = tmpFile.Close()
+
+	item := &WorkItem{
+		Asset:          immich.Asset{ID: "test-asset", OriginalFileName: "test.mp4", ExifInfo: immich.ExifInfo{FileSizeInByte: 2000}},
+		TranscodedPath: tmpFile.Name(),
+		OptimizedSize:  1000,
+		SavedBytes:     1000,
+	}
+	uploadQueue <- item
+	close(uploadQueue)
+
+	sess := &state.Session{
+		SessionID:   "test-session",
+		Date:        time.Now(),
+		Videos:      map[string]*state.VideoState{"test-asset": {ID: "test-asset", Status: state.StatusPending}},
+		TotalVideos: 1,
+	}
+	var completedMsgs []PipelineVideoCompleteMsg
+	emit := func(msg interface{}) bool {
+		if cMsg, ok := msg.(PipelineVideoCompleteMsg); ok {
+			completedMsgs = append(completedMsgs, cMsg)
+		}
+		return true
+	}
+
+	// Should not panic even when albumID is nil
+	p.runUploader(context.Background(), uploadQueue, nil, "", sess, emit)
+
+	if len(completedMsgs) != 1 || completedMsgs[0].Err != nil {
+		t.Fatalf("expected 1 successful completion message, got: %+v", completedMsgs)
 	}
 }
