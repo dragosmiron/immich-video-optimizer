@@ -250,6 +250,29 @@ func TestUpdateAlbumName_Error(t *testing.T) {
 	}
 }
 
+func TestAlbumMethods_ContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel context
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"id": "album-1"}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+
+	if _, err := client.CreateTrackingAlbumWithContext(ctx, "Album"); err == nil {
+		t.Errorf("Expected context error for CreateTrackingAlbumWithContext, got nil")
+	}
+	if err := client.DeleteAlbumWithContext(ctx, "album-1"); err == nil {
+		t.Errorf("Expected context error for DeleteAlbumWithContext, got nil")
+	}
+	if err := client.UpdateAlbumNameWithContext(ctx, "album-1", "New"); err == nil {
+		t.Errorf("Expected context error for UpdateAlbumNameWithContext, got nil")
+	}
+}
+
 func TestDownloadAsset(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
