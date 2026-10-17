@@ -29,11 +29,14 @@ func TestPipelineCopiesTagsAndStackBeforeDeletingOriginal(t *testing.T) {
 			_, _ = w.Write([]byte("[]"))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/assets/original":
 			events = append(events, "get-original")
-			_, _ = w.Write([]byte(`{"id":"original","type":"VIDEO","isFavorite":false,"tags":[{"id":"tag-a","name":"A"},{"id":"tag-b","name":"B"}],"stack":{"id":"stack-1","primaryAssetId":"original"}}`))
+			_, _ = w.Write([]byte(`{"id":"original","type":"VIDEO","description":"Summer trip","isFavorite":false,"tags":[{"id":"tag-a","name":"A"},{"id":"tag-b","name":"B"}],"stack":{"id":"stack-1","primaryAssetId":"original"}}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/albums":
 			_, _ = w.Write([]byte(`{"id":"tracking"}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/assets":
 			_, _ = w.Write([]byte(`{"id":"replacement","type":"VIDEO"}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/api/assets/replacement":
+			events = append(events, "description")
+			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/api/tags/"):
 			events = append(events, "tag:"+strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/tags/"), "/assets"))
 			_, _ = w.Write([]byte(`[{"id":"replacement","success":true}]`))
@@ -88,7 +91,7 @@ func TestPipelineCopiesTagsAndStackBeforeDeletingOriginal(t *testing.T) {
 	if !deletedOriginal || rolledBack {
 		t.Fatalf("expected original deletion only; deletedOriginal=%v rolledBack=%v", deletedOriginal, rolledBack)
 	}
-	if strings.Join(events, ",") != "get-original,tag:tag-a,tag:tag-b,stack,stack-primary,delete-original" {
+	if strings.Join(events, ",") != "get-original,description,tag:tag-a,tag:tag-b,stack,stack-primary,delete-original" {
 		t.Fatalf("unexpected transfer order: %v", events)
 	}
 }
@@ -271,10 +274,11 @@ func TestPipelineUntaggedAndNonStackedAssetSucceeds(t *testing.T) {
 
 func TestPipelineSafetyGuardErrorDescriptions(t *testing.T) {
 	tests := []struct {
-		name        string
-		origJSON    string
-		failAlbum   bool
-		failFav     bool
+		name             string
+		origJSON         string
+		failAlbum        bool
+		failFav          bool
+		failDesc         bool
 		failTag          bool
 		failStack        bool
 		failStackPrimary bool
@@ -291,6 +295,12 @@ func TestPipelineSafetyGuardErrorDescriptions(t *testing.T) {
 			origJSON:    `{"id":"original","type":"VIDEO","isFavorite":true}`,
 			failFav:     true,
 			expectedErr: "failed to transfer favorite status; original asset preserved",
+		},
+		{
+			name:        "description only",
+			origJSON:    `{"id":"original","type":"VIDEO","description":"Summer trip"}`,
+			failDesc:    true,
+			expectedErr: "failed to transfer description; original asset preserved",
 		},
 		{
 			name:        "tags only",
@@ -338,7 +348,7 @@ func TestPipelineSafetyGuardErrorDescriptions(t *testing.T) {
 				case r.Method == http.MethodPost && r.URL.Path == "/api/assets":
 					_, _ = w.Write([]byte(`{"id":"replacement","type":"VIDEO"}`))
 				case r.Method == http.MethodPut && r.URL.Path == "/api/assets/replacement":
-					if tc.failFav {
+					if tc.failFav || tc.failDesc {
 						w.WriteHeader(http.StatusInternalServerError)
 						return
 					}

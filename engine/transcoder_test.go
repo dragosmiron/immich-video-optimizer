@@ -82,6 +82,17 @@ func TestBuildFFmpegArgs(t *testing.T) {
 			},
 			expected: []string{"-vaapi_device", "/dev/dri/renderD128", "-y", "-i", "in.mp4", "-c:v", "hevc_vaapi", "-qp", "28", "-vf", "format=nv12,hwupload", "-c:a", "copy", "out.mp4"},
 		},
+		{
+			name: "No audio option passes -an",
+			opts: TranscodeOptions{
+				Input:   "in.mp4",
+				Output:  "out.mp4",
+				Encoder: "libx265",
+				NoAudio: true,
+				CRF:     26,
+			},
+			expected: []string{"-y", "-i", "in.mp4", "-c:v", "libx265", "-crf", "26", "-an", "out.mp4"},
+		},
 	}
 
 	for _, tt := range tests {

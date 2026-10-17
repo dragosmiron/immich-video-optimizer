@@ -420,11 +420,13 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 				if preset == "" {
 					preset = "Medium"
 				}
+				hasAudio, isAAC := engine.ProbeAudioStream(ctx, p.binaries.FFmpegPath, item.OrigPath)
 				opts := engine.TranscodeOptions{
 					Input:               item.OrigPath,
 					Output:              transcodedPath,
 					Encoder:             p.encoder,
-					AudioCopy:           false,
+					AudioCopy:           isAAC,
+					NoAudio:             !hasAudio,
 					CRF:                 p.cfg.QualityCRF(),
 					VideoToolboxQuality: p.cfg.QualityVideoToolbox(),
 					Preset:              preset,
@@ -664,8 +666,16 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 			}
 		}
 
+		var descTransferErr error
+		if albumTransferErr == nil && favTransferErr == nil && origAsset.Description != "" {
+			if err := p.client.UpdateAssetDescriptionWithContext(ctx, newAsset.ID, origAsset.Description); err != nil {
+				logger.Error("Failed to transfer description to new asset %s: %v", newAsset.ID, err)
+				descTransferErr = err
+			}
+		}
+
 		var tagsTransferErr error
-		if albumTransferErr == nil && favTransferErr == nil {
+		if albumTransferErr == nil && favTransferErr == nil && descTransferErr == nil {
 			for _, tag := range origAsset.Tags {
 				if err := p.client.TagAssetWithContext(ctx, tag.ID, newAsset.ID); err != nil {
 					tagsTransferErr = err
@@ -674,22 +684,22 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 			}
 		}
 		var stackTransferErr error
-		if albumTransferErr == nil && favTransferErr == nil && tagsTransferErr == nil && origAsset.Stack != nil {
+		if albumTransferErr == nil && favTransferErr == nil && descTransferErr == nil && tagsTransferErr == nil && origAsset.Stack != nil {
 			stackTransferErr = p.client.CopyAssetStackWithContext(ctx, item.Asset.ID, newAsset.ID)
 			if stackTransferErr == nil && origAsset.Stack.PrimaryAssetID == item.Asset.ID && origAsset.Stack.ID != "" {
 				stackTransferErr = p.client.UpdateStackPrimaryAssetWithContext(ctx, origAsset.Stack.ID, newAsset.ID)
 			}
 		}
 
-		if ctx.Err() != nil && (albumTransferErr == nil && favTransferErr == nil && tagsTransferErr == nil && stackTransferErr == nil) {
+		if ctx.Err() != nil && (albumTransferErr == nil && favTransferErr == nil && descTransferErr == nil && tagsTransferErr == nil && stackTransferErr == nil) {
 			item.Cleanup()
 			p.rollbackAsset(newAsset.ID)
 			continue
 		}
 
 		// Safety guard: original asset is ONLY deleted after replacement is uploaded,
-		// added to all original albums, and favorite status is transferred.
-		if albumTransferErr != nil || favTransferErr != nil || tagsTransferErr != nil || stackTransferErr != nil {
+		// added to all original albums, favorite status, and description are transferred.
+		if albumTransferErr != nil || favTransferErr != nil || descTransferErr != nil || tagsTransferErr != nil || stackTransferErr != nil {
 			item.Cleanup()
 			p.rollbackAsset(newAsset.ID)
 			if ctx.Err() != nil {
@@ -702,6 +712,9 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 			}
 			if favTransferErr != nil {
 				failed = append(failed, "favorite status")
+			}
+			if descTransferErr != nil {
+				failed = append(failed, "description")
 			}
 			if tagsTransferErr != nil {
 				failed = append(failed, "tags")

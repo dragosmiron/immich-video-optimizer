@@ -889,6 +889,68 @@ func TestSetAssetFavorite(t *testing.T) {
 	}
 }
 
+func TestUpdateAssetDescription(t *testing.T) {
+	var lastReceivedBody map[string]interface{}
+	var lastPath string
+	var lastMethod string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") != "secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		lastMethod = r.Method
+		lastPath = r.URL.Path
+
+		if r.URL.Path == "/api/assets/asset-err" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		_ = json.NewDecoder(r.Body).Decode(&lastReceivedBody)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id": "asset-123"}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server, "secret")
+
+	// 1. Success update description
+	err := client.UpdateAssetDescriptionWithContext(context.Background(), "asset-123", "Vacation video")
+	if err != nil {
+		t.Fatalf("UpdateAssetDescriptionWithContext failed: %v", err)
+	}
+	if lastMethod != http.MethodPut {
+		t.Errorf("Expected method PUT, got %s", lastMethod)
+	}
+	if lastPath != "/api/assets/asset-123" {
+		t.Errorf("Expected path /api/assets/asset-123, got %s", lastPath)
+	}
+	if lastReceivedBody["description"] != "Vacation video" {
+		t.Errorf("Expected description='Vacation video', got %v", lastReceivedBody["description"])
+	}
+
+	// 2. Convenience wrapper
+	err = client.UpdateAssetDescription("asset-123", "New caption")
+	if err != nil {
+		t.Fatalf("UpdateAssetDescription failed: %v", err)
+	}
+	if lastReceivedBody["description"] != "New caption" {
+		t.Errorf("Expected description='New caption', got %v", lastReceivedBody["description"])
+	}
+
+	// 3. Empty assetID
+	if err := client.UpdateAssetDescription("", "text"); err == nil {
+		t.Errorf("Expected error for empty assetID")
+	}
+
+	// 4. Server error
+	if err := client.UpdateAssetDescription("asset-err", "text"); err == nil {
+		t.Errorf("Expected error on server failure")
+	}
+}
+
+
 func TestAsset_IsFavoriteJSON(t *testing.T) {
 	// JSON with isFavorite: true
 	jsonTrue := `{"id": "v1", "type": "VIDEO", "isFavorite": true}`

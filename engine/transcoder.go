@@ -21,6 +21,7 @@ type TranscodeOptions struct {
 	Output              string
 	Encoder             string // hevc_videotoolbox, hevc_nvenc, hevc_vaapi, libx265
 	AudioCopy           bool   // true for '-c:a copy', false for aac
+	NoAudio             bool   // true if input video has no audio stream
 	CRF                 int    // CRF or bitrate equiv
 	VideoToolboxQuality int    // Explicit VideoToolbox -q:v quality override (1..100)
 	Preset              string // Preset string, e.g., "medium", "slow"
@@ -113,7 +114,9 @@ func BuildFFmpegArgs(opts TranscodeOptions) []string {
 		args = append(args, "-vf", "scale="+scale)
 	}
 
-	if opts.AudioCopy {
+	if opts.NoAudio {
+		args = append(args, "-an")
+	} else if opts.AudioCopy {
 		args = append(args, "-c:a", "copy")
 	} else {
 		args = append(args, "-c:a", "aac", "-b:a", "192k")

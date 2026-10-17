@@ -162,3 +162,28 @@ func ProbeRemoteHEVC(ctx context.Context, ffmpegPath string, assetURL string, ap
 	details, err := ProbeRemoteDetails(ctx, ffmpegPath, assetURL, apiKey)
 	return details.IsHEVC, err
 }
+
+// CheckAudioStream parses ffmpeg -i output to see if audio is present and if it's AAC.
+func CheckAudioStream(output string) (hasAudio bool, isAAC bool) {
+	lower := strings.ToLower(output)
+	for _, line := range strings.Split(lower, "\n") {
+		idx := strings.Index(line, "audio:")
+		if idx != -1 {
+			hasAudio = true
+			after := line[idx+len("audio:"):]
+			if strings.Contains(after, "aac") || strings.Contains(after, "mp4a") {
+				isAAC = true
+			}
+			return
+		}
+	}
+	return
+}
+
+// ProbeAudioStream probes a local video file to determine if audio exists and if it is AAC.
+func ProbeAudioStream(ctx context.Context, ffmpegPath string, inputPath string) (hasAudio bool, isAAC bool) {
+	cmd := exec.CommandContext(ctx, ffmpegPath, "-i", inputPath)
+	out, _ := cmd.CombinedOutput()
+	return CheckAudioStream(string(out))
+}
+

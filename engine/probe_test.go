@@ -76,3 +76,47 @@ func TestParseVideoDetails(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckAudioStream(t *testing.T) {
+	tests := []struct {
+		name     string
+		output   string
+		hasAudio bool
+		isAAC    bool
+	}{
+		{
+			name:     "AAC stream",
+			output:   "Stream #0:1(und): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 256 kb/s",
+			hasAudio: true,
+			isAAC:    true,
+		},
+		{
+			name:     "PCM audio",
+			output:   "Stream #0:1: Audio: pcm_s16le, 44100 Hz, 2 channels, s16, 1411 kb/s",
+			hasAudio: true,
+			isAAC:    false,
+		},
+		{
+			name:     "MP3 audio",
+			output:   "Stream #0:1: Audio: mp3, 44100 Hz, stereo, fltp, 320 kb/s",
+			hasAudio: true,
+			isAAC:    false,
+		},
+		{
+			name:     "No audio stream",
+			output:   "Stream #0:0: Video: h264, yuv420p, 1920x1080, 30 fps",
+			hasAudio: false,
+			isAAC:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hasAudio, isAAC := CheckAudioStream(tt.output)
+			if hasAudio != tt.hasAudio || isAAC != tt.isAAC {
+				t.Errorf("CheckAudioStream() = (%v, %v), want (%v, %v)", hasAudio, isAAC, tt.hasAudio, tt.isAAC)
+			}
+		})
+	}
+}
+

@@ -172,6 +172,7 @@ type Asset struct {
 	FileCreatedAt    string          `json:"fileCreatedAt,omitempty"`
 	FileModifiedAt   string          `json:"fileModifiedAt,omitempty"`
 	OriginalFileName string          `json:"originalFileName,omitempty"`
+	Description      string          `json:"description,omitempty"`
 	IsFavorite       bool            `json:"isFavorite"`
 	IsReadOnly       bool            `json:"isReadOnly"`
 	IsExternal       bool            `json:"isExternal"`
@@ -694,6 +695,38 @@ func (c *Client) SetAssetFavoriteWithContext(ctx context.Context, assetID string
 // SetAssetFavorite updates the favorite status of an asset.
 func (c *Client) SetAssetFavorite(assetID string, isFavorite bool) error {
 	return c.SetAssetFavoriteWithContext(context.Background(), assetID, isFavorite)
+}
+
+// UpdateAssetDescriptionWithContext updates the description of an asset with context cancellation.
+// Immich API uses PUT /api/assets/{assetID} with payload {"description": description}.
+func (c *Client) UpdateAssetDescriptionWithContext(ctx context.Context, assetID string, description string) error {
+	if assetID == "" {
+		return errors.New("assetID cannot be empty")
+	}
+	payload := map[string]string{"description": description}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	urlStr := fmt.Sprintf("%s/api/assets/%s", c.baseURL, url.PathEscape(assetID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, urlStr, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return nil
+}
+
+// UpdateAssetDescription updates the description of an asset.
+func (c *Client) UpdateAssetDescription(assetID string, description string) error {
+	return c.UpdateAssetDescriptionWithContext(context.Background(), assetID, description)
 }
 
 // GetAssetWithContext retrieves asset metadata by asset ID with context cancellation.
