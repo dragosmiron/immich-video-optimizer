@@ -57,10 +57,11 @@ func BuildFFmpegArgs(opts TranscodeOptions) []string {
 		"-y", // Overwrite output files without asking
 		"-i", opts.Input,
 		"-c:v", opts.Encoder,
+		"-tag:v", "hvc1",
 	)
 
 	if opts.Encoder == "hevc_videotoolbox" {
-		args = append(args, "-tag:v", "hvc1", "-allow_sw", "1")
+		args = append(args, "-allow_sw", "1")
 	}
 
 	if opts.Preset != "" && opts.Encoder != "hevc_vaapi" {

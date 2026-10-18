@@ -23,7 +23,7 @@ func TestBuildFFmpegArgs(t *testing.T) {
 				Encoder:   "libx265",
 				AudioCopy: false,
 			},
-			expected: []string{"-y", "-i", "in.mp4", "-c:v", "libx265", "-c:a", "aac", "-b:a", "192k", "out.mp4"},
+			expected: []string{"-y", "-i", "in.mp4", "-c:v", "libx265", "-tag:v", "hvc1", "-c:a", "aac", "-b:a", "192k", "out.mp4"},
 		},
 		{
 			name: "Videotoolbox with CRF",
@@ -46,7 +46,7 @@ func TestBuildFFmpegArgs(t *testing.T) {
 				AudioCopy: true,
 				CRF:       23,
 			},
-			expected: []string{"-y", "-i", "in.mp4", "-c:v", "libx265", "-crf", "23", "-c:a", "copy", "out.mp4"},
+			expected: []string{"-y", "-i", "in.mp4", "-c:v", "libx265", "-tag:v", "hvc1", "-crf", "23", "-c:a", "copy", "out.mp4"},
 		},
 		{
 			name: "With 1080p Resolution limit",
@@ -69,7 +69,7 @@ func TestBuildFFmpegArgs(t *testing.T) {
 				CRF:       28,
 				Preset:    "medium",
 			},
-			expected: []string{"-y", "-i", "in.mp4", "-c:v", "hevc_nvenc", "-preset", "medium", "-cq", "28", "-b:v", "0", "-c:a", "copy", "out.mp4"},
+			expected: []string{"-y", "-i", "in.mp4", "-c:v", "hevc_nvenc", "-tag:v", "hvc1", "-preset", "medium", "-cq", "28", "-b:v", "0", "-c:a", "copy", "out.mp4"},
 		},
 		{
 			name: "hevc_vaapi with CRF",
@@ -80,7 +80,7 @@ func TestBuildFFmpegArgs(t *testing.T) {
 				AudioCopy: true,
 				CRF:       28,
 			},
-			expected: []string{"-vaapi_device", "/dev/dri/renderD128", "-y", "-i", "in.mp4", "-c:v", "hevc_vaapi", "-qp", "28", "-vf", "format=nv12,hwupload", "-c:a", "copy", "out.mp4"},
+			expected: []string{"-vaapi_device", "/dev/dri/renderD128", "-y", "-i", "in.mp4", "-c:v", "hevc_vaapi", "-tag:v", "hvc1", "-qp", "28", "-vf", "format=nv12,hwupload", "-c:a", "copy", "out.mp4"},
 		},
 		{
 			name: "No audio option passes -an",
@@ -91,7 +91,7 @@ func TestBuildFFmpegArgs(t *testing.T) {
 				NoAudio: true,
 				CRF:     26,
 			},
-			expected: []string{"-y", "-i", "in.mp4", "-c:v", "libx265", "-crf", "26", "-an", "out.mp4"},
+			expected: []string{"-y", "-i", "in.mp4", "-c:v", "libx265", "-tag:v", "hvc1", "-crf", "26", "-an", "out.mp4"},
 		},
 	}
 
