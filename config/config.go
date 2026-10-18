@@ -35,6 +35,33 @@ type Config struct {
 	DateAfter          string `mapstructure:"date_after"`
 	DateBefore         string `mapstructure:"date_before"`
 	CustomFFmpegFlags  string `mapstructure:"custom_ffmpeg_flags"`
+	LogMaxSizeMB       int    `mapstructure:"log_max_size_mb"`
+	LogMaxBackups      int    `mapstructure:"log_max_backups"`
+	LogCompress        bool   `mapstructure:"log_compress"`
+}
+
+// AllConfigKeys lists every valid configuration key for validation and auto-healing.
+var AllConfigKeys = []string{
+	"url",
+	"api_key",
+	"threshold_mode",
+	"size_threshold",
+	"resolution",
+	"preset",
+	"video_quality",
+	"size_guard",
+	"skip_hevc",
+	"concurrent_encoders",
+	"enable_prefetch",
+	"log_level",
+	"max_retries",
+	"exclude_optimized",
+	"date_after",
+	"date_before",
+	"custom_ffmpeg_flags",
+	"log_max_size_mb",
+	"log_max_backups",
+	"log_compress",
 }
 
 // IsDebug returns true if the log level is set to debug.
@@ -187,6 +214,12 @@ func DefaultConfig() *Config {
 		LogLevel:           "info",
 		MaxRetries:         2,
 		ExcludeOptimized:   true,
+		DateAfter:          "",
+		DateBefore:         "",
+		CustomFFmpegFlags:  "",
+		LogMaxSizeMB:       10,
+		LogMaxBackups:      5,
+		LogCompress:        true,
 	}
 }
 
@@ -211,6 +244,8 @@ func LoadConfig() (*Config, error) {
 		v.AddConfigPath(filepath.Join(home, ".config", "immich-video-optimizer"))
 	}
 
+	v.SetDefault("url", "")
+	v.SetDefault("api_key", "")
 	v.SetDefault("threshold_mode", ThresholdModeMBPerMin)
 	v.SetDefault("size_threshold", "100")
 	v.SetDefault("resolution", "Original")
@@ -226,37 +261,81 @@ func LoadConfig() (*Config, error) {
 	v.SetDefault("date_after", "")
 	v.SetDefault("date_before", "")
 	v.SetDefault("custom_ffmpeg_flags", "")
+	v.SetDefault("log_max_size_mb", 10)
+	v.SetDefault("log_max_backups", 5)
+	v.SetDefault("log_compress", true)
 
 	if err := v.ReadInConfig(); err != nil {
 		return DefaultConfig(), err
+	}
+
+	needsSave := false
+	for _, key := range AllConfigKeys {
+		if !v.InConfig(key) {
+			needsSave = true
+			break
+		}
 	}
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return DefaultConfig(), err
 	}
-	cfg.ThresholdMode = NormalizeThresholdMode(cfg.ThresholdMode)
+
+	normThreshold := NormalizeThresholdMode(cfg.ThresholdMode)
+	if normThreshold != cfg.ThresholdMode {
+		cfg.ThresholdMode = normThreshold
+		needsSave = true
+	}
 	if cfg.Preset == "" {
 		cfg.Preset = "Medium"
+		needsSave = true
+	}
+	if cfg.Resolution == "" {
+		cfg.Resolution = "Original"
+		needsSave = true
 	}
 	if cfg.VideoQuality == 0 {
 		cfg.VideoQuality = 6
+		needsSave = true
 	} else if cfg.VideoQuality < 1 {
 		cfg.VideoQuality = 1
+		needsSave = true
 	} else if cfg.VideoQuality > 10 {
 		cfg.VideoQuality = 10
+		needsSave = true
 	}
 	if cfg.ConcurrentEncoders <= 0 {
 		cfg.ConcurrentEncoders = 1
+		needsSave = true
 	}
 	if cfg.SizeThreshold == "" {
 		cfg.SizeThreshold = "100"
+		needsSave = true
 	}
-	if cfg.LogLevel == "" {
+	logLvl := strings.ToLower(strings.TrimSpace(cfg.LogLevel))
+	if logLvl != "debug" && logLvl != "info" {
 		cfg.LogLevel = "info"
+		needsSave = true
+	} else if logLvl != cfg.LogLevel {
+		cfg.LogLevel = logLvl
+		needsSave = true
 	}
 	if cfg.MaxRetries < 0 {
-		cfg.MaxRetries = 0
+		cfg.MaxRetries = 2
+		needsSave = true
+	}
+	if cfg.LogMaxSizeMB <= 0 {
+		cfg.LogMaxSizeMB = 10
+		needsSave = true
+	}
+	if cfg.LogMaxBackups < 0 {
+		cfg.LogMaxBackups = 5
+		needsSave = true
+	}
+
+	if needsSave {
+		_ = SaveConfig(&cfg)
 	}
 	return &cfg, nil
 }
@@ -286,7 +365,13 @@ func SaveConfig(cfg *Config) error {
 		cfg.LogLevel = "info"
 	}
 	if cfg.MaxRetries < 0 {
-		cfg.MaxRetries = 0
+		cfg.MaxRetries = 2
+	}
+	if cfg.LogMaxSizeMB <= 0 {
+		cfg.LogMaxSizeMB = 10
+	}
+	if cfg.LogMaxBackups < 0 {
+		cfg.LogMaxBackups = 5
 	}
 
 	v := viper.New()
@@ -309,6 +394,9 @@ func SaveConfig(cfg *Config) error {
 	v.Set("date_after", strings.TrimSpace(cfg.DateAfter))
 	v.Set("date_before", strings.TrimSpace(cfg.DateBefore))
 	v.Set("custom_ffmpeg_flags", strings.TrimSpace(cfg.CustomFFmpegFlags))
+	v.Set("log_max_size_mb", cfg.LogMaxSizeMB)
+	v.Set("log_max_backups", cfg.LogMaxBackups)
+	v.Set("log_compress", cfg.LogCompress)
 
 	home, err := userHomeDir()
 	if err != nil {

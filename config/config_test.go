@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -28,6 +29,9 @@ func TestSaveAndLoadConfig(t *testing.T) {
 		MaxRetries:         5,
 		ExcludeOptimized:   true,
 		CustomFFmpegFlags:  "-preset slow -crf 20",
+		LogMaxSizeMB:       25,
+		LogMaxBackups:      8,
+		LogCompress:        false,
 	}
 
 	// Test SaveConfig
@@ -48,7 +52,7 @@ func TestSaveAndLoadConfig(t *testing.T) {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
 
-	if loaded.URL != cfg.URL || loaded.APIKey != cfg.APIKey || loaded.ThresholdMode != cfg.ThresholdMode || loaded.SizeThreshold != cfg.SizeThreshold || loaded.SkipHEVC != cfg.SkipHEVC || loaded.ConcurrentEncoders != cfg.ConcurrentEncoders || loaded.EnablePrefetch != cfg.EnablePrefetch || loaded.LogLevel != cfg.LogLevel || loaded.MaxRetries != cfg.MaxRetries || loaded.ExcludeOptimized != cfg.ExcludeOptimized || loaded.CustomFFmpegFlags != cfg.CustomFFmpegFlags {
+	if loaded.URL != cfg.URL || loaded.APIKey != cfg.APIKey || loaded.ThresholdMode != cfg.ThresholdMode || loaded.SizeThreshold != cfg.SizeThreshold || loaded.SkipHEVC != cfg.SkipHEVC || loaded.ConcurrentEncoders != cfg.ConcurrentEncoders || loaded.EnablePrefetch != cfg.EnablePrefetch || loaded.LogLevel != cfg.LogLevel || loaded.MaxRetries != cfg.MaxRetries || loaded.ExcludeOptimized != cfg.ExcludeOptimized || loaded.CustomFFmpegFlags != cfg.CustomFFmpegFlags || loaded.LogMaxSizeMB != cfg.LogMaxSizeMB || loaded.LogMaxBackups != cfg.LogMaxBackups || loaded.LogCompress != cfg.LogCompress {
 		t.Errorf("Loaded config mismatch: got %v, expected %v", loaded, cfg)
 	}
 	if !loaded.IsDebug() {
@@ -59,6 +63,9 @@ func TestSaveAndLoadConfig(t *testing.T) {
 	}
 	if !loaded.ExcludeOptimized {
 		t.Errorf("expected ExcludeOptimized true")
+	}
+	if loaded.LogMaxSizeMB != 25 || loaded.LogMaxBackups != 8 || loaded.LogCompress != false {
+		t.Errorf("expected log settings mismatch: size=%d backups=%d compress=%v", loaded.LogMaxSizeMB, loaded.LogMaxBackups, loaded.LogCompress)
 	}
 }
 
@@ -434,6 +441,177 @@ func TestLoadConfig_IgnoresCurrentWorkingDirectory(t *testing.T) {
 		t.Errorf("expected loaded URL %q, got %q", "http://legitimate-user-server:2283", loaded.URL)
 	}
 }
+
+func TestLoadConfig_AutoHealsAnyMissingKey(t *testing.T) {
+	for _, missingKey := range AllConfigKeys {
+		t.Run("missing_"+missingKey, func(t *testing.T) {
+			tempHome := t.TempDir()
+			origHome := userHomeDir
+			userHomeDir = func() (string, error) {
+				return tempHome, nil
+			}
+			defer func() {
+				userHomeDir = origHome
+			}()
+
+			fullCfg := &Config{
+				URL:                "http://immich.local:2283",
+				APIKey:             "valid-key",
+				ThresholdMode:      ThresholdModeMBPerMin,
+				SizeThreshold:      "150",
+				Resolution:         "1080p",
+				Preset:             "Fast",
+				VideoQuality:       7,
+				SizeGuard:          true,
+				SkipHEVC:           true,
+				ConcurrentEncoders: 2,
+				EnablePrefetch:     true,
+				LogLevel:           "debug",
+				MaxRetries:         3,
+				ExcludeOptimized:   true,
+				DateAfter:          "2023-01-01",
+				DateBefore:         "2024-01-01",
+				CustomFFmpegFlags:  "-preset fast",
+				LogMaxSizeMB:       15,
+				LogMaxBackups:      7,
+				LogCompress:        false,
+			}
+			if err := SaveConfig(fullCfg); err != nil {
+				t.Fatalf("SaveConfig failed: %v", err)
+			}
+
+			configPath := filepath.Join(tempHome, ".config", "immich-video-optimizer", "config.yaml")
+			contentBytes, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatalf("ReadFile failed: %v", err)
+			}
+
+			// Remove the target key line from yaml
+			var filteredLines []string
+			for _, line := range strings.Split(string(contentBytes), "\n") {
+				if strings.HasPrefix(strings.TrimSpace(line), missingKey+":") {
+					continue
+				}
+				filteredLines = append(filteredLines, line)
+			}
+			if err := os.WriteFile(configPath, []byte(strings.Join(filteredLines, "\n")), 0644); err != nil {
+				t.Fatalf("WriteFile failed: %v", err)
+			}
+
+			// Verify key is currently absent from file
+			tamperedContent, _ := os.ReadFile(configPath)
+			if strings.Contains(string(tamperedContent), missingKey+":") {
+				t.Fatalf("Failed to remove key %s from test file", missingKey)
+			}
+
+			// LoadConfig should auto-heal and rewrite config.yaml with default
+			loaded, err := LoadConfig()
+			if err != nil {
+				t.Fatalf("LoadConfig failed: %v", err)
+			}
+			if loaded == nil {
+				t.Fatalf("LoadConfig returned nil")
+			}
+
+			// Check file on disk was rewritten containing the missing key
+			healedContentBytes, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatalf("ReadFile after LoadConfig failed: %v", err)
+			}
+			healedContent := string(healedContentBytes)
+			if !strings.Contains(healedContent, missingKey+":") {
+				t.Errorf("Config auto-healing failed: key %q was not restored in %s", missingKey, configPath)
+			}
+		})
+	}
+}
+
+func TestLoadConfig_RepairsInvalidValues(t *testing.T) {
+	tempHome := t.TempDir()
+	origHome := userHomeDir
+	userHomeDir = func() (string, error) {
+		return tempHome, nil
+	}
+	defer func() {
+		userHomeDir = origHome
+	}()
+
+	configDir := filepath.Join(tempHome, ".config", "immich-video-optimizer")
+	_ = os.MkdirAll(configDir, 0700)
+	configPath := filepath.Join(configDir, "config.yaml")
+
+	invalidYaml := `url: "http://example.com"
+api_key: "abc"
+threshold_mode: "bogus_mode"
+size_threshold: ""
+resolution: ""
+preset: ""
+video_quality: 99
+size_guard: true
+skip_hevc: true
+concurrent_encoders: -5
+enable_prefetch: true
+log_level: "invalid_level"
+max_retries: -1
+exclude_optimized: true
+date_after: ""
+date_before: ""
+custom_ffmpeg_flags: ""
+log_max_size_mb: -10
+log_max_backups: -3
+log_compress: true
+`
+	if err := os.WriteFile(configPath, []byte(invalidYaml), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	loaded, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	if loaded.ThresholdMode != ThresholdModeMBPerMin {
+		t.Errorf("expected repaired ThresholdMode %q, got %q", ThresholdModeMBPerMin, loaded.ThresholdMode)
+	}
+	if loaded.Preset != "Medium" {
+		t.Errorf("expected repaired Preset 'Medium', got %q", loaded.Preset)
+	}
+	if loaded.Resolution != "Original" {
+		t.Errorf("expected repaired Resolution 'Original', got %q", loaded.Resolution)
+	}
+	if loaded.VideoQuality != 10 {
+		t.Errorf("expected clamped VideoQuality 10, got %d", loaded.VideoQuality)
+	}
+	if loaded.ConcurrentEncoders != 1 {
+		t.Errorf("expected repaired ConcurrentEncoders 1, got %d", loaded.ConcurrentEncoders)
+	}
+	if loaded.LogLevel != "info" {
+		t.Errorf("expected repaired LogLevel 'info', got %q", loaded.LogLevel)
+	}
+	if loaded.MaxRetries != 2 {
+		t.Errorf("expected repaired MaxRetries 2, got %d", loaded.MaxRetries)
+	}
+	if loaded.LogMaxSizeMB != 10 {
+		t.Errorf("expected repaired LogMaxSizeMB 10, got %d", loaded.LogMaxSizeMB)
+	}
+	if loaded.LogMaxBackups != 5 {
+		t.Errorf("expected repaired LogMaxBackups 5, got %d", loaded.LogMaxBackups)
+	}
+
+	// Verify the file on disk was rewritten with the repaired values
+	repairedBytes, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("failed to read repaired file: %v", err)
+	}
+	repairedStr := string(repairedBytes)
+	if strings.Contains(repairedStr, "concurrent_encoders: -5") {
+		t.Errorf("file still contains invalid concurrent_encoders: %s", repairedStr)
+	}
+	if strings.Contains(repairedStr, "log_max_size_mb: -10") {
+		t.Errorf("file still contains invalid log_max_size_mb: %s", repairedStr)
+	}
+}
+
 
 
 
