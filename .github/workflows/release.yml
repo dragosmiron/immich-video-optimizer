@@ -18,7 +18,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          fetch-tags: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -66,7 +65,9 @@ jobs:
       - name: Extract tag annotation
         id: tag_info
         run: |
+          git fetch --tags --force
           git tag -l --format='%(contents)' "${{ github.ref_name }}" > release-notes.md
+          cat release-notes.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
