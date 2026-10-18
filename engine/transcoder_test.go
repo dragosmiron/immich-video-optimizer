@@ -23,7 +23,7 @@ func TestBuildFFmpegArgs(t *testing.T) {
 				Encoder:   "libx265",
 				AudioCopy: false,
 			},
-			expected: []string{"-y", "-i", "in.mp4", "-c:v", "libx265", "-tag:v", "hvc1", "-c:a", "aac", "-b:a", "192k", "out.mp4"},
+			expected: []string{"-y", "-i", "in.mp4", "-c:v", "libx265", "-tag:v", "hvc1", "-vf", "scale='trunc(iw/2)*2':'trunc(ih/2)*2'", "-c:a", "aac", "-b:a", "192k", "out.mp4"},
 		},
 		{
 			name: "Videotoolbox with CRF",
@@ -35,7 +35,7 @@ func TestBuildFFmpegArgs(t *testing.T) {
 				CRF:       28,
 				Preset:    "medium",
 			},
-			expected: []string{"-y", "-i", "in.mp4", "-c:v", "hevc_videotoolbox", "-tag:v", "hvc1", "-allow_sw", "1", "-preset", "medium", "-q:v", "65", "-c:a", "copy", "out.mp4"},
+			expected: []string{"-y", "-i", "in.mp4", "-c:v", "hevc_videotoolbox", "-tag:v", "hvc1", "-allow_sw", "1", "-preset", "medium", "-q:v", "65", "-vf", "scale='trunc(iw/2)*2':'trunc(ih/2)*2'", "-c:a", "copy", "out.mp4"},
 		},
 		{
 			name: "libx265 with CRF",
@@ -46,7 +46,7 @@ func TestBuildFFmpegArgs(t *testing.T) {
 				AudioCopy: true,
 				CRF:       23,
 			},
-			expected: []string{"-y", "-i", "in.mp4", "-c:v", "libx265", "-tag:v", "hvc1", "-crf", "23", "-c:a", "copy", "out.mp4"},
+			expected: []string{"-y", "-i", "in.mp4", "-c:v", "libx265", "-tag:v", "hvc1", "-crf", "23", "-vf", "scale='trunc(iw/2)*2':'trunc(ih/2)*2'", "-c:a", "copy", "out.mp4"},
 		},
 		{
 			name: "With 1080p Resolution limit",
@@ -57,7 +57,7 @@ func TestBuildFFmpegArgs(t *testing.T) {
 				AudioCopy:  true,
 				Resolution: "1080p",
 			},
-			expected: []string{"-y", "-i", "in.mp4", "-c:v", "hevc_videotoolbox", "-tag:v", "hvc1", "-allow_sw", "1", "-vf", "scale='if(gt(iw,ih),-2,min(iw,1080))':'if(gt(iw,ih),min(ih,1080),-2)'", "-c:a", "copy", "out.mp4"},
+			expected: []string{"-y", "-i", "in.mp4", "-c:v", "hevc_videotoolbox", "-tag:v", "hvc1", "-allow_sw", "1", "-vf", "scale='if(gt(iw,ih),-2,trunc(min(iw,1080)/2)*2)':'if(gt(iw,ih),trunc(min(ih,1080)/2)*2,-2)'", "-c:a", "copy", "out.mp4"},
 		},
 		{
 			name: "hevc_nvenc with CRF and Preset",
@@ -69,7 +69,7 @@ func TestBuildFFmpegArgs(t *testing.T) {
 				CRF:       28,
 				Preset:    "medium",
 			},
-			expected: []string{"-y", "-i", "in.mp4", "-c:v", "hevc_nvenc", "-tag:v", "hvc1", "-preset", "medium", "-cq", "28", "-b:v", "0", "-c:a", "copy", "out.mp4"},
+			expected: []string{"-y", "-i", "in.mp4", "-c:v", "hevc_nvenc", "-tag:v", "hvc1", "-preset", "medium", "-cq", "28", "-b:v", "0", "-vf", "scale='trunc(iw/2)*2':'trunc(ih/2)*2'", "-c:a", "copy", "out.mp4"},
 		},
 		{
 			name: "hevc_vaapi with CRF",
@@ -80,7 +80,7 @@ func TestBuildFFmpegArgs(t *testing.T) {
 				AudioCopy: true,
 				CRF:       28,
 			},
-			expected: []string{"-vaapi_device", "/dev/dri/renderD128", "-y", "-i", "in.mp4", "-c:v", "hevc_vaapi", "-tag:v", "hvc1", "-qp", "28", "-vf", "format=nv12,hwupload", "-c:a", "copy", "out.mp4"},
+			expected: []string{"-vaapi_device", "/dev/dri/renderD128", "-y", "-i", "in.mp4", "-c:v", "hevc_vaapi", "-tag:v", "hvc1", "-qp", "28", "-vf", "scale='trunc(iw/2)*2':'trunc(ih/2)*2',format=nv12,hwupload", "-c:a", "copy", "out.mp4"},
 		},
 		{
 			name: "No audio option passes -an",
@@ -91,7 +91,7 @@ func TestBuildFFmpegArgs(t *testing.T) {
 				NoAudio: true,
 				CRF:     26,
 			},
-			expected: []string{"-y", "-i", "in.mp4", "-c:v", "libx265", "-tag:v", "hvc1", "-crf", "26", "-an", "out.mp4"},
+			expected: []string{"-y", "-i", "in.mp4", "-c:v", "libx265", "-tag:v", "hvc1", "-crf", "26", "-vf", "scale='trunc(iw/2)*2':'trunc(ih/2)*2'", "-an", "out.mp4"},
 		},
 	}
 
@@ -191,7 +191,7 @@ func TestBuildFFmpegArgs_VAAPI(t *testing.T) {
 	if !strings.Contains(joined, "-qp 28") {
 		t.Errorf("expected -qp 28 in args, got: %s", joined)
 	}
-	if !strings.Contains(joined, "scale='if(gt(iw,ih),-2,min(iw,1080))':'if(gt(iw,ih),min(ih,1080),-2)',format=nv12,hwupload") {
+	if !strings.Contains(joined, "scale='if(gt(iw,ih),-2,trunc(min(iw,1080)/2)*2)':'if(gt(iw,ih),trunc(min(ih,1080)/2)*2,-2)',format=nv12,hwupload") {
 		t.Errorf("expected VAAPI filter with scale and hwupload, got: %s", joined)
 	}
 }

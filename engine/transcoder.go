@@ -95,22 +95,22 @@ func BuildFFmpegArgs(opts TranscodeOptions) []string {
 	if opts.Resolution != "" && opts.Resolution != "Original" {
 		switch opts.Resolution {
 		case "4K":
-			scale = "'if(gt(iw,ih),-2,min(iw,2160))':'if(gt(iw,ih),min(ih,2160),-2)'"
+			scale = "'if(gt(iw,ih),-2,trunc(min(iw,2160)/2)*2)':'if(gt(iw,ih),trunc(min(ih,2160)/2)*2,-2)'"
 		case "1440p":
-			scale = "'if(gt(iw,ih),-2,min(iw,1440))':'if(gt(iw,ih),min(ih,1440),-2)'"
+			scale = "'if(gt(iw,ih),-2,trunc(min(iw,1440)/2)*2)':'if(gt(iw,ih),trunc(min(ih,1440)/2)*2,-2)'"
 		case "1080p":
-			scale = "'if(gt(iw,ih),-2,min(iw,1080))':'if(gt(iw,ih),min(ih,1080),-2)'"
+			scale = "'if(gt(iw,ih),-2,trunc(min(iw,1080)/2)*2)':'if(gt(iw,ih),trunc(min(ih,1080)/2)*2,-2)'"
 		case "720p":
-			scale = "'if(gt(iw,ih),-2,min(iw,720))':'if(gt(iw,ih),min(ih,720),-2)'"
+			scale = "'if(gt(iw,ih),-2,trunc(min(iw,720)/2)*2)':'if(gt(iw,ih),trunc(min(ih,720)/2)*2,-2)'"
 		}
+	} else {
+		// Even for "Original" or unspecified resolution, guard against odd dimensions
+		// which break HEVC encoders with YUV420p chroma subsampling.
+		scale = "'trunc(iw/2)*2':'trunc(ih/2)*2'"
 	}
 
 	if opts.Encoder == "hevc_vaapi" {
-		if scale != "" {
-			args = append(args, "-vf", fmt.Sprintf("scale=%s,format=nv12,hwupload", scale))
-		} else {
-			args = append(args, "-vf", "format=nv12,hwupload")
-		}
+		args = append(args, "-vf", fmt.Sprintf("scale=%s,format=nv12,hwupload", scale))
 	} else if scale != "" {
 		args = append(args, "-vf", "scale="+scale)
 	}
