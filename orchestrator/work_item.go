@@ -18,6 +18,7 @@ type WorkItem struct {
 	Skipped        bool
 	SkipReason     string
 	Err            error
+	Fallback       FallbackInfo
 
 	cleanupOnce sync.Once
 }

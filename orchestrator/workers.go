@@ -118,6 +118,24 @@ func (p *Pipeline) startTranscoders(ctx context.Context, numEncoders int, transc
 					Preset:              preset,
 					Resolution:          p.cfg.Resolution,
 					CustomFlags:         p.cfg.CustomFFmpegFlags,
+					OnFallback: func(failedEncoder string, err error) {
+						reason := ""
+						if err != nil {
+							reason = err.Error()
+						}
+						item.Fallback = FallbackInfo{
+							Used:          true,
+							FailedEncoder: failedEncoder,
+							Reason:        reason,
+						}
+						emit(PipelineFallbackMsg{
+							WorkerID:      wID,
+							VideoID:       item.Asset.ID,
+							VideoName:     item.Asset.OriginalFileName,
+							FailedEncoder: failedEncoder,
+							Reason:        reason,
+						})
+					},
 				}
 
 				onProgress := func(prog engine.Progress) {
@@ -397,6 +415,7 @@ func (p *Pipeline) runUploader(ctx context.Context, uploadQueue <-chan *WorkItem
 			OriginalSize:  item.Asset.GetSize(),
 			OptimizedSize: item.OptimizedSize,
 			SavedBytes:    item.SavedBytes,
+			Fallback:      item.Fallback,
 		})
 	}
 }

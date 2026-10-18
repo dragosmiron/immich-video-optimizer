@@ -599,6 +599,179 @@ func TestBuildFFmpegArgs_WithCustomFlags(t *testing.T) {
 	}
 }
 
+func TestSplitShellArgs_EqualsSyntax(t *testing.T) {
+	input := `-preset=slow -crf=18 -vf="scale=1280:720, fps=30" -x265-params crf=18:keyint=60`
+	args, err := SplitShellArgs(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	expected := []string{"-preset", "slow", "-crf", "18", "-vf", "scale=1280:720, fps=30", "-x265-params", "crf=18:keyint=60"}
+	if len(args) != len(expected) {
+		t.Fatalf("expected %d args, got %d: %v", len(expected), len(args), args)
+	}
+	for i := range expected {
+		if args[i] != expected[i] {
+			t.Errorf("arg[%d] expected %q, got %q", i, expected[i], args[i])
+		}
+	}
+}
+
+func TestBuildFFmpegArgs_480pAndUnknownResolution(t *testing.T) {
+	// 1. 480p with libx265
+	opts480p := TranscodeOptions{
+		Input:      "in.mp4",
+		Output:     "out.mp4",
+		Encoder:    "libx265",
+		Resolution: "480p",
+	}
+	args := BuildFFmpegArgs(opts480p)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "min(iw,480)") {
+		t.Errorf("expected 480p scale filter in args, got: %s", joined)
+	}
+
+	// 2. 480p with hevc_vaapi
+	optsVAAPI480 := TranscodeOptions{
+		Input:      "in.mp4",
+		Output:     "out.mp4",
+		Encoder:    "hevc_vaapi",
+		Resolution: "480p",
+	}
+	vaapiArgs := BuildFFmpegArgs(optsVAAPI480)
+	vaapiJoined := strings.Join(vaapiArgs, " ")
+	if strings.Contains(vaapiJoined, "scale=,format") {
+		t.Errorf("scale=,format syntax error found in VAAPI args: %s", vaapiJoined)
+	}
+	if !strings.Contains(vaapiJoined, "format=nv12,hwupload") {
+		t.Errorf("expected format=nv12,hwupload in VAAPI args: %s", vaapiJoined)
+	}
+
+	// 3. Unknown resolution fallback
+	optsUnknown := TranscodeOptions{
+		Input:      "in.mp4",
+		Output:     "out.mp4",
+		Encoder:    "hevc_vaapi",
+		Resolution: "unknown_custom_res",
+	}
+	unkArgs := BuildFFmpegArgs(optsUnknown)
+	unkJoined := strings.Join(unkArgs, " ")
+	if strings.Contains(unkJoined, "scale=,format") {
+		t.Errorf("scale=,format syntax error found on unknown resolution: %s", unkJoined)
+	}
+	if !strings.Contains(unkJoined, "trunc(iw/2)*2") {
+		t.Errorf("expected safe even-dimension fallback for unknown resolution: %s", unkJoined)
+	}
+}
+
+func TestMergeFFmpegArgs_CustomVFWithVAAPI(t *testing.T) {
+	base := []string{
+		"-y", "-vaapi_device", "/dev/dri/renderD128", "-i", "input.mp4",
+		"-c:v", "hevc_vaapi", "-tag:v", "hvc1",
+		"-vf", "scale='trunc(iw/2)*2':'trunc(ih/2)*2',format=nv12,hwupload",
+		"-qp", "28",
+		"output.mp4",
+	}
+
+	// Custom flag overrides filter without hwupload
+	custom := []string{"-vf", "fps=30"}
+	res := MergeFFmpegArgs(base, custom)
+	joined := strings.Join(res.Merged, " ")
+
+	if !strings.Contains(joined, "-vf fps=30,format=nv12,hwupload") {
+		t.Errorf("expected custom filter to preserve hardware upload, got: %s", joined)
+	}
+}
+
+func TestMergeFFmpegArgs_EncoderChangeDropsVideoToolboxQ(t *testing.T) {
+	base := []string{
+		"-y", "-i", "input.mp4",
+		"-c:v", "hevc_videotoolbox", "-tag:v", "hvc1",
+		"-allow_sw", "1",
+		"-q:v", "65",
+		"output.mp4",
+	}
+
+	// Custom switches encoder to libx265 without custom quality flag
+	custom := []string{"-c:v", "libx265"}
+	res := MergeFFmpegArgs(base, custom)
+	joined := strings.Join(res.Merged, " ")
+
+	if strings.Contains(joined, "-q:v") {
+		t.Errorf("expected -q:v to be dropped when switching to libx265, got: %s", joined)
+	}
+	if strings.Contains(joined, "-allow_sw") {
+		t.Errorf("expected -allow_sw to be dropped, got: %s", joined)
+	}
+}
+
+func TestMergeFFmpegArgs_TrailingFlagNotOutput(t *testing.T) {
+	base := []string{"-i", "input.mp4", "-preset", "medium"}
+	custom := []string{"-threads", "4"}
+	res := MergeFFmpegArgs(base, custom)
+	joined := strings.Join(res.Merged, " ")
+
+	if !strings.Contains(joined, "-preset medium") {
+		t.Errorf("expected '-preset medium' to stay intact, got: %s", joined)
+	}
+	if strings.HasSuffix(joined, "medium") {
+		t.Errorf("medium should not be treated as output path at end of command, got: %s", joined)
+	}
+}
+
+func TestTranscode_FallbackWithCustomFlagsAndCallback(t *testing.T) {
+	tempDir := t.TempDir()
+	fakeFFmpeg := filepath.Join(tempDir, "fake_ffmpeg")
+
+	// Script that fails if broken_nvenc is passed, but succeeds if libx265 is passed
+	script := `#!/bin/sh
+for arg do
+	if [ "$arg" = "broken_nvenc" ]; then
+		echo "GPU initialization failed / broken_nvenc" >&2
+		exit 1
+	fi
+	last_arg="$arg"
+done
+echo "libx265 success" > "$last_arg"
+exit 0
+`
+	if err := os.WriteFile(fakeFFmpeg, []byte(script), 0755); err != nil {
+		t.Fatalf("failed to create fake ffmpeg: %v", err)
+	}
+
+	inFile := filepath.Join(tempDir, "input.mp4")
+	_ = os.WriteFile(inFile, []byte("input"), 0644)
+	outFile := filepath.Join(tempDir, "output.mp4")
+
+	callbackFired := false
+	var failedEnc string
+	opts := TranscodeOptions{
+		Input:       inFile,
+		Output:      outFile,
+		Encoder:     "broken_nvenc",
+		CustomFlags: "-c:v broken_nvenc",
+		OnFallback: func(encoder string, err error) {
+			callbackFired = true
+			failedEnc = encoder
+		},
+	}
+
+	err := Transcode(context.Background(), fakeFFmpeg, opts, nil)
+	if err != nil {
+		t.Fatalf("expected fallback to CPU libx265 to succeed, got error: %v", err)
+	}
+	if !callbackFired {
+		t.Errorf("expected OnFallback callback to fire")
+	}
+	if failedEnc != "broken_nvenc" {
+		t.Errorf("expected failedEnc 'broken_nvenc', got: %s", failedEnc)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil || !strings.Contains(string(data), "libx265 success") {
+		t.Errorf("expected output to be written by libx265 fallback, got: %s", string(data))
+	}
+}
+
 
 
 

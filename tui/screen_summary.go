@@ -84,11 +84,20 @@ func (m *AppModel) viewSummary() string {
 				} else {
 					savedBadge = fmt.Sprintf("+%s, +%.1f%%", formatByteSize(-tv.SavedBytes), -pct)
 				}
-				b.WriteString(fmt.Sprintf("    • %-32s  %s ➔ %s  (%s)\n",
+				fallbackTag := ""
+				if tv.Fallback.Used {
+					if tv.Fallback.FailedEncoder != "" {
+						fallbackTag = "  " + styles.WarningText.Render(fmt.Sprintf("[CPU Fallback: %s failed]", tv.Fallback.FailedEncoder))
+					} else {
+						fallbackTag = "  " + styles.WarningText.Render("[CPU Fallback]")
+					}
+				}
+				b.WriteString(fmt.Sprintf("    • %-32s  %s ➔ %s  (%s)%s\n",
 					truncate(tv.Name, 32),
 					formatByteSize(tv.OriginalSize),
 					formatByteSize(tv.NewSize),
 					styles.SuccessText.Render(savedBadge),
+					fallbackTag,
 				))
 			}
 			b.WriteString("\n")

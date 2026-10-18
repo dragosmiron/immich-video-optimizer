@@ -2275,4 +2275,74 @@ func TestAppModel_SummarySizeGuardDelta(t *testing.T) {
 	}
 }
 
+func TestAppModel_PipelineFallbackNotificationAndSummary(t *testing.T) {
+	cfg := config.DefaultConfig()
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+
+	// 1. Simulate PipelineFallbackMsg
+	fallbackMsg := orchestrator.PipelineFallbackMsg{
+		WorkerID:      1,
+		VideoID:       "vid-fallback",
+		VideoName:     "clip.mov",
+		FailedEncoder: "hevc_videotoolbox",
+		Reason:        "encoder hardware reset",
+	}
+
+	newM, _ := m.Update(fallbackMsg)
+	m = newM.(*AppModel)
+
+	// Verify log contains fallback warning
+	foundLog := false
+	for _, l := range m.logMessages {
+		if strings.Contains(l, "clip.mov: hevc_videotoolbox failed") && strings.Contains(l, "falling back to CPU encoder libx265") {
+			foundLog = true
+			break
+		}
+	}
+	if !foundLog {
+		t.Errorf("expected dashboard logs to contain fallback warning, got logs: %v", m.logMessages)
+	}
+
+	// Verify worker status reflects fallback
+	w := m.getWorker(1)
+	if !w.UsedCPUFallback {
+		t.Errorf("expected worker 1 to have UsedCPUFallback true")
+	}
+
+	// Verify dashboard view renders worker fallback label
+	w.Stage = "transcoding"
+	w.VideoName = "clip.mov"
+	m.currentTranscodeName = "clip.mov"
+	dashboardView := m.viewDashboard()
+	if !strings.Contains(dashboardView, "libx265 (CPU Fallback)") {
+		t.Errorf("expected dashboard view to contain 'libx265 (CPU Fallback)', got: %s", dashboardView)
+	}
+
+	// 2. Simulate VideoCompleteMsg with Fallback.Used = true
+	completeMsg := orchestrator.PipelineVideoCompleteMsg{
+		WorkerID:      1,
+		VideoID:       "vid-fallback",
+		VideoName:     "clip.mov",
+		OriginalSize:  100 * 1024 * 1024,
+		OptimizedSize: 40 * 1024 * 1024,
+		SavedBytes:    60 * 1024 * 1024,
+		Fallback: orchestrator.FallbackInfo{
+			Used:          true,
+			FailedEncoder: "hevc_videotoolbox",
+			Reason:        "encoder hardware reset",
+		},
+	}
+
+	newM, _ = m.Update(completeMsg)
+	m = newM.(*AppModel)
+
+	// Verify summary screen displays [CPU Fallback: hevc_videotoolbox failed] badge
+	m.state = ViewSummary
+	summary := m.viewSummary()
+	if !strings.Contains(summary, "[CPU Fallback: hevc_videotoolbox failed]") {
+		t.Errorf("expected summary screen to display '[CPU Fallback: hevc_videotoolbox failed]' badge, got: %s", summary)
+	}
+}
+
 

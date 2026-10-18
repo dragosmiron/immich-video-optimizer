@@ -335,12 +335,21 @@ func LoadConfig() (*Config, error) {
 	}
 
 	if needsSave {
-		_ = SaveConfig(&cfg)
+		if configFile := v.ConfigFileUsed(); configFile != "" {
+			_ = SaveConfigToPath(&cfg, configFile)
+		} else {
+			_ = SaveConfig(&cfg)
+		}
 	}
 	return &cfg, nil
 }
 
 func SaveConfig(cfg *Config) error {
+	return SaveConfigToPath(cfg, "")
+}
+
+// SaveConfigToPath saves the configuration to a specific target file path, or defaults to ~/.config/immich-video-optimizer/config.yaml if targetPath is empty.
+func SaveConfigToPath(cfg *Config, targetPath string) error {
 	cfg.URL = strings.TrimSpace(cfg.URL)
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
 	cfg.ThresholdMode = NormalizeThresholdMode(cfg.ThresholdMode)
@@ -397,6 +406,13 @@ func SaveConfig(cfg *Config) error {
 	v.Set("log_max_size_mb", cfg.LogMaxSizeMB)
 	v.Set("log_max_backups", cfg.LogMaxBackups)
 	v.Set("log_compress", cfg.LogCompress)
+
+	if targetPath != "" {
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0700); err != nil {
+			return err
+		}
+		return v.WriteConfigAs(targetPath)
+	}
 
 	home, err := userHomeDir()
 	if err != nil {

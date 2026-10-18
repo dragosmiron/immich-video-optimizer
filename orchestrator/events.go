@@ -31,6 +31,20 @@ type PipelineProgressMsg struct {
 	EngineProgress engine.Progress
 }
 
+type FallbackInfo struct {
+	Used          bool
+	FailedEncoder string
+	Reason        string
+}
+
+type PipelineFallbackMsg struct {
+	WorkerID      int
+	VideoID       string
+	VideoName     string
+	FailedEncoder string
+	Reason        string
+}
+
 type PipelineVideoCompleteMsg struct {
 	WorkerID      int
 	VideoID       string
@@ -41,6 +55,7 @@ type PipelineVideoCompleteMsg struct {
 	Skipped       bool
 	SkipReason    string
 	Err           error
+	Fallback      FallbackInfo
 }
 
 type PipelineDoneMsg struct {

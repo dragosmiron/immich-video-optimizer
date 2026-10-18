@@ -47,6 +47,9 @@ func (m *AppModel) viewDashboard() string {
 				if w.OriginalSize > 0 || w.Resolution != "" {
 					b.WriteString(fmt.Sprintf("  (%.1f MB, %s)", float64(w.OriginalSize)/(1024*1024), w.Resolution))
 				}
+				if w.UsedCPUFallback {
+					b.WriteString("  " + styles.WarningText.Render("libx265 (CPU Fallback)"))
+				}
 				b.WriteString("\n")
 				var parts []string
 				if w.Time != "" {
@@ -87,6 +90,10 @@ func (m *AppModel) viewDashboard() string {
 			b.WriteString(fmt.Sprintf("  ⚙ Transcoding: %s", styles.Value.Render(tName)))
 			if m.currentVideoOriginalSize > 0 || m.currentVideoResolution != "" {
 				b.WriteString(fmt.Sprintf("  (%.1f MB, %s)", float64(m.currentVideoOriginalSize)/(1024*1024), m.currentVideoResolution))
+			}
+			w := m.getWorker(1)
+			if w != nil && w.UsedCPUFallback {
+				b.WriteString("  " + styles.WarningText.Render("libx265 (CPU Fallback)"))
 			}
 			b.WriteString("\n")
 			var parts []string

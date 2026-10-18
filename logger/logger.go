@@ -53,7 +53,15 @@ var (
 	rotationConfig                = DefaultRotationConfig()
 	timeNow                       = time.Now
 	testMaxLogBytes int64         = 0
+	lastEnsuredDir string
+	dirMu          sync.Mutex
+	rotationWg     sync.WaitGroup
 )
+
+// WaitForRotation waits for any active asynchronous log rotations to complete.
+func WaitForRotation() {
+	rotationWg.Wait()
+}
 
 // SetRotationConfig configures log rotation size, retention, and compression.
 func SetRotationConfig(cfg RotationConfig) {
@@ -66,13 +74,6 @@ func SetRotationConfig(cfg RotationConfig) {
 		cfg.MaxBackups = 5
 	}
 	rotationConfig = cfg
-}
-
-// GetRotationConfig returns the current log rotation configuration.
-func GetRotationConfig() RotationConfig {
-	fileMu.Lock()
-	defer fileMu.Unlock()
-	return rotationConfig
 }
 
 // SetLevel sets the active logging level.
@@ -116,7 +117,12 @@ func getLogPath(filename string) string {
 		return ""
 	}
 	dir := filepath.Join(home, ".config", "immich-video-optimizer")
-	_ = os.MkdirAll(dir, 0755)
+	dirMu.Lock()
+	if dir != lastEnsuredDir {
+		_ = os.MkdirAll(dir, 0755)
+		lastEnsuredDir = dir
+	}
+	dirMu.Unlock()
 	return filepath.Join(dir, filename)
 }
 
@@ -171,22 +177,28 @@ func rotateAndArchive(path, filename string, cfg RotationConfig) {
 		archivePath = filepath.Join(dir, archiveName)
 	}
 
-	if cfg.Compress {
-		if err := compressGzip(rotatingPath, archivePath); err != nil {
-			// If compression fails, fall back to uncompressed rename
-			_ = os.Rename(rotatingPath, filepath.Join(dir, fmt.Sprintf("%s-%s%s", prefix, ts, ext)))
+	uncompFallback := filepath.Join(dir, fmt.Sprintf("%s-%s%s", prefix, ts, ext))
+
+	rotationWg.Add(1)
+	go func() {
+		defer rotationWg.Done()
+		if cfg.Compress {
+			if err := compressGzip(rotatingPath, archivePath); err != nil {
+				// If compression fails, fall back to uncompressed rename
+				_ = os.Rename(rotatingPath, uncompFallback)
+			} else {
+				_ = os.Remove(rotatingPath)
+			}
 		} else {
-			_ = os.Remove(rotatingPath)
+			_ = os.Rename(rotatingPath, archivePath)
 		}
-	} else {
-		_ = os.Rename(rotatingPath, archivePath)
-	}
 
-	// Clean up legacy .1 uncompressed log if present
-	_ = os.Remove(path + ".1")
+		// Clean up legacy .1 uncompressed log if present
+		_ = os.Remove(path + ".1")
 
-	// Enforce MaxBackups retention limit
-	pruneOldArchives(dir, prefix, ext, cfg.MaxBackups)
+		// Enforce MaxBackups retention limit
+		pruneOldArchives(dir, prefix, ext, cfg.MaxBackups)
+	}()
 }
 
 func pruneOldArchives(dir, prefix, ext string, maxBackups int) {

@@ -112,6 +112,7 @@ func TestLogger_Rotation(t *testing.T) {
 
 	// Trigger rotation with a new message
 	Info("new message after rotation")
+	WaitForRotation()
 
 	logDir := filepath.Dir(optLogPath)
 	entries, err := os.ReadDir(logDir)
@@ -196,6 +197,7 @@ func TestLogger_ArchiveRetentionPruning(t *testing.T) {
 		Info("message chunk A for rotation index %d with sufficient length", i)
 		Info("message chunk B for rotation index %d to trigger threshold check", i)
 	}
+	WaitForRotation()
 
 	logDir := filepath.Join(tempDir, ".config", "immich-video-optimizer")
 	entries, err := os.ReadDir(logDir)
@@ -236,6 +238,7 @@ func TestLogger_DisabledCompression(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		Info("uncompressed log line %d with additional text to exceed threshold", i)
 	}
+	WaitForRotation()
 
 	logDir := filepath.Join(tempDir, ".config", "immich-video-optimizer")
 	entries, err := os.ReadDir(logDir)
@@ -300,6 +303,7 @@ func TestLogger_ConcurrentWrites(t *testing.T) {
 	}
 
 	wg.Wait()
+	WaitForRotation()
 
 	// Verify no panics or file corruption
 	optLogPath := filepath.Join(tempDir, ".config", "immich-video-optimizer", "optimizer.log")

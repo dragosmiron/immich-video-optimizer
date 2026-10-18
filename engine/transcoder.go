@@ -26,7 +26,8 @@ type TranscodeOptions struct {
 	VideoToolboxQuality int    // Explicit VideoToolbox -q:v quality override (1..100)
 	Preset              string // Preset string, e.g., "medium", "slow"
 	Resolution          string
-	CustomFlags         string // Custom user-specified FFmpeg arguments or overrides
+	CustomFlags         string                          // Custom user-specified FFmpeg arguments or overrides
+	OnFallback          func(failedEncoder string, err error) // Optional callback triggered when hardware encoder fails and falls back to CPU
 }
 
 // Progress represents the transcoding progress parsed from ffmpeg output
@@ -103,6 +104,10 @@ func BuildFFmpegArgs(opts TranscodeOptions) []string {
 			scale = "'if(gt(iw,ih),-2,trunc(min(iw,1080)/2)*2)':'if(gt(iw,ih),trunc(min(ih,1080)/2)*2,-2)'"
 		case "720p":
 			scale = "'if(gt(iw,ih),-2,trunc(min(iw,720)/2)*2)':'if(gt(iw,ih),trunc(min(ih,720)/2)*2,-2)'"
+		case "480p":
+			scale = "'if(gt(iw,ih),-2,trunc(min(iw,480)/2)*2)':'if(gt(iw,ih),trunc(min(ih,480)/2)*2,-2)'"
+		default:
+			scale = "'trunc(iw/2)*2':'trunc(ih/2)*2'"
 		}
 	} else {
 		// Even for "Original" or unspecified resolution, guard against odd dimensions
@@ -192,7 +197,22 @@ func SplitShellArgs(raw string) ([]string, error) {
 		args = append(args, current.String())
 	}
 
-	return args, nil
+	var splitTokens []string
+	for _, tok := range args {
+		if strings.HasPrefix(tok, "-") && strings.Contains(tok, "=") {
+			eqIdx := strings.Index(tok, "=")
+			flag := tok[:eqIdx]
+			val := tok[eqIdx+1:]
+			splitTokens = append(splitTokens, flag)
+			if val != "" {
+				splitTokens = append(splitTokens, val)
+			}
+		} else {
+			splitTokens = append(splitTokens, tok)
+		}
+	}
+
+	return splitTokens, nil
 }
 
 // MergeResult holds the result of merging base args with custom flags.
@@ -207,6 +227,13 @@ type customArgItem struct {
 	val    string
 	hasVal bool
 	isUsed bool
+}
+
+var encoderQualityFlags = map[string][]string{
+	"libx265":           {"-crf"},
+	"hevc_videotoolbox": {"-q:v"},
+	"hevc_vaapi":        {"-qp"},
+	"hevc_nvenc":        {"-cq", "-b:v"},
 }
 
 // MergeFFmpegArgs merges baseArgs with customArgs, stripping protected flags and replacing base flags.
@@ -298,10 +325,33 @@ func MergeFFmpegArgs(baseArgs []string, customArgs []string) MergeResult {
 		isCustom = append(isCustom, custom)
 	}
 
+	isQualityCompatible := func(enc, flag string) bool {
+		compatibleFlags, ok := encoderQualityFlags[enc]
+		if !ok {
+			return true
+		}
+		for _, f := range compatibleFlags {
+			if f == flag {
+				return true
+			}
+		}
+		return false
+	}
+
 	outputPath := ""
 	if len(baseArgs) > 0 {
-		outputPath = baseArgs[len(baseArgs)-1]
-		baseArgs = baseArgs[:len(baseArgs)-1]
+		last := baseArgs[len(baseArgs)-1]
+		isOutput := !strings.HasPrefix(last, "-")
+		if isOutput && len(baseArgs) >= 2 {
+			prev := baseArgs[len(baseArgs)-2]
+			if strings.HasPrefix(prev, "-") && prev != "-y" && prev != "-n" && prev != "-nostats" && prev != "-an" {
+				isOutput = false
+			}
+		}
+		if isOutput {
+			outputPath = last
+			baseArgs = baseArgs[:len(baseArgs)-1]
+		}
 	}
 
 	for i := 0; i < len(baseArgs); i++ {
@@ -416,6 +466,9 @@ func MergeFFmpegArgs(baseArgs []string, customArgs []string) MergeResult {
 					customQuality.isUsed = true
 				}
 			} else {
+				if customCv != nil && !isQualityCompatible(effectiveEncoder, token) {
+					continue
+				}
 				appendMerged(token, false)
 				if val != "" {
 					appendMerged(val, false)
@@ -434,7 +487,14 @@ func MergeFFmpegArgs(baseArgs []string, customArgs []string) MergeResult {
 			if it, ok := customByFlag["-vf"]; ok {
 				appendMerged("-vf", true)
 				if it.hasVal {
-					appendMerged(it.val, true)
+					customVal := it.val
+					if (effectiveEncoder == "hevc_vaapi" || strings.Contains(val, "hwupload")) && !strings.Contains(customVal, "hwupload") {
+						if !strings.Contains(customVal, "format=nv12") {
+							customVal += ",format=nv12"
+						}
+						customVal += ",hwupload"
+					}
+					appendMerged(customVal, true)
 				}
 				it.isUsed = true
 			} else {
@@ -715,10 +775,14 @@ func Transcode(ctx context.Context, ffmpegPath string, opts TranscodeOptions, on
 		}
 		stderrOutput := strings.TrimSpace(ringBuf.String())
 		if opts.Encoder != "libx265" {
-			logger.Info("Hardware transcode with %s failed for %s (%v); falling back to CPU encoder libx265", opts.Encoder, opts.Input, err)
+			if opts.OnFallback != nil {
+				opts.OnFallback(opts.Encoder, err)
+			}
+			logger.Error("Hardware transcode with %s failed for %s (%v); falling back to CPU encoder libx265", opts.Encoder, opts.Input, err)
 			_ = os.Remove(opts.Output)
 			fallbackOpts := opts
 			fallbackOpts.Encoder = "libx265"
+			fallbackOpts.CustomFlags = ""
 			return Transcode(ctx, ffmpegPath, fallbackOpts, onProgress)
 		}
 		if stderrOutput != "" {

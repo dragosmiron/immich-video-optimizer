@@ -612,6 +612,30 @@ log_compress: true
 	}
 }
 
+func TestSaveConfigToPath(t *testing.T) {
+	tempDir := t.TempDir()
+	customPath := filepath.Join(tempDir, "custom_dir", "custom_config.yaml")
+
+	cfg := &Config{
+		URL:               "http://custom:2283",
+		APIKey:            "custom-key",
+		CustomFFmpegFlags: "-tune grain",
+	}
+
+	err := SaveConfigToPath(cfg, customPath)
+	if err != nil {
+		t.Fatalf("SaveConfigToPath failed: %v", err)
+	}
+
+	data, err := os.ReadFile(customPath)
+	if err != nil {
+		t.Fatalf("failed to read custom config: %v", err)
+	}
+	if !strings.Contains(string(data), "custom:2283") || !strings.Contains(string(data), "-tune grain") {
+		t.Errorf("saved config does not contain expected values: %s", string(data))
+	}
+}
+
 
 
 

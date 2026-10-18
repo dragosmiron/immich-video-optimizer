@@ -19,6 +19,7 @@ import (
 	"immich-video-optimizer/logger"
 	"immich-video-optimizer/orchestrator"
 	"immich-video-optimizer/state"
+	"immich-video-optimizer/tui/styles"
 	"immich-video-optimizer/version"
 )
 
@@ -215,16 +216,27 @@ type AppModel struct {
 
 // TranscoderWorkerStatus holds the live transcoding status of a dedicated worker slot.
 type TranscoderWorkerStatus struct {
-	WorkerID     int
-	VideoID      string
-	VideoName    string
-	OriginalSize int64
-	Resolution   string
-	Stage        string // "transcoding", "metadata", "idle"
-	Time         string
-	Speed        string
-	FPS          float64
-	PulseFrame   int
+	WorkerID        int
+	VideoID         string
+	VideoName       string
+	OriginalSize    int64
+	Resolution      string
+	Stage           string // "transcoding", "metadata", "idle"
+	Time            string
+	Speed           string
+	FPS             float64
+	PulseFrame      int
+	UsedCPUFallback bool
+}
+
+func (w *TranscoderWorkerStatus) reset() {
+	w.Stage = "idle"
+	w.VideoID = ""
+	w.VideoName = ""
+	w.Speed = ""
+	w.FPS = 0
+	w.Time = ""
+	w.UsedCPUFallback = false
 }
 
 // transcodedVideo holds details for a successfully transcoded and replaced video.
@@ -234,6 +246,7 @@ type transcodedVideo struct {
 	OriginalSize int64
 	NewSize      int64
 	SavedBytes   int64
+	Fallback     orchestrator.FallbackInfo
 }
 
 // skippedVideo holds the name, reason and size details for a skipped video.
@@ -616,13 +629,7 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentUploadName = ""
 		case "idle":
 			if msg.WorkerID > 0 {
-				w := m.getWorker(msg.WorkerID)
-				w.Stage = "idle"
-				w.VideoID = ""
-				w.VideoName = ""
-				w.Speed = ""
-				w.FPS = 0
-				w.Time = ""
+				m.getWorker(msg.WorkerID).reset()
 			} else {
 				m.currentDownloadName = ""
 				m.currentTranscodeName = ""
@@ -634,14 +641,26 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.fps = 0
 				m.currentTranscodeTime = ""
 				for _, w := range m.transcoderWorkers {
-					w.Stage = "idle"
-					w.VideoID = ""
-					w.VideoName = ""
-					w.Speed = ""
-					w.FPS = 0
-					w.Time = ""
+					w.reset()
 				}
 			}
+		}
+		return m, waitForPipeline(m.pipelineChan)
+
+	case orchestrator.PipelineFallbackMsg:
+		timeStr := time.Now().Format("15:04:05")
+		reason := strings.TrimSpace(msg.Reason)
+		if len(reason) > 50 {
+			reason = reason[:50] + "..."
+		}
+		if reason != "" {
+			m.addLog(styles.WarningText.Render(fmt.Sprintf("%s - ⚠ %s: %s failed (%s), falling back to CPU encoder libx265", timeStr, msg.VideoName, msg.FailedEncoder, reason)))
+		} else {
+			m.addLog(styles.WarningText.Render(fmt.Sprintf("%s - ⚠ %s: %s failed, falling back to CPU encoder libx265", timeStr, msg.VideoName, msg.FailedEncoder)))
+		}
+		if msg.WorkerID > 0 {
+			w := m.getWorker(msg.WorkerID)
+			w.UsedCPUFallback = true
 		}
 		return m, waitForPipeline(m.pipelineChan)
 
@@ -768,6 +787,7 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				OriginalSize: origSize,
 				NewSize:      newSize,
 				SavedBytes:   msg.SavedBytes,
+				Fallback:     msg.Fallback,
 			})
 			m.addLog(fmt.Sprintf("%s - Completed %s (Saved %.2f MB)", timeStr, completedName, float64(msg.SavedBytes)/1024/1024))
 		}
