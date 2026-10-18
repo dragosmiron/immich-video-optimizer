@@ -319,9 +319,9 @@ exit 0
 		if len(completeMsg.HEVCSkipped) != 1 || completeMsg.HEVCSkipped[0].ID != "asset-hevc" {
 			t.Errorf("expected 1 HEVCSkipped asset (asset-hevc), got: %+v", completeMsg.HEVCSkipped)
 		}
-		// asset-h264 and asset-err should be in ToProcess
-		if len(completeMsg.ToProcess) != 2 {
-			t.Errorf("expected 2 ToProcess assets, got: %d", len(completeMsg.ToProcess))
+		// asset-h264 should be in ToProcess; the failed probe (asset-err) must not be
+		if len(completeMsg.ToProcess) != 1 || completeMsg.ToProcess[0].ID != "asset-h264" {
+			t.Errorf("expected only asset-h264 in ToProcess, got: %+v", completeMsg.ToProcess)
 		}
 		// asset-err should be in ProbeFailed
 		if len(completeMsg.ProbeFailed) != 1 || completeMsg.ProbeFailed[0].ID != "asset-err" {
@@ -365,9 +365,13 @@ exit 0
 		if len(completeMsg.HEVCSkipped) != 0 {
 			t.Errorf("expected 0 HEVCSkipped when SkipHEVC is false, got: %+v", completeMsg.HEVCSkipped)
 		}
-		// All 3 videos must be in ToProcess!
-		if len(completeMsg.ToProcess) != 3 {
-			t.Errorf("expected 3 ToProcess assets when SkipHEVC is false, got: %d", len(completeMsg.ToProcess))
+		// asset-hevc and asset-h264 in ToProcess; asset-err (probe failure) must not be
+		if len(completeMsg.ToProcess) != 2 {
+			t.Errorf("expected 2 ToProcess assets when SkipHEVC is false, got: %d", len(completeMsg.ToProcess))
+		}
+		// asset-err (probe failure) should be in ProbeFailed regardless of SkipHEVC
+		if len(completeMsg.ProbeFailed) != 1 || completeMsg.ProbeFailed[0].ID != "asset-err" {
+			t.Errorf("expected 1 ProbeFailed asset (asset-err), got: %+v", completeMsg.ProbeFailed)
 		}
 	})
 

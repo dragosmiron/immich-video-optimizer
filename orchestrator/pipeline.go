@@ -138,19 +138,7 @@ func (p *Pipeline) DryRunAlbumID() string {
 func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- interface{}) {
 	defer close(ch)
 
-	emit := func(msg interface{}) bool {
-		select {
-		case ch <- msg:
-			return true
-		case <-ctx.Done():
-			select {
-			case ch <- msg:
-				return true
-			default:
-				return false
-			}
-		}
-	}
+	emit := func(msg interface{}) bool { return emitOnContext(ch, ctx, msg) }
 
 	p.runMu.Lock()
 	if p.isRunning {
