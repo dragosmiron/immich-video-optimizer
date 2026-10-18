@@ -11,7 +11,7 @@ import (
 	"immich-video-optimizer/state"
 )
 
-func emitOnContext(ch chan<- interface{}, ctx context.Context, msg interface{}) bool {
+func emitOnContext(ctx context.Context, ch chan<- interface{}, msg interface{}) bool {
 	select {
 	case ch <- msg:
 		return true
@@ -76,7 +76,7 @@ func (p *Pipeline) probeRemotePool(ctx context.Context, videos []immich.Asset, p
 func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan<- interface{}) {
 	defer close(ch)
 
-	emit := func(msg interface{}) bool { return emitOnContext(ch, ctx, msg) }
+	emit := func(msg interface{}) bool { return emitOnContext(ctx, ch, msg) }
 
 	p.CleanDryRunAlbum()
 

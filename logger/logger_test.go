@@ -42,19 +42,9 @@ func TestLogger_CallbackAndFile(t *testing.T) {
 
 	SetLevelString("debug")
 
-	var callbackLogs []string
-	SetCallback(func(level Level, msg string) {
-		callbackLogs = append(callbackLogs, msg)
-	})
-	defer SetCallback(nil)
-
 	Info("info message %d", 1)
 	Debug("debug message %d", 2)
 	Error("error message %d", 3)
-
-	if len(callbackLogs) != 3 {
-		t.Fatalf("expected 3 callback messages, got %d", len(callbackLogs))
-	}
 
 	optLogPath := filepath.Join(tempDir, ".config", "immich-video-optimizer", "optimizer.log")
 	data, err := os.ReadFile(optLogPath)

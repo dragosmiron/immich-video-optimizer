@@ -48,7 +48,6 @@ var (
 	mu             sync.Mutex
 	fileMu         sync.Mutex
 	currentLevel   Level          = LevelInfo
-	tuiCallback    func(level Level, msg string)
 	userHomeDir                   = os.UserHomeDir
 	rotationConfig                = DefaultRotationConfig()
 	timeNow                       = time.Now
@@ -104,12 +103,6 @@ func IsDebug() bool {
 	return GetLevel() == LevelDebug
 }
 
-// SetCallback sets a listener for log events (e.g. for TUI integration).
-func SetCallback(cb func(level Level, msg string)) {
-	mu.Lock()
-	defer mu.Unlock()
-	tuiCallback = cb
-}
 
 func getLogPath(filename string) string {
 	home, err := userHomeDir()
@@ -261,16 +254,6 @@ func writeToFile(filename, line string) {
 // Info logs informational messages.
 func Info(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
-	timestamp := time.Now().Format("15:04:05")
-	formatted := fmt.Sprintf("%s - %s", timestamp, msg)
-
-	mu.Lock()
-	cb := tuiCallback
-	mu.Unlock()
-
-	if cb != nil {
-		cb(LevelInfo, formatted)
-	}
 	writeToFile("optimizer.log", time.Now().Format(time.RFC3339)+" [INFO] "+msg)
 }
 
@@ -280,32 +263,12 @@ func Debug(format string, args ...interface{}) {
 		return
 	}
 	msg := fmt.Sprintf(format, args...)
-	timestamp := time.Now().Format("15:04:05")
-	formatted := fmt.Sprintf("%s - [DEBUG] %s", timestamp, msg)
-
-	mu.Lock()
-	cb := tuiCallback
-	mu.Unlock()
-
-	if cb != nil {
-		cb(LevelDebug, formatted)
-	}
 	writeToFile("optimizer.log", time.Now().Format(time.RFC3339)+" [DEBUG] "+msg)
 }
 
 // Error logs error messages to both optimizer.log and failures.log.
 func Error(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
-	timestamp := time.Now().Format("15:04:05")
-	formatted := fmt.Sprintf("%s - %s", timestamp, msg)
-
-	mu.Lock()
-	cb := tuiCallback
-	mu.Unlock()
-
-	if cb != nil {
-		cb(LevelInfo, formatted)
-	}
 	logLine := time.Now().Format(time.RFC3339) + " [ERROR] " + msg
 	writeToFile("optimizer.log", logLine)
 	writeToFile("failures.log", logLine)

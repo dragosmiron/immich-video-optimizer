@@ -3,7 +3,6 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -72,29 +71,6 @@ func (c *Config) IsDebug() bool {
 	return strings.ToLower(strings.TrimSpace(c.LogLevel)) == "debug"
 }
 
-// SizeThresholdBytes returns the size threshold parsed as bytes.
-func (c *Config) SizeThresholdBytes() int64 {
-	if c == nil {
-		return 0
-	}
-	mb, err := strconv.ParseInt(strings.TrimSpace(c.SizeThreshold), 10, 64)
-	if err != nil || mb < 0 {
-		return 0
-	}
-	return mb * 1024 * 1024
-}
-
-// SizeThresholdMBPerMin returns the bitrate density threshold parsed as MB/min.
-func (c *Config) SizeThresholdMBPerMin() float64 {
-	if c == nil {
-		return 0
-	}
-	val, err := strconv.ParseFloat(strings.TrimSpace(c.SizeThreshold), 64)
-	if err != nil || val < 0 {
-		return 0
-	}
-	return val
-}
 
 // Quality returns the clamped video quality level between 1 and 10 (default: 6).
 func (c *Config) Quality() int {

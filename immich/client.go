@@ -58,11 +58,6 @@ func (c *Client) SetMaxRetries(retries int) {
 	c.maxRetries = retries
 }
 
-// MaxRetries returns the configured maximum retry attempts.
-func (c *Client) MaxRetries() int {
-	return c.maxRetries
-}
-
 // SetTimeout sets a custom timeout for the HTTP client
 func (c *Client) SetTimeout(d time.Duration) {
 	c.httpClient.Timeout = d
@@ -73,11 +68,6 @@ func (c *Client) SetHTTPClient(client *http.Client) {
 	if client != nil {
 		c.httpClient = client
 	}
-}
-
-// HTTPClient returns the underlying HTTP client.
-func (c *Client) HTTPClient() *http.Client {
-	return c.httpClient
 }
 
 // BaseURL returns the configured base URL of the Immich server

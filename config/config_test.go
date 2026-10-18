@@ -108,57 +108,6 @@ func TestSaveConfig_MkdirError(t *testing.T) {
 	}
 }
 
-func TestConfig_SizeThresholdBytes(t *testing.T) {
-	tests := []struct {
-		threshold string
-		expected  int64
-	}{
-		{"500", 500 * 1024 * 1024},
-		{"1024", 1024 * 1024 * 1024},
-		{"0", 0},
-		{"", 0},
-		{"invalid", 0},
-		{"-10", 0},
-	}
-
-	for _, tt := range tests {
-		cfg := &Config{SizeThreshold: tt.threshold}
-		if got := cfg.SizeThresholdBytes(); got != tt.expected {
-			t.Errorf("SizeThresholdBytes() for %q = %d, expected %d", tt.threshold, got, tt.expected)
-		}
-	}
-
-	var nilCfg *Config
-	if got := nilCfg.SizeThresholdBytes(); got != 0 {
-		t.Errorf("nil Config SizeThresholdBytes() = %d, expected 0", got)
-	}
-}
-
-func TestConfig_SizeThresholdMBPerMin(t *testing.T) {
-	tests := []struct {
-		threshold string
-		expected  float64
-	}{
-		{"100", 100},
-		{"120.5", 120.5},
-		{"0", 0},
-		{"", 0},
-		{"invalid", 0},
-		{"-10", 0},
-	}
-
-	for _, tt := range tests {
-		cfg := &Config{SizeThreshold: tt.threshold}
-		if got := cfg.SizeThresholdMBPerMin(); got != tt.expected {
-			t.Errorf("SizeThresholdMBPerMin() for %q = %f, expected %f", tt.threshold, got, tt.expected)
-		}
-	}
-
-	var nilCfg *Config
-	if got := nilCfg.SizeThresholdMBPerMin(); got != 0 {
-		t.Errorf("nil Config SizeThresholdMBPerMin() = %f, expected 0", got)
-	}
-}
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()

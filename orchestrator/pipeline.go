@@ -69,11 +69,6 @@ func NewPipelineWithBinaries(cfg *config.Config, binaries *engine.BinaryManager)
 	}, nil
 }
 
-func (p *Pipeline) SetClient(client *immich.Client) {
-	if client != nil {
-		p.client = client
-	}
-}
 
 func (p *Pipeline) UpdateConfig(cfg *config.Config) {
 	p.cfg = cfg
@@ -146,7 +141,7 @@ func (p *Pipeline) DryRunAlbumID() string {
 func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- interface{}) {
 	defer close(ch)
 
-	emit := func(msg interface{}) bool { return emitOnContext(ch, ctx, msg) }
+	emit := func(msg interface{}) bool { return emitOnContext(ctx, ch, msg) }
 
 	p.runMu.Lock()
 	if p.isRunning {
