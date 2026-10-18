@@ -145,8 +145,8 @@ func rotateAndArchive(path, filename string, cfg RotationConfig) {
 	ext := filepath.Ext(filename)
 	prefix := strings.TrimSuffix(filename, ext)
 
-	rotatingPath := path + ".rotating"
-	_ = os.Remove(rotatingPath)
+	rotID := time.Now().UnixNano()
+	rotatingPath := fmt.Sprintf("%s.rotating-%d", path, rotID)
 	if err := os.Rename(path, rotatingPath); err != nil {
 		return
 	}

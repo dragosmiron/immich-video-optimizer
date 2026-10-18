@@ -180,14 +180,15 @@ func TestLogger_ArchiveRetentionPruning(t *testing.T) {
 
 	// Perform 6 rotations with distinct simulated timestamps
 	for i := 0; i < 6; i++ {
+		idx := i
 		timeNow = func() time.Time {
-			return baseTime.Add(time.Duration(i) * time.Hour)
+			return baseTime.Add(time.Duration(idx) * time.Hour)
 		}
 		// Write enough to exceed 100 bytes
 		Info("message chunk A for rotation index %d with sufficient length", i)
 		Info("message chunk B for rotation index %d to trigger threshold check", i)
+		WaitForRotation()
 	}
-	WaitForRotation()
 
 	logDir := filepath.Join(tempDir, ".config", "immich-video-optimizer")
 	entries, err := os.ReadDir(logDir)
