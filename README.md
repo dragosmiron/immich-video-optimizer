@@ -115,6 +115,8 @@ To help you verify your videos in Immich, the app creates a temporary tracking a
 
 ## 📄 Troubleshooting & License
 
-- **Logs:** `~/.config/immich-video-optimizer/optimizer.log`
+- **Logs:** `~/.config/immich-video-optimizer/optimizer.log` (automatically rotated and compressed to `optimizer-<timestamp>.log.gz` when exceeding 10MB; retains up to 5 archives by default to save space).
+- **Failures:** `~/.config/immich-video-optimizer/failures.log` (tracks error events with matching rotation).
+- **Configuration Auto-Healing:** `~/.config/immich-video-optimizer/config.yaml` automatically restores missing or deleted keys with default values and normalizes invalid settings.
 - **Tests:** `go test -v ./... && go vet ./...`
 - **License:** [GNU Affero General Public License v3.0 (AGPL-3.0)](LICENSE)

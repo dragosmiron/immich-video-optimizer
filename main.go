@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"immich-video-optimizer/config"
+	"immich-video-optimizer/logger"
 	"immich-video-optimizer/orchestrator"
 	"immich-video-optimizer/tui"
 	"immich-video-optimizer/version"
@@ -36,6 +37,13 @@ func main() {
 	if err != nil || cfg == nil {
 		cfg = config.DefaultConfig()
 	}
+
+	logger.SetLevelString(cfg.LogLevel)
+	logger.SetRotationConfig(logger.RotationConfig{
+		MaxSizeMB:  cfg.LogMaxSizeMB,
+		MaxBackups: cfg.LogMaxBackups,
+		Compress:   cfg.LogCompress,
+	})
 
 	pipeline, err := orchestrator.NewPipeline(cfg)
 	if err != nil {

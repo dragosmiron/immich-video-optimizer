@@ -285,6 +285,11 @@ func (m *AppModel) findWorker(workerID int, videoID string) *TranscoderWorkerSta
 
 func NewAppModel(cfg *config.Config, pipeline *orchestrator.Pipeline, opts ...Option) *AppModel {
 	logger.SetLevelString(cfg.LogLevel)
+	logger.SetRotationConfig(logger.RotationConfig{
+		MaxSizeMB:  cfg.LogMaxSizeMB,
+		MaxBackups: cfg.LogMaxBackups,
+		Compress:   cfg.LogCompress,
+	})
 	sess, _ := state.LoadSession()
 
 	// Initial State:
