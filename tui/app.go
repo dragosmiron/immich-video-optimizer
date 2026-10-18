@@ -157,6 +157,8 @@ type AppModel struct {
 	dateAfterInput  textinput.Model // Start Date (After) in Settings
 	dateBeforeInput textinput.Model // End Date (Before) in Settings
 	dateError       string          // inline validation error for date inputs
+	customFlagsInput textinput.Model // Custom FFmpeg flags in Settings (Tab 3: Advanced)
+	customFlagsError string          // inline validation error for custom flags
 
 	// Dashboard
 	ctx                     context.Context
@@ -234,10 +236,12 @@ type transcodedVideo struct {
 	SavedBytes   int64
 }
 
-// skippedVideo holds the name and reason for a skipped video.
+// skippedVideo holds the name, reason and size details for a skipped video.
 type skippedVideo struct {
-	Name   string
-	Reason string
+	Name          string
+	Reason        string
+	OriginalSize  int64
+	OptimizedSize int64
 }
 
 // failureEntry holds the video ID, name and error message for a failed video.
@@ -333,6 +337,12 @@ func NewAppModel(cfg *config.Config, pipeline *orchestrator.Pipeline, opts ...Op
 	dbi.CharLimit = 10
 	dbi.Width = 28
 
+	cfi := textinput.New()
+	cfi.Placeholder = "e.g. -preset slow -tune animation"
+	cfi.SetValue(cfg.CustomFFmpegFlags)
+	cfi.CharLimit = 256
+	cfi.Width = 60
+
 	// Search input
 	si := textinput.New()
 	si.Placeholder = "Filter by filename..."
@@ -370,6 +380,7 @@ func NewAppModel(cfg *config.Config, pipeline *orchestrator.Pipeline, opts ...Op
 		thresholdInput: thi,
 		dateAfterInput: dai,
 		dateBeforeInput: dbi,
+		customFlagsInput: cfi,
 		setupFocus:     0,
 		table:          t,
 		searchInput:    si,
@@ -710,8 +721,28 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.SkipReason != "" {
 				reason = msg.SkipReason
 			}
-			m.skippedVideos = append(m.skippedVideos, skippedVideo{Name: completedName, Reason: reason})
-			m.addLog(fmt.Sprintf("%s - Skipped %s (%s)", timeStr, completedName, reason))
+			origSize := msg.OriginalSize
+			if origSize == 0 {
+				for _, v := range m.videos {
+					if v.ID == msg.VideoID {
+						origSize = v.GetSize()
+						break
+					}
+				}
+			}
+			m.skippedVideos = append(m.skippedVideos, skippedVideo{
+				Name:          completedName,
+				Reason:        reason,
+				OriginalSize:  origSize,
+				OptimizedSize: msg.OptimizedSize,
+			})
+			if reason == "transcoded file larger" && msg.OptimizedSize >= origSize && origSize > 0 {
+				diff := msg.OptimizedSize - origSize
+				m.addLog(fmt.Sprintf("%s - Skipped %s (Size Guard: transcoded %s > original %s, +%s)",
+					timeStr, completedName, formatByteSize(msg.OptimizedSize), formatByteSize(origSize), formatByteSize(diff)))
+			} else {
+				m.addLog(fmt.Sprintf("%s - Skipped %s (%s)", timeStr, completedName, reason))
+			}
 		} else {
 			origSize := msg.OriginalSize
 			if origSize == 0 {

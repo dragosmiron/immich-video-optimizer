@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"immich-video-optimizer/config"
+	"immich-video-optimizer/engine"
 	"immich-video-optimizer/logger"
 	"immich-video-optimizer/tui/styles"
 )
@@ -19,7 +20,7 @@ func (m *AppModel) viewSettings() string {
 	b.WriteString("\n\n")
 
 	// Tab headers
-	tabNames := []string{"1. Encoding", "2. Filtering", "3. Pipeline & Network"}
+	tabNames := []string{"1. Encoding", "2. Filtering", "3. Pipeline & Network", "4. Advanced"}
 	activeTabStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("#FFFFFF")).
@@ -41,7 +42,7 @@ func (m *AppModel) viewSettings() string {
 	}
 	b.WriteString(strings.Join(renderedTabs, " "))
 	b.WriteString("\n\n")
-	b.WriteString(styles.Subtext.Render("Tabs: [Tab] or [1, 2, 3]  •  Navigate: [↑/↓]  •  Change: [←/→]  •  Action/Toggle: [Space/Enter]") + "\n\n")
+	b.WriteString(styles.Subtext.Render("Tabs: [Tab] or [1, 2, 3, 4]  •  Navigate: [↑/↓]  •  Change: [←/→]  •  Action/Toggle: [Space/Enter]") + "\n\n")
 
 	isFocused := func(idx int) bool { return m.settingCursor == idx }
 
@@ -291,11 +292,366 @@ func (m *AppModel) viewSettings() string {
 				"  • 1 to 5 — Retries automatically with exponential backoff on transient network drops",
 		)
 
+	case 3:
+		// Tab 3: Advanced
+		boxWidth := 84
+		if m.width > 12 {
+			boxWidth = m.width - 8
+			if boxWidth > 86 {
+				boxWidth = 86
+			} else if boxWidth < 48 {
+				boxWidth = 48
+			}
+		}
+
+		flagsLabel := "Custom FFmpeg Flags:"
+		flagsDisplay := m.cfg.CustomFFmpegFlags
+		if flagsDisplay == "" {
+			flagsDisplay = "(None — using defaults)"
+		}
+		flagsDesc := "Specify custom FFmpeg options to merge or override defaults.\n" +
+			"  • Overrides: -crf, -preset, -c:v, -vf, -c:a, etc. replace defaults\n" +
+			"  • Appends: extra flags (e.g. -tune animation) are added before output\n" +
+			"  • Protected: -i, -y, -tag:v hvc1, plumbing cannot be overridden"
+
+		contentWidth := boxWidth - 4
+		if contentWidth < 40 {
+			contentWidth = 40
+		}
+
+		if isFocused(0) && m.customFlagsInput.Focused() {
+			m.customFlagsInput.Width = contentWidth
+			b.WriteString(cursor(0) + flagsLabel + "  " + styles.Subtext.Render("[Enter] confirm  [Esc] cancel") + "\n")
+			b.WriteString("    " + m.customFlagsInput.View() + "\n")
+			if m.customFlagsError != "" {
+				b.WriteString(styles.ErrorText.Render("    ⚠ "+m.customFlagsError) + "\n")
+			}
+			b.WriteString(styles.Subtext.Render("    └ "+flagsDesc) + "\n")
+		} else if isFocused(0) {
+			displayVal := truncateString(flagsDisplay, contentWidth)
+			b.WriteString(cursor(0) + flagsLabel + "  " + styles.Subtext.Render("[Enter] to edit") + "\n")
+			b.WriteString("    " + styles.Value.Render(displayVal) + "\n")
+			if m.customFlagsError != "" {
+				b.WriteString(styles.ErrorText.Render("    ⚠ "+m.customFlagsError) + "\n")
+			}
+			b.WriteString(styles.Subtext.Render("    └ "+flagsDesc) + "\n")
+		} else {
+			displayVal := truncateString(flagsDisplay, contentWidth)
+			b.WriteString(cursor(0) + flagsLabel + "\n")
+			b.WriteString("    " + styles.Value.Render(displayVal) + "\n")
+		}
+
+		effectiveFlags := m.cfg.CustomFFmpegFlags
+		if isFocused(0) && m.customFlagsInput.Focused() {
+			effectiveFlags = m.customFlagsInput.Value()
+		}
+		if effectiveFlags != "" {
+			simBase := []string{"-y", "-i", "<input.mp4>", "-c:v", "hevc", "-tag:v", "hvc1", "<output.mp4>"}
+			res, _ := engine.ParseAndMergeCustomArgs(simBase, effectiveFlags)
+			if len(res.IgnoredProtected) > 0 {
+				b.WriteString(styles.WarningText.Render(fmt.Sprintf("    ⚠ Protected parameters ignored: %s", strings.Join(res.IgnoredProtected, ", "))) + "\n")
+			}
+		}
+		b.WriteString("\n")
+
+		// Row 1 — Reset to Defaults
+		writeRow(1,
+			"Reset to Defaults:   ",
+			"[Space / Enter] Reset custom flags to defaults",
+			"Clears all custom flags and restores pure default encoding arguments.",
+		)
+
+		// Live FFmpeg Command Preview
+		b.WriteString(m.renderFFmpegPreview())
+		b.WriteString("\n")
+
 	}
 
 	b.WriteString("\n")
 	b.WriteString(styles.Subtext.Render("[Esc] Save & Return"))
 	return b.String()
+}
+
+type cmdArg struct {
+	flag     string
+	val      string
+	hasVal   bool
+	isCustom bool
+}
+
+func (m *AppModel) renderFFmpegPreview() string {
+	encoder := engine.DetectHEVCEncoderDefault()
+	if m.pipeline != nil && m.pipeline.Encoder() != "" {
+		encoder = m.pipeline.Encoder()
+	}
+
+	opts := engine.TranscodeOptions{
+		Input:               "<input.mp4>",
+		Output:              "<output.mp4>",
+		Encoder:             encoder,
+		AudioCopy:           false,
+		NoAudio:             false,
+		CRF:                 m.cfg.QualityCRF(),
+		VideoToolboxQuality: m.cfg.QualityVideoToolbox(),
+		Preset:              m.cfg.Preset,
+		Resolution:          m.cfg.Resolution,
+	}
+
+	baseArgs := engine.BuildFFmpegArgs(opts)
+	fullBase := append([]string{"-nostats", "-progress", "pipe:1"}, baseArgs...)
+
+	customInput := m.cfg.CustomFFmpegFlags
+	if m.settingsTab == 3 && m.settingCursor == 0 && m.customFlagsInput.Focused() {
+		customInput = m.customFlagsInput.Value()
+	}
+
+	res, _ := engine.ParseAndMergeCustomArgs(fullBase, customInput)
+
+	customStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#F59E0B")).
+		Bold(true)
+
+	defaultStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#334155", Dark: "#CBD5E1"})
+
+	ffmpegLabel := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#38BDF8")).Render("ffmpeg")
+
+	// Group tokens into flag + value pairs so flags are never stranded alone
+	var args []cmdArg
+	for i := 0; i < len(res.Merged); i++ {
+		token := res.Merged[i]
+		custom := i < len(res.IsCustom) && res.IsCustom[i]
+
+		if strings.HasPrefix(token, "-") {
+			if i+1 < len(res.Merged) && !strings.HasPrefix(res.Merged[i+1], "-") {
+				valCustom := (i+1 < len(res.IsCustom)) && res.IsCustom[i+1]
+				args = append(args, cmdArg{
+					flag:     token,
+					val:      res.Merged[i+1],
+					hasVal:   true,
+					isCustom: custom || valCustom,
+				})
+				i++
+			} else {
+				args = append(args, cmdArg{
+					flag:     token,
+					isCustom: custom,
+				})
+			}
+		} else {
+			args = append(args, cmdArg{
+				val:      token,
+				hasVal:   true,
+				isCustom: custom,
+			})
+		}
+	}
+
+	boxWidth := 84
+	if m.width > 12 {
+		boxWidth = m.width - 8
+		if boxWidth > 86 {
+			boxWidth = 86
+		} else if boxWidth < 48 {
+			boxWidth = 48
+		}
+	}
+	innerWidth := boxWidth - 4 // minus borders (2) and padding (2)
+
+	var lines []string
+	var currentLine []string
+	currentLineWidth := 0
+
+	flushLine := func() {
+		if len(currentLine) > 0 {
+			lines = append(lines, strings.Join(currentLine, " "))
+			currentLine = nil
+			currentLineWidth = 0
+		}
+	}
+
+	// Start with "ffmpeg"
+	currentLine = append(currentLine, ffmpegLabel)
+	currentLineWidth = len("ffmpeg")
+
+	for _, a := range args {
+		st := defaultStyle
+		if a.isCustom {
+			st = customStyle
+		}
+
+		if !a.hasVal {
+			// Flag without value: e.g. "-nostats", "-y", "-an"
+			flagLen := len(a.flag)
+			if currentLineWidth > 0 && currentLineWidth+1+flagLen > innerWidth {
+				flushLine()
+				currentLine = append(currentLine, "  "+st.Render(a.flag))
+				currentLineWidth = 2 + flagLen
+			} else {
+				currentLine = append(currentLine, st.Render(a.flag))
+				currentLineWidth += 1 + flagLen
+			}
+			continue
+		}
+
+		if a.flag == "" {
+			// Standalone value: e.g. "<output.mp4>"
+			valLen := len(a.val)
+			if currentLineWidth > 0 && currentLineWidth+1+valLen > innerWidth {
+				flushLine()
+				currentLine = append(currentLine, "  "+st.Render(a.val))
+				currentLineWidth = 2 + valLen
+			} else {
+				currentLine = append(currentLine, st.Render(a.val))
+				currentLineWidth += 1 + valLen
+			}
+			continue
+		}
+
+		// Flag with value: e.g. "-preset medium", "-vf <filter>"
+		quotedVal := a.val
+		if strings.ContainsAny(a.val, " ,;:\"'") && !strings.HasPrefix(a.val, "\"") && !strings.HasPrefix(a.val, "'") {
+			quotedVal = fmt.Sprintf("%q", a.val)
+		}
+
+		fullLen := len(a.flag) + 1 + len(quotedVal)
+
+		// 1. Fits on current line
+		if currentLineWidth > 0 && currentLineWidth+1+fullLen <= innerWidth {
+			currentLine = append(currentLine, st.Render(a.flag)+" "+st.Render(quotedVal))
+			currentLineWidth += 1 + fullLen
+			continue
+		}
+
+		// 2. Fits on a fresh line together
+		if 2+fullLen <= innerWidth {
+			flushLine()
+			currentLine = append(currentLine, "  "+st.Render(a.flag)+" "+st.Render(quotedVal))
+			currentLineWidth = 2 + fullLen
+			continue
+		}
+
+		// 3. Even on a fresh line, it's too long! Split at delimiters (comma, colon, space)
+		flushLine()
+		indentLen := 2 + len(a.flag) + 1
+		contIndent := strings.Repeat(" ", indentLen)
+		if indentLen > 8 {
+			contIndent = "      "
+			indentLen = 6
+		}
+
+		firstMax := innerWidth - (2 + len(a.flag) + 1)
+		contMax := innerWidth - indentLen
+
+		valPieces := splitValueAtDelimiters(a.val, firstMax, contMax)
+		if len(valPieces) <= 1 {
+			lines = append(lines, "  "+st.Render(a.flag)+" "+st.Render(quotedVal))
+			continue
+		}
+
+		// First line: "  -flag piece0"
+		lines = append(lines, "  "+st.Render(a.flag)+" "+st.Render(valPieces[0]))
+		// Continuation lines: "      piece1", "      piece2"
+		for j := 1; j < len(valPieces); j++ {
+			lines = append(lines, contIndent+st.Render(valPieces[j]))
+		}
+	}
+
+	flushLine()
+
+	commandStr := strings.Join(lines, "\n")
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.AdaptiveColor{Light: "#94A3B8", Dark: "#475569"}).
+		Padding(0, 1).
+		Width(boxWidth)
+
+	legendStyle := styles.Subtext.Copy().Width(innerWidth)
+	legend := legendStyle.Render("🔒 Protected (immutable): -nostats, -progress pipe:1, -y, -i, <input>, <output>, -tag:v hvc1")
+
+	boxContent := lipgloss.NewStyle().Bold(true).Render("FFmpeg Command Preview:") + "\n\n" +
+		commandStr + "\n\n" +
+		legend
+
+	return boxStyle.Render(boxContent)
+}
+
+// splitValueAtDelimiters splits a long parameter value at natural delimiters (comma, colon, space).
+func splitValueAtDelimiters(val string, firstMax, contMax int) []string {
+	if firstMax <= 10 {
+		firstMax = 40
+	}
+	if contMax <= 10 {
+		contMax = 40
+	}
+
+	needsQuotes := strings.ContainsAny(val, " ,;:\"'")
+	cleanVal := strings.Trim(val, "\"'")
+
+	splitByDelim := func(s, delim string) []string {
+		raw := strings.Split(s, delim)
+		var out []string
+		for i, p := range raw {
+			if i < len(raw)-1 {
+				out = append(out, p+delim)
+			} else if p != "" {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+
+	// 1. Identify primary delimiter: comma (filters), then space (args/metadata), then colon (filter params)
+	var chunks []string
+	if strings.Contains(cleanVal, ",") {
+		chunks = splitByDelim(cleanVal, ",")
+	} else if strings.Contains(cleanVal, " ") {
+		chunks = splitByDelim(cleanVal, " ")
+	} else if strings.Contains(cleanVal, ":") {
+		chunks = splitByDelim(cleanVal, ":")
+	} else {
+		chunks = []string{cleanVal}
+	}
+
+	// If any chunk is still larger than contMax, sub-split it by colon
+	var finalChunks []string
+	for _, ch := range chunks {
+		if len(ch) > contMax && strings.Contains(ch, ":") {
+			finalChunks = append(finalChunks, splitByDelim(ch, ":")...)
+		} else {
+			finalChunks = append(finalChunks, ch)
+		}
+	}
+
+	// Pack chunks into lines using firstMax for line 0, and contMax for subsequent lines
+	var lines []string
+	var cur strings.Builder
+	limit := firstMax
+
+	for _, ch := range finalChunks {
+		if cur.Len() == 0 {
+			cur.WriteString(ch)
+		} else if cur.Len()+len(ch) <= limit {
+			cur.WriteString(ch)
+		} else {
+			lines = append(lines, cur.String())
+			cur.Reset()
+			limit = contMax
+			cur.WriteString(ch)
+		}
+	}
+	if cur.Len() > 0 {
+		lines = append(lines, cur.String())
+	}
+
+	// Wrap in quotes if needed
+	if needsQuotes && len(lines) > 0 {
+		lines[0] = "\"" + lines[0]
+		lines[len(lines)-1] = lines[len(lines)-1] + "\""
+	}
+
+	return lines
 }
 
 func (m *AppModel) settingsMaxCursor() int {
@@ -304,6 +660,8 @@ func (m *AppModel) settingsMaxCursor() int {
 		return 4 // Tab 1 (Filtering): 0: Mode, 1: Value, 2: Exclude Optimized, 3: Start Date, 4: End Date
 	case 2:
 		return 3 // Tab 2 (Pipeline & Network): 0: Prefetch, 1: Encoders, 2: Log Level, 3: Retries
+	case 3:
+		return 1 // Tab 3 (Advanced): 0: Custom Flags, 1: Reset to Defaults
 	default:
 		return 3 // Tab 0 (Encoding): 0: Resolution, 1: Quality, 2: Size Guard, 3: Skip HEVC
 	}
@@ -312,8 +670,8 @@ func (m *AppModel) settingsMaxCursor() int {
 func (m *AppModel) switchSettingsTab(newTab int) {
 	if newTab < 0 {
 		newTab = 0
-	} else if newTab > 2 {
-		newTab = 2
+	} else if newTab > 3 {
+		newTab = 3
 	}
 	if m.settingsTab != newTab {
 		m.settingsTab = newTab
@@ -327,7 +685,11 @@ func (m *AppModel) switchSettingsTab(newTab int) {
 		if m.dateBeforeInput.Focused() {
 			m.dateBeforeInput.Blur()
 		}
+		if m.customFlagsInput.Focused() {
+			m.customFlagsInput.Blur()
+		}
 		m.dateError = ""
+		m.customFlagsError = ""
 	}
 }
 
@@ -495,6 +857,21 @@ func (m *AppModel) handleSettingsOptionToggle() (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case 3: // Advanced
+		switch m.settingCursor {
+		case 0: // Custom Flags
+			m.customFlagsError = ""
+			return m, m.customFlagsInput.Focus()
+		case 1: // Reset to Defaults
+			m.cfg.CustomFFmpegFlags = ""
+			m.customFlagsInput.SetValue("")
+			m.customFlagsError = ""
+			if m.pipeline != nil {
+				m.pipeline.UpdateConfig(m.cfg)
+			}
+			_ = config.SaveConfig(m.cfg)
+		}
+
 	}
 	return m, nil
 }
@@ -607,6 +984,39 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Custom FFmpeg Flags input
+	if m.settingsTab == 3 && m.settingCursor == 0 && m.customFlagsInput.Focused() {
+		switch msg.String() {
+		case "enter":
+			raw := strings.TrimSpace(m.customFlagsInput.Value())
+			if raw != "" {
+				if _, err := engine.SplitShellArgs(raw); err != nil {
+					m.customFlagsError = "Invalid syntax: " + err.Error()
+					return m, nil
+				}
+			}
+			m.customFlagsError = ""
+			m.cfg.CustomFFmpegFlags = raw
+			m.customFlagsInput.SetValue(raw)
+			m.customFlagsInput.Blur()
+			if m.pipeline != nil {
+				m.pipeline.UpdateConfig(m.cfg)
+			}
+			_ = config.SaveConfig(m.cfg)
+			return m, nil
+		case "esc":
+			m.customFlagsError = ""
+			m.customFlagsInput.SetValue(m.cfg.CustomFFmpegFlags)
+			m.customFlagsInput.Blur()
+			return m, nil
+		default:
+			m.customFlagsError = ""
+			var cmd tea.Cmd
+			m.customFlagsInput, cmd = m.customFlagsInput.Update(msg)
+			return m, cmd
+		}
+	}
+
 	switch msg.String() {
 	case "q", "esc":
 		_ = config.SaveConfig(m.cfg)
@@ -618,11 +1028,11 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "tab":
-		m.switchSettingsTab((m.settingsTab + 1) % 3)
+		m.switchSettingsTab((m.settingsTab + 1) % 4)
 		return m, nil
 
 	case "shift+tab":
-		m.switchSettingsTab((m.settingsTab - 1 + 3) % 3)
+		m.switchSettingsTab((m.settingsTab - 1 + 4) % 4)
 		return m, nil
 
 	case "1":
@@ -635,6 +1045,10 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "3":
 		m.switchSettingsTab(2)
+		return m, nil
+
+	case "4":
+		m.switchSettingsTab(3)
 		return m, nil
 
 	case "up", "k":
@@ -659,3 +1073,29 @@ func (m *AppModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	return m, nil
 }
+
+func truncateString(s string, maxLen int) string {
+	if maxLen <= 3 {
+		if len(s) > maxLen && maxLen > 0 {
+			return s[:maxLen]
+		}
+		return s
+	}
+	if lipgloss.Width(s) <= maxLen {
+		return s
+	}
+	runes := []rune(s)
+	curWidth := 0
+	targetWidth := maxLen - 3
+	var result []rune
+	for _, r := range runes {
+		rw := lipgloss.Width(string(r))
+		if curWidth+rw > targetWidth {
+			break
+		}
+		result = append(result, r)
+		curWidth += rw
+	}
+	return string(result) + "..."
+}
+

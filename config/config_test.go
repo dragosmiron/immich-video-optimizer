@@ -27,6 +27,7 @@ func TestSaveAndLoadConfig(t *testing.T) {
 		LogLevel:           "debug",
 		MaxRetries:         5,
 		ExcludeOptimized:   true,
+		CustomFFmpegFlags:  "-preset slow -crf 20",
 	}
 
 	// Test SaveConfig
@@ -47,7 +48,7 @@ func TestSaveAndLoadConfig(t *testing.T) {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
 
-	if loaded.URL != cfg.URL || loaded.APIKey != cfg.APIKey || loaded.ThresholdMode != cfg.ThresholdMode || loaded.SizeThreshold != cfg.SizeThreshold || loaded.SkipHEVC != cfg.SkipHEVC || loaded.ConcurrentEncoders != cfg.ConcurrentEncoders || loaded.EnablePrefetch != cfg.EnablePrefetch || loaded.LogLevel != cfg.LogLevel || loaded.MaxRetries != cfg.MaxRetries || loaded.ExcludeOptimized != cfg.ExcludeOptimized {
+	if loaded.URL != cfg.URL || loaded.APIKey != cfg.APIKey || loaded.ThresholdMode != cfg.ThresholdMode || loaded.SizeThreshold != cfg.SizeThreshold || loaded.SkipHEVC != cfg.SkipHEVC || loaded.ConcurrentEncoders != cfg.ConcurrentEncoders || loaded.EnablePrefetch != cfg.EnablePrefetch || loaded.LogLevel != cfg.LogLevel || loaded.MaxRetries != cfg.MaxRetries || loaded.ExcludeOptimized != cfg.ExcludeOptimized || loaded.CustomFFmpegFlags != cfg.CustomFFmpegFlags {
 		t.Errorf("Loaded config mismatch: got %v, expected %v", loaded, cfg)
 	}
 	if !loaded.IsDebug() {

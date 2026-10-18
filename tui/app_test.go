@@ -1889,7 +1889,7 @@ func TestAppModel_SettingsTabsNavigation(t *testing.T) {
 		t.Fatalf("expected initial settingsTab 0, got %d", m.settingsTab)
 	}
 
-	// 1. Tab key cycles forward: 0 -> 1 -> 2 -> 0
+	// 1. Tab key cycles forward: 0 -> 1 -> 2 -> 3 -> 0
 	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = newM.(*AppModel)
 	if m.settingsTab != 1 {
@@ -1904,11 +1904,23 @@ func TestAppModel_SettingsTabsNavigation(t *testing.T) {
 
 	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = newM.(*AppModel)
+	if m.settingsTab != 3 {
+		t.Errorf("expected tab 3 after [Tab], got %d", m.settingsTab)
+	}
+
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = newM.(*AppModel)
 	if m.settingsTab != 0 {
 		t.Errorf("expected tab 0 after wrap-around [Tab], got %d", m.settingsTab)
 	}
 
-	// 2. Shift+Tab cycles backward: 0 -> 2 -> 1 -> 0
+	// 2. Shift+Tab cycles backward: 0 -> 3 -> 2 -> 1 -> 0
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m = newM.(*AppModel)
+	if m.settingsTab != 3 {
+		t.Errorf("expected tab 3 after [Shift+Tab], got %d", m.settingsTab)
+	}
+
 	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 	m = newM.(*AppModel)
 	if m.settingsTab != 2 {
@@ -1927,7 +1939,7 @@ func TestAppModel_SettingsTabsNavigation(t *testing.T) {
 		t.Errorf("expected tab 0 after [Shift+Tab], got %d", m.settingsTab)
 	}
 
-	// 3. Number keys switch directly to tabs: '1', '2', '3'
+	// 3. Number keys switch directly to tabs: '1', '2', '3', '4'
 	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	m = newM.(*AppModel)
 	if m.settingsTab != 1 {
@@ -1938,6 +1950,12 @@ func TestAppModel_SettingsTabsNavigation(t *testing.T) {
 	m = newM.(*AppModel)
 	if m.settingsTab != 2 {
 		t.Errorf("expected tab 2 after pressing '3', got %d", m.settingsTab)
+	}
+
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+	m = newM.(*AppModel)
+	if m.settingsTab != 3 {
+		t.Errorf("expected tab 3 after pressing '4', got %d", m.settingsTab)
 	}
 
 	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
@@ -2123,3 +2141,138 @@ func TestAppModel_NoVideosAdjustFilteringSettingsTab(t *testing.T) {
 		t.Errorf("expected settingsTab 1 (Filtering), got %d", m.settingsTab)
 	}
 }
+
+func TestAppModel_SettingsAdvancedTab(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+
+	cfg := config.DefaultConfig()
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.state = ViewSettings
+
+	// Switch to Tab 3 (Advanced)
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+	m = newM.(*AppModel)
+	if m.settingsTab != 3 {
+		t.Fatalf("expected settingsTab 3, got %d", m.settingsTab)
+	}
+
+	// Verify view rendering contains expected labels
+	view := m.viewSettings()
+	if !strings.Contains(view, "Custom FFmpeg Flags:") {
+		t.Errorf("expected view to contain 'Custom FFmpeg Flags:', got: %s", view)
+	}
+	if !strings.Contains(view, "Reset to Defaults:") {
+		t.Errorf("expected view to contain 'Reset to Defaults:', got: %s", view)
+	}
+	if !strings.Contains(view, "FFmpeg Command Preview:") {
+		t.Errorf("expected view to contain 'FFmpeg Command Preview:', got: %s", view)
+	}
+	if !strings.Contains(view, "🔒 Protected (immutable)") {
+		t.Errorf("expected view to contain protected legend, got: %s", view)
+	}
+
+	// 1. Focus custom flags input on Enter
+	m.settingCursor = 0
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newM.(*AppModel)
+	if !m.customFlagsInput.Focused() {
+		t.Errorf("expected customFlagsInput to be focused after Enter")
+	}
+
+	// 2. Test syntax error on invalid quotes
+	m.customFlagsInput.SetValue(`-vf "scale=1920:1080`)
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newM.(*AppModel)
+	if m.customFlagsError == "" {
+		t.Errorf("expected customFlagsError for unclosed quote, got empty")
+	}
+	if !m.customFlagsInput.Focused() {
+		t.Errorf("expected customFlagsInput to remain focused on error")
+	}
+
+	// 3. Test valid flags input
+	m.customFlagsInput.SetValue("-preset veryslow -crf 19 -tune animation")
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newM.(*AppModel)
+	if m.customFlagsError != "" {
+		t.Errorf("unexpected customFlagsError: %s", m.customFlagsError)
+	}
+	if m.customFlagsInput.Focused() {
+		t.Errorf("expected customFlagsInput to blur after valid save")
+	}
+	if m.cfg.CustomFFmpegFlags != "-preset veryslow -crf 19 -tune animation" {
+		t.Errorf("expected CustomFFmpegFlags saved, got: %s", m.cfg.CustomFFmpegFlags)
+	}
+
+	// Check preview includes custom flags
+	viewWithCustom := m.viewSettings()
+	if !strings.Contains(viewWithCustom, "-preset veryslow") || !strings.Contains(viewWithCustom, "-crf 19") {
+		t.Errorf("expected view preview to contain '-preset veryslow' and '-crf 19': %s", viewWithCustom)
+	}
+
+	// 4. Test warning when protected flags are entered
+	m.customFlagsInput.SetValue("-i hacked.mp4 -preset slow")
+	m.cfg.CustomFFmpegFlags = "-i hacked.mp4 -preset slow"
+	viewWithProtected := m.viewSettings()
+	if !strings.Contains(viewWithProtected, "Protected parameters ignored: -i") {
+		t.Errorf("expected protected parameter warning in view, got: %s", viewWithProtected)
+	}
+
+	// 5. Test Reset to Defaults row (cursor 1)
+	m.settingCursor = 1
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = newM.(*AppModel)
+	if m.cfg.CustomFFmpegFlags != "" {
+		t.Errorf("expected CustomFFmpegFlags cleared after reset, got: %q", m.cfg.CustomFFmpegFlags)
+	}
+	if m.customFlagsInput.Value() != "" {
+		t.Errorf("expected customFlagsInput cleared after reset, got: %q", m.customFlagsInput.Value())
+	}
+}
+
+func TestAppModel_SummarySizeGuardDelta(t *testing.T) {
+	cfg := config.DefaultConfig()
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+
+	origSize := int64(100 * 1024 * 1024)  // 100 MB
+	optSize := int64(115 * 1024 * 1024)   // 115 MB (+15 MB)
+
+	msg := orchestrator.PipelineVideoCompleteMsg{
+		WorkerID:      1,
+		VideoID:       "v1",
+		VideoName:     "GH010620.MP4",
+		OriginalSize:  origSize,
+		OptimizedSize: optSize,
+		Skipped:       true,
+		SkipReason:    "transcoded file larger",
+	}
+
+	newM, _ := m.Update(msg)
+	m = newM.(*AppModel)
+
+	if len(m.skippedVideos) != 1 {
+		t.Fatalf("expected 1 skipped video, got %d", len(m.skippedVideos))
+	}
+	sv := m.skippedVideos[0]
+	if sv.OriginalSize != origSize || sv.OptimizedSize != optSize {
+		t.Errorf("expected sizes %d and %d, got %d and %d", origSize, optSize, sv.OriginalSize, sv.OptimizedSize)
+	}
+
+	m.state = ViewSummary
+	summaryView := m.viewSummary()
+
+	if !strings.Contains(summaryView, "100.0 MB ➔ 115.0 MB") {
+		t.Errorf("expected summary view to display size transition '100.0 MB ➔ 115.0 MB', got: %s", summaryView)
+	}
+	if !strings.Contains(summaryView, "+15.0 MB, +15.0%") {
+		t.Errorf("expected summary view to display '+15.0 MB, +15.0%%', got: %s", summaryView)
+	}
+	if !strings.Contains(summaryView, "[Size Guard: original kept]") {
+		t.Errorf("expected summary view to contain '[Size Guard: original kept]', got: %s", summaryView)
+	}
+}
+
+

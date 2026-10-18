@@ -117,6 +117,7 @@ func (p *Pipeline) startTranscoders(ctx context.Context, numEncoders int, transc
 					VideoToolboxQuality: p.cfg.QualityVideoToolbox(),
 					Preset:              preset,
 					Resolution:          p.cfg.Resolution,
+					CustomFlags:         p.cfg.CustomFFmpegFlags,
 				}
 
 				onProgress := func(prog engine.Progress) {
@@ -201,12 +202,13 @@ func (p *Pipeline) startTranscoders(ctx context.Context, numEncoders int, transc
 					sess.MarkSkipped(item.Asset.ID, "transcoded file larger")
 					_ = state.SaveSession(sess)
 					emit(PipelineVideoCompleteMsg{
-						WorkerID:     wID,
-						VideoID:      item.Asset.ID,
-						VideoName:    item.Asset.OriginalFileName,
-						OriginalSize: item.Asset.GetSize(),
-						Skipped:      true,
-						SkipReason:   "transcoded file larger",
+						WorkerID:      wID,
+						VideoID:       item.Asset.ID,
+						VideoName:     item.Asset.OriginalFileName,
+						OriginalSize:  item.Asset.GetSize(),
+						OptimizedSize: optStat.Size(),
+						Skipped:       true,
+						SkipReason:    "transcoded file larger",
 					})
 					continue
 				}

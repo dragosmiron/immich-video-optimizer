@@ -109,8 +109,24 @@ func (m *AppModel) viewSummary() string {
 			b.WriteString(styles.WarningText.Render("  Skipped (originals kept, nothing uploaded):"))
 			b.WriteString("\n")
 			for _, sv := range m.skippedVideos {
-				label := skipReasonLabel(sv.Reason)
-				b.WriteString(fmt.Sprintf("    • %-45s  [%s]\n", truncate(sv.Name, 45), label))
+				if sv.Reason == "transcoded file larger" && sv.OptimizedSize >= sv.OriginalSize && sv.OriginalSize > 0 {
+					diff := sv.OptimizedSize - sv.OriginalSize
+					pct := (float64(diff) / float64(sv.OriginalSize)) * 100.0
+					diffBadge := styles.WarningText.Render(fmt.Sprintf("+%s, +%.1f%%", formatByteSize(diff), pct))
+					b.WriteString(fmt.Sprintf("    • %-32s  %s ➔ %s  (%s)  [Size Guard: original kept]\n",
+						truncate(sv.Name, 32),
+						formatByteSize(sv.OriginalSize),
+						formatByteSize(sv.OptimizedSize),
+						diffBadge,
+					))
+				} else {
+					label := skipReasonLabel(sv.Reason)
+					if sv.OriginalSize > 0 {
+						b.WriteString(fmt.Sprintf("    • %-38s  %s  [%s]\n", truncate(sv.Name, 38), formatByteSize(sv.OriginalSize), label))
+					} else {
+						b.WriteString(fmt.Sprintf("    • %-45s  [%s]\n", truncate(sv.Name, 45), label))
+					}
+				}
 			}
 			b.WriteString("\n")
 		}

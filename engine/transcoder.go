@@ -26,6 +26,7 @@ type TranscodeOptions struct {
 	VideoToolboxQuality int    // Explicit VideoToolbox -q:v quality override (1..100)
 	Preset              string // Preset string, e.g., "medium", "slow"
 	Resolution          string
+	CustomFlags         string // Custom user-specified FFmpeg arguments or overrides
 }
 
 // Progress represents the transcoding progress parsed from ffmpeg output
@@ -124,7 +125,455 @@ func BuildFFmpegArgs(opts TranscodeOptions) []string {
 	}
 
 	args = append(args, opts.Output)
+
+	if strings.TrimSpace(opts.CustomFlags) != "" {
+		res, err := ParseAndMergeCustomArgs(args, opts.CustomFlags)
+		if err != nil {
+			logger.Error("Failed to parse custom FFmpeg flags %q: %v. Using defaults.", opts.CustomFlags, err)
+			return args
+		}
+		return res.Merged
+	}
+
 	return args
+}
+
+// SplitShellArgs tokenizes a command-line string respecting single quotes, double quotes, and escapes.
+func SplitShellArgs(raw string) ([]string, error) {
+	var args []string
+	var current strings.Builder
+	inQuote := false
+	quoteChar := rune(0)
+	escaped := false
+
+	for _, r := range raw {
+		if escaped {
+			current.WriteRune(r)
+			escaped = false
+			continue
+		}
+
+		if r == '\\' && quoteChar != '\'' {
+			escaped = true
+			continue
+		}
+
+		if inQuote {
+			if r == quoteChar {
+				inQuote = false
+				quoteChar = 0
+			} else {
+				current.WriteRune(r)
+			}
+			continue
+		}
+
+		switch r {
+		case '"', '\'':
+			inQuote = true
+			quoteChar = r
+		case ' ', '\t', '\n', '\r':
+			if current.Len() > 0 {
+				args = append(args, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteRune(r)
+		}
+	}
+
+	if inQuote {
+		return nil, fmt.Errorf("unclosed quote (%c)", quoteChar)
+	}
+	if escaped {
+		current.WriteRune('\\')
+	}
+	if current.Len() > 0 {
+		args = append(args, current.String())
+	}
+
+	return args, nil
+}
+
+// MergeResult holds the result of merging base args with custom flags.
+type MergeResult struct {
+	Merged           []string
+	IsCustom         []bool
+	IgnoredProtected []string
+}
+
+type customArgItem struct {
+	flag   string
+	val    string
+	hasVal bool
+	isUsed bool
+}
+
+// MergeFFmpegArgs merges baseArgs with customArgs, stripping protected flags and replacing base flags.
+func MergeFFmpegArgs(baseArgs []string, customArgs []string) MergeResult {
+	var ignoredProtected []string
+	var items []*customArgItem
+
+	isProtectedFlag := func(f string) bool {
+		switch f {
+		case "-y", "-n", "-nostats", "-progress", "-i":
+			return true
+		default:
+			return strings.HasPrefix(f, "-tag")
+		}
+	}
+
+	// 1. Parse custom args into items, collecting protected ones
+	for i := 0; i < len(customArgs); i++ {
+		token := customArgs[i]
+		if !strings.HasPrefix(token, "-") {
+			ignoredProtected = append(ignoredProtected, token)
+			continue
+		}
+
+		if isProtectedFlag(token) {
+			ignoredProtected = append(ignoredProtected, token)
+			if token == "-progress" || token == "-i" || strings.HasPrefix(token, "-tag") {
+				if i+1 < len(customArgs) && !strings.HasPrefix(customArgs[i+1], "-") {
+					i++
+				}
+			}
+			continue
+		}
+
+		item := &customArgItem{flag: token}
+		if i+1 < len(customArgs) && !strings.HasPrefix(customArgs[i+1], "-") {
+			item.val = customArgs[i+1]
+			item.hasVal = true
+			i++
+		}
+		items = append(items, item)
+	}
+
+	// Index custom flags by flag name for quick lookup
+	customByFlag := make(map[string]*customArgItem)
+	for _, it := range items {
+		customByFlag[it.flag] = it
+	}
+
+	// Quality overrides: -crf, -q:v, -qp, -cq, -b:v
+	isQualityFlag := func(f string) bool {
+		return f == "-crf" || f == "-q:v" || f == "-qp" || f == "-cq" || f == "-b:v"
+	}
+	var customQuality *customArgItem
+	for _, it := range items {
+		if isQualityFlag(it.flag) {
+			customQuality = it
+			break
+		}
+	}
+
+	// Audio overrides: -an, -c:a, -b:a
+	var customAn *customArgItem
+	var customCa *customArgItem
+	var customBa *customArgItem
+	for _, it := range items {
+		if it.flag == "-an" {
+			customAn = it
+		} else if it.flag == "-c:a" {
+			customCa = it
+		} else if it.flag == "-b:a" {
+			customBa = it
+		}
+	}
+
+	// Determine effective video encoder
+	customCv := customByFlag["-c:v"]
+	effectiveEncoder := ""
+	if customCv != nil && customCv.hasVal {
+		effectiveEncoder = customCv.val
+	}
+
+	// 2. Process baseArgs
+	var merged []string
+	var isCustom []bool
+
+	appendMerged := func(token string, custom bool) {
+		merged = append(merged, token)
+		isCustom = append(isCustom, custom)
+	}
+
+	outputPath := ""
+	if len(baseArgs) > 0 {
+		outputPath = baseArgs[len(baseArgs)-1]
+		baseArgs = baseArgs[:len(baseArgs)-1]
+	}
+
+	for i := 0; i < len(baseArgs); i++ {
+		token := baseArgs[i]
+
+		// Protected base arguments: -vaapi_device, -y, -i <input>, -tag:v hvc1
+		if token == "-vaapi_device" {
+			appendMerged(token, false)
+			if i+1 < len(baseArgs) {
+				i++
+				appendMerged(baseArgs[i], false)
+			}
+			continue
+		}
+		if token == "-y" {
+			appendMerged(token, false)
+			continue
+		}
+		if token == "-i" {
+			appendMerged(token, false)
+			if i+1 < len(baseArgs) {
+				i++
+				appendMerged(baseArgs[i], false)
+			}
+			continue
+		}
+		if token == "-tag:v" {
+			appendMerged(token, false)
+			if i+1 < len(baseArgs) {
+				i++
+				appendMerged(baseArgs[i], false)
+			}
+			continue
+		}
+
+		// Video encoder: -c:v <encoder>
+		if token == "-c:v" {
+			if customCv != nil {
+				appendMerged("-c:v", true)
+				if customCv.hasVal {
+					appendMerged(customCv.val, true)
+				}
+				customCv.isUsed = true
+			} else {
+				appendMerged("-c:v", false)
+				if i+1 < len(baseArgs) && !strings.HasPrefix(baseArgs[i+1], "-") {
+					effectiveEncoder = baseArgs[i+1]
+					appendMerged(baseArgs[i+1], false)
+				}
+			}
+			if i+1 < len(baseArgs) && !strings.HasPrefix(baseArgs[i+1], "-") {
+				i++
+			}
+			continue
+		}
+
+		// -allow_sw 1 (VideoToolbox software fallback)
+		if token == "-allow_sw" {
+			val := ""
+			if i+1 < len(baseArgs) && !strings.HasPrefix(baseArgs[i+1], "-") {
+				i++
+				val = baseArgs[i]
+			}
+			if effectiveEncoder == "hevc_videotoolbox" || (effectiveEncoder == "" && customCv == nil) {
+				appendMerged("-allow_sw", false)
+				if val != "" {
+					appendMerged(val, false)
+				}
+			}
+			continue
+		}
+
+		// Preset: -preset <val>
+		if token == "-preset" {
+			val := ""
+			if i+1 < len(baseArgs) && !strings.HasPrefix(baseArgs[i+1], "-") {
+				i++
+				val = baseArgs[i]
+			}
+			if it, ok := customByFlag["-preset"]; ok {
+				appendMerged("-preset", true)
+				if it.hasVal {
+					appendMerged(it.val, true)
+				}
+				it.isUsed = true
+			} else {
+				appendMerged("-preset", false)
+				if val != "" {
+					appendMerged(val, false)
+				}
+			}
+			continue
+		}
+
+		// Quality flags: -crf, -q:v, -qp, -cq, -b:v
+		if isQualityFlag(token) {
+			val := ""
+			if i+1 < len(baseArgs) && !strings.HasPrefix(baseArgs[i+1], "-") {
+				i++
+				val = baseArgs[i]
+			}
+			if token == "-b:v" && customQuality != nil {
+				continue
+			}
+
+			if customQuality != nil {
+				if !customQuality.isUsed {
+					appendMerged(customQuality.flag, true)
+					if customQuality.hasVal {
+						appendMerged(customQuality.val, true)
+					}
+					customQuality.isUsed = true
+				}
+			} else {
+				appendMerged(token, false)
+				if val != "" {
+					appendMerged(val, false)
+				}
+			}
+			continue
+		}
+
+		// Filter: -vf <val>
+		if token == "-vf" {
+			val := ""
+			if i+1 < len(baseArgs) && !strings.HasPrefix(baseArgs[i+1], "-") {
+				i++
+				val = baseArgs[i]
+			}
+			if it, ok := customByFlag["-vf"]; ok {
+				appendMerged("-vf", true)
+				if it.hasVal {
+					appendMerged(it.val, true)
+				}
+				it.isUsed = true
+			} else {
+				appendMerged("-vf", false)
+				if val != "" {
+					appendMerged(val, false)
+				}
+			}
+			continue
+		}
+
+		// Audio: -an or -c:a <codec> [-b:a <rate>]
+		if token == "-an" {
+			if customAn != nil {
+				appendMerged("-an", true)
+				customAn.isUsed = true
+			} else if customCa != nil {
+				appendMerged("-c:a", true)
+				if customCa.hasVal {
+					appendMerged(customCa.val, true)
+				}
+				customCa.isUsed = true
+				if customBa != nil {
+					appendMerged("-b:a", true)
+					if customBa.hasVal {
+						appendMerged(customBa.val, true)
+					}
+					customBa.isUsed = true
+				}
+			} else {
+				appendMerged("-an", false)
+			}
+			continue
+		}
+
+		if token == "-c:a" {
+			val := ""
+			if i+1 < len(baseArgs) && !strings.HasPrefix(baseArgs[i+1], "-") {
+				i++
+				val = baseArgs[i]
+			}
+			if customAn != nil {
+				appendMerged("-an", true)
+				customAn.isUsed = true
+			} else if customCa != nil {
+				appendMerged("-c:a", true)
+				if customCa.hasVal {
+					appendMerged(customCa.val, true)
+				}
+				customCa.isUsed = true
+			} else {
+				appendMerged("-c:a", false)
+				if val != "" {
+					appendMerged(val, false)
+				}
+			}
+			continue
+		}
+
+		if token == "-b:a" {
+			val := ""
+			if i+1 < len(baseArgs) && !strings.HasPrefix(baseArgs[i+1], "-") {
+				i++
+				val = baseArgs[i]
+			}
+			if customAn != nil {
+				continue
+			}
+			if customBa != nil {
+				appendMerged("-b:a", true)
+				if customBa.hasVal {
+					appendMerged(customBa.val, true)
+				}
+				customBa.isUsed = true
+			} else if customCa != nil && customCa.val == "copy" {
+				continue
+			} else {
+				appendMerged("-b:a", false)
+				if val != "" {
+					appendMerged(val, false)
+				}
+			}
+			continue
+		}
+
+		// Generic flag in base: if custom overrides it, use custom
+		if it, ok := customByFlag[token]; ok {
+			appendMerged(it.flag, true)
+			if it.hasVal {
+				appendMerged(it.val, true)
+			}
+			it.isUsed = true
+			if i+1 < len(baseArgs) && !strings.HasPrefix(baseArgs[i+1], "-") {
+				i++
+			}
+			continue
+		}
+
+		// Pass through base token
+		appendMerged(token, false)
+	}
+
+	// 3. Append remaining unused custom items before output
+	for _, it := range items {
+		if !it.isUsed {
+			appendMerged(it.flag, true)
+			if it.hasVal {
+				appendMerged(it.val, true)
+			}
+			it.isUsed = true
+		}
+	}
+
+	// 4. Output path at the end
+	if outputPath != "" {
+		appendMerged(outputPath, false)
+	}
+
+	return MergeResult{
+		Merged:           merged,
+		IsCustom:         isCustom,
+		IgnoredProtected: ignoredProtected,
+	}
+}
+
+// ParseAndMergeCustomArgs tokenizes customFlags and merges them into baseArgs.
+func ParseAndMergeCustomArgs(baseArgs []string, customFlags string) (MergeResult, error) {
+	trimmed := strings.TrimSpace(customFlags)
+	if trimmed == "" {
+		isCustom := make([]bool, len(baseArgs))
+		return MergeResult{Merged: baseArgs, IsCustom: isCustom}, nil
+	}
+	customTokens, err := SplitShellArgs(trimmed)
+	if err != nil {
+		isCustom := make([]bool, len(baseArgs))
+		return MergeResult{Merged: baseArgs, IsCustom: isCustom}, err
+	}
+	res := MergeFFmpegArgs(baseArgs, customTokens)
+	return res, nil
 }
 
 var (

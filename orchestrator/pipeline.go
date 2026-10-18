@@ -107,6 +107,14 @@ func (p *Pipeline) Client() *immich.Client {
 	return p.client
 }
 
+// Encoder returns the configured or auto-detected HEVC encoder.
+func (p *Pipeline) Encoder() string {
+	if p == nil || p.encoder == "" {
+		return engine.DetectHEVCEncoderDefault()
+	}
+	return p.encoder
+}
+
 // CleanDryRunAlbum deletes any previously created dry-run tracking album in Immich.
 func (p *Pipeline) CleanDryRunAlbum() {
 	p.dryRunMu.Lock()

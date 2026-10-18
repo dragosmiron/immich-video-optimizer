@@ -358,5 +358,247 @@ func TestBuildFFmpegArgs_VideoToolboxQualityOnly_DoesNotEmitZeroCRFForOtherEncod
 	}
 }
 
+func TestSplitShellArgs(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		expected  []string
+		wantError bool
+	}{
+		{
+			name:     "empty string",
+			input:    "",
+			expected: nil,
+		},
+		{
+			name:     "whitespace only",
+			input:    "   \t\n  ",
+			expected: nil,
+		},
+		{
+			name:     "standard flags",
+			input:    "-preset slow -crf 20",
+			expected: []string{"-preset", "slow", "-crf", "20"},
+		},
+		{
+			name:     "double quotes with spaces",
+			input:    `-vf "scale=1920:1080, fps=30" -c:a aac`,
+			expected: []string{"-vf", "scale=1920:1080, fps=30", "-c:a", "aac"},
+		},
+		{
+			name:     "single quotes",
+			input:    "-metadata title='My Vacation Video'",
+			expected: []string{"-metadata", "title=My Vacation Video"},
+		},
+		{
+			name:     "escaped space",
+			input:    `-metadata title=My\ Video`,
+			expected: []string{"-metadata", "title=My Video"},
+		},
+		{
+			name:      "unclosed double quote",
+			input:     `-vf "scale=1920:1080`,
+			wantError: true,
+		},
+		{
+			name:      "unclosed single quote",
+			input:     "-preset 'slow",
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := SplitShellArgs(tt.input)
+			if tt.wantError {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got) != len(tt.expected) {
+				t.Fatalf("expected %d args, got %d: %v", len(tt.expected), len(got), got)
+			}
+			for i := range got {
+				if got[i] != tt.expected[i] {
+					t.Errorf("arg[%d] expected %q, got %q", i, tt.expected[i], got[i])
+				}
+			}
+		})
+	}
+}
+
+func TestMergeFFmpegArgs_ProtectedFlags(t *testing.T) {
+	base := []string{
+		"-y", "-i", "input.mp4",
+		"-c:v", "hevc_videotoolbox", "-tag:v", "hvc1",
+		"-allow_sw", "1",
+		"-preset", "medium",
+		"-q:v", "66",
+		"-c:a", "aac", "-b:a", "192k",
+		"output.mp4",
+	}
+
+	custom := []string{
+		"-i", "hacked.mp4",
+		"-y",
+		"-tag:v", "customtag",
+		"-nostats",
+		"-progress", "pipe:1",
+		"rogue_output.mp4",
+		"-preset", "veryslow",
+	}
+
+	res := MergeFFmpegArgs(base, custom)
+
+	// Verify ignored protected flags
+	expectedIgnored := []string{"-i", "-y", "-tag:v", "-nostats", "-progress", "rogue_output.mp4"}
+	for _, ign := range expectedIgnored {
+		found := false
+		for _, g := range res.IgnoredProtected {
+			if g == ign {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected %q to be in IgnoredProtected, got: %v", ign, res.IgnoredProtected)
+		}
+	}
+
+	// Verify base input and output were preserved
+	joined := strings.Join(res.Merged, " ")
+	if !strings.Contains(joined, "-i input.mp4") {
+		t.Errorf("expected original '-i input.mp4' in merged args, got: %s", joined)
+	}
+	if strings.Contains(joined, "hacked.mp4") {
+		t.Errorf("did not expect 'hacked.mp4' in merged args, got: %s", joined)
+	}
+	if !strings.HasSuffix(joined, "output.mp4") {
+		t.Errorf("expected merged args to end with 'output.mp4', got: %s", joined)
+	}
+	if strings.Contains(joined, "rogue_output.mp4") {
+		t.Errorf("did not expect 'rogue_output.mp4' in merged args, got: %s", joined)
+	}
+	if !strings.Contains(joined, "-tag:v hvc1") {
+		t.Errorf("expected original '-tag:v hvc1' preserved, got: %s", joined)
+	}
+	if !strings.Contains(joined, "-preset veryslow") {
+		t.Errorf("expected custom '-preset veryslow' to be applied, got: %s", joined)
+	}
+}
+
+func TestMergeFFmpegArgs_Overrides(t *testing.T) {
+	base := []string{
+		"-y", "-i", "input.mp4",
+		"-c:v", "hevc_videotoolbox", "-tag:v", "hvc1",
+		"-allow_sw", "1",
+		"-preset", "medium",
+		"-q:v", "66",
+		"-vf", "scale='trunc(iw/2)*2':'trunc(ih/2)*2'",
+		"-c:a", "aac", "-b:a", "192k",
+		"output.mp4",
+	}
+
+	// Override encoder to libx265, quality to -crf 20, preset to slow, filter to 1080p, audio to copy
+	custom := []string{
+		"-c:v", "libx265",
+		"-crf", "20",
+		"-preset", "slow",
+		"-vf", "scale=1920:1080",
+		"-c:a", "copy",
+	}
+
+	res := MergeFFmpegArgs(base, custom)
+	joined := strings.Join(res.Merged, " ")
+
+	if !strings.Contains(joined, "-c:v libx265") {
+		t.Errorf("expected '-c:v libx265', got: %s", joined)
+	}
+	if strings.Contains(joined, "-allow_sw") {
+		t.Errorf("expected '-allow_sw' dropped when switching away from videotoolbox, got: %s", joined)
+	}
+	if !strings.Contains(joined, "-crf 20") {
+		t.Errorf("expected '-crf 20', got: %s", joined)
+	}
+	if strings.Contains(joined, "-q:v") {
+		t.Errorf("expected base '-q:v 66' dropped when -crf specified, got: %s", joined)
+	}
+	if !strings.Contains(joined, "-preset slow") {
+		t.Errorf("expected '-preset slow', got: %s", joined)
+	}
+	if !strings.Contains(joined, "-vf scale=1920:1080") {
+		t.Errorf("expected custom '-vf scale=1920:1080', got: %s", joined)
+	}
+	if !strings.Contains(joined, "-c:a copy") {
+		t.Errorf("expected '-c:a copy', got: %s", joined)
+	}
+	if strings.Contains(joined, "-b:a") {
+		t.Errorf("expected '-b:a' dropped when '-c:a copy' used, got: %s", joined)
+	}
+}
+
+func TestMergeFFmpegArgs_Appends(t *testing.T) {
+	base := []string{
+		"-y", "-i", "input.mp4",
+		"-c:v", "hevc_videotoolbox", "-tag:v", "hvc1",
+		"-allow_sw", "1",
+		"-preset", "medium",
+		"-q:v", "66",
+		"-c:a", "aac", "-b:a", "192k",
+		"output.mp4",
+	}
+
+	custom := []string{"-tune", "animation", "-profile:v", "main10"}
+
+	res := MergeFFmpegArgs(base, custom)
+	joined := strings.Join(res.Merged, " ")
+
+	if !strings.Contains(joined, "-tune animation") {
+		t.Errorf("expected '-tune animation' appended, got: %s", joined)
+	}
+	if !strings.Contains(joined, "-profile:v main10") {
+		t.Errorf("expected '-profile:v main10' appended, got: %s", joined)
+	}
+	if !strings.HasSuffix(joined, "output.mp4") {
+		t.Errorf("expected output.mp4 to remain at the end, got: %s", joined)
+	}
+}
+
+func TestBuildFFmpegArgs_WithCustomFlags(t *testing.T) {
+	opts := TranscodeOptions{
+		Input:       "in.mov",
+		Output:      "out.mp4",
+		Encoder:     "libx265",
+		CRF:         26,
+		Preset:      "medium",
+		Resolution:  "Original",
+		CustomFlags: `-preset veryslow -crf 18 -tune grain -i evil.mp4`,
+	}
+
+	args := BuildFFmpegArgs(opts)
+	joined := strings.Join(args, " ")
+
+	if !strings.Contains(joined, "-preset veryslow") {
+		t.Errorf("expected '-preset veryslow', got: %s", joined)
+	}
+	if !strings.Contains(joined, "-crf 18") {
+		t.Errorf("expected '-crf 18', got: %s", joined)
+	}
+	if !strings.Contains(joined, "-tune grain") {
+		t.Errorf("expected '-tune grain', got: %s", joined)
+	}
+	if !strings.Contains(joined, "-i in.mov") {
+		t.Errorf("expected '-i in.mov', got: %s", joined)
+	}
+	if strings.Contains(joined, "evil.mp4") {
+		t.Errorf("evil.mp4 should have been stripped as protected, got: %s", joined)
+	}
+}
+
+
 
 

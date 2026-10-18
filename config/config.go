@@ -34,6 +34,7 @@ type Config struct {
 	ExcludeOptimized   bool   `mapstructure:"exclude_optimized"`
 	DateAfter          string `mapstructure:"date_after"`
 	DateBefore         string `mapstructure:"date_before"`
+	CustomFFmpegFlags  string `mapstructure:"custom_ffmpeg_flags"`
 }
 
 // IsDebug returns true if the log level is set to debug.
@@ -224,6 +225,7 @@ func LoadConfig() (*Config, error) {
 	v.SetDefault("exclude_optimized", true)
 	v.SetDefault("date_after", "")
 	v.SetDefault("date_before", "")
+	v.SetDefault("custom_ffmpeg_flags", "")
 
 	if err := v.ReadInConfig(); err != nil {
 		return DefaultConfig(), err
@@ -306,6 +308,7 @@ func SaveConfig(cfg *Config) error {
 	v.Set("exclude_optimized", cfg.ExcludeOptimized)
 	v.Set("date_after", strings.TrimSpace(cfg.DateAfter))
 	v.Set("date_before", strings.TrimSpace(cfg.DateBefore))
+	v.Set("custom_ffmpeg_flags", strings.TrimSpace(cfg.CustomFFmpegFlags))
 
 	home, err := userHomeDir()
 	if err != nil {
