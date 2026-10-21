@@ -244,17 +244,22 @@ func ParseDurationSeconds(raw json.RawMessage) float64 {
 	}
 
 	// 4. Seconds suffix (e.g. "83.45s", "83.45sec")
+	hasSecondsSuffix := false
 	if strings.HasSuffix(lower, "sec") {
 		s = strings.TrimSpace(strings.TrimSuffix(lower, "sec"))
+		hasSecondsSuffix = true
 	} else if strings.HasSuffix(lower, "s") {
 		s = strings.TrimSpace(strings.TrimSuffix(lower, "s"))
+		hasSecondsSuffix = true
 	}
 
 	s = strings.ReplaceAll(s, ",", ".")
+	hasDecimal := strings.Contains(s, ".")
 	val, err := strconv.ParseFloat(s, 64)
 	if err == nil && val > 0 {
-		// shortcut: values >86400 assumed milliseconds; videos longer than 24h 0m 1s are misread as ~86s
-		if val > 86400 {
+		// Values with decimal points or explicit seconds suffixes ('s', 'sec') are seconds.
+		// shortcut: bare integers >86400 assumed milliseconds; long videos >24h with decimals or unit suffixes are preserved as seconds
+		if !hasDecimal && !hasSecondsSuffix && val > 86400 {
 			return val / 1000.0
 		}
 		return val
