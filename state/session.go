@@ -50,9 +50,10 @@ func GetSessionFilePath() (string, error) {
 		return "", err
 	}
 	dir := filepath.Join(home, ".config", "immich-video-optimizer")
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", err
 	}
+	_ = os.Chmod(dir, 0700)
 	return filepath.Join(dir, "session.json"), nil
 }
 
@@ -92,9 +93,10 @@ func SaveSession(session *Session) error {
 	}
 
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
+	_ = os.Chmod(dir, 0700)
 
 	session.mu.RLock()
 	data, err := json.MarshalIndent(session, "", "  ")

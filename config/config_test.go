@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -40,10 +41,19 @@ func TestSaveAndLoadConfig(t *testing.T) {
 		t.Fatalf("SaveConfig failed: %v", err)
 	}
 
-	// Verify file was created
+	// Verify file was created and permissions are restrictive
 	configPath := filepath.Join(tempDir, ".config", "immich-video-optimizer", "config.yaml")
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+	if fi, err := os.Stat(configPath); os.IsNotExist(err) {
 		t.Fatalf("Config file was not created at expected path: %s", configPath)
+	} else if err == nil && fi.Mode().Perm() != 0600 {
+		t.Errorf("expected config file permissions 0600, got %o", fi.Mode().Perm())
+	}
+	if runtime.GOOS != "windows" {
+		if dirFi, err := os.Stat(filepath.Dir(configPath)); err != nil {
+			t.Fatalf("failed to stat config dir: %v", err)
+		} else if dirFi.Mode().Perm() != 0700 {
+			t.Errorf("expected config dir permissions 0700, got %o", dirFi.Mode().Perm())
+		}
 	}
 
 	// Test LoadConfig
@@ -583,7 +593,111 @@ func TestSaveConfigToPath(t *testing.T) {
 	if !strings.Contains(string(data), "custom:2283") || !strings.Contains(string(data), "-tune grain") {
 		t.Errorf("saved config does not contain expected values: %s", string(data))
 	}
+	if fi, err := os.Stat(customPath); err == nil && fi.Mode().Perm() != 0600 {
+		t.Errorf("expected custom config file permissions 0600, got %o", fi.Mode().Perm())
+	}
 }
+
+func TestConfig_Normalize(t *testing.T) {
+	cfg := &Config{
+		URL:                "  http://localhost:8080/  ",
+		APIKey:             "  my-key  ",
+		ThresholdMode:      "totalmb",
+		SizeThreshold:      "",
+		Resolution:         "",
+		Preset:             "",
+		VideoQuality:       15, // should clamp to 10
+		ConcurrentEncoders: -1, // should default to 1
+		LogLevel:           "INVALID",
+		MaxRetries:         -5,
+		LogMaxSizeMB:       0,
+		LogMaxBackups:      -2,
+		DateAfter:          "  2024-01-01  ",
+		DateBefore:         "  2024-12-31  ",
+		CustomFFmpegFlags:  "  -vf scale=720:-2  ",
+	}
+
+	changed := cfg.Normalize()
+	if !changed {
+		t.Errorf("expected Normalize() to return true for unnormalized config")
+	}
+
+	if cfg.URL != "http://localhost:8080/" {
+		t.Errorf("expected trimmed URL, got %q", cfg.URL)
+	}
+	if cfg.APIKey != "my-key" {
+		t.Errorf("expected trimmed APIKey, got %q", cfg.APIKey)
+	}
+	if cfg.ThresholdMode != ThresholdModeTotalMB {
+		t.Errorf("expected %q, got %q", ThresholdModeTotalMB, cfg.ThresholdMode)
+	}
+	if cfg.SizeThreshold != "100" {
+		t.Errorf("expected default SizeThreshold 100, got %q", cfg.SizeThreshold)
+	}
+	if cfg.Resolution != "Original" {
+		t.Errorf("expected default Resolution Original, got %q", cfg.Resolution)
+	}
+	if cfg.Preset != "Medium" {
+		t.Errorf("expected default Preset Medium, got %q", cfg.Preset)
+	}
+	if cfg.VideoQuality != 10 {
+		t.Errorf("expected clamped VideoQuality 10, got %d", cfg.VideoQuality)
+	}
+	if cfg.ConcurrentEncoders != 1 {
+		t.Errorf("expected default ConcurrentEncoders 1, got %d", cfg.ConcurrentEncoders)
+	}
+	if cfg.LogLevel != "info" {
+		t.Errorf("expected default LogLevel info, got %q", cfg.LogLevel)
+	}
+	if cfg.MaxRetries != 2 {
+		t.Errorf("expected default MaxRetries 2, got %d", cfg.MaxRetries)
+	}
+	if cfg.LogMaxSizeMB != 10 {
+		t.Errorf("expected default LogMaxSizeMB 10, got %d", cfg.LogMaxSizeMB)
+	}
+	if cfg.LogMaxBackups != 5 {
+		t.Errorf("expected default LogMaxBackups 5, got %d", cfg.LogMaxBackups)
+	}
+	if cfg.DateAfter != "2024-01-01" || cfg.DateBefore != "2024-12-31" {
+		t.Errorf("expected trimmed dates, got after=%q before=%q", cfg.DateAfter, cfg.DateBefore)
+	}
+	if cfg.CustomFFmpegFlags != "-vf scale=720:-2" {
+		t.Errorf("expected trimmed CustomFFmpegFlags, got %q", cfg.CustomFFmpegFlags)
+	}
+
+	// Normalizing an already normalized config should return false
+	if cfg.Normalize() {
+		t.Errorf("expected Normalize() to return false when already normalized")
+	}
+}
+
+func TestSaveConfig_TightensExistingDirPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping permission check on windows")
+	}
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+
+	configDir := filepath.Join(tempDir, ".config", "immich-video-optimizer")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+	_ = os.Chmod(configDir, 0755)
+
+	cfg := &Config{URL: "http://localhost:8080"}
+	if err := SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig failed: %v", err)
+	}
+
+	fi, err := os.Stat(configDir)
+	if err != nil {
+		t.Fatalf("failed to stat dir: %v", err)
+	}
+	if fi.Mode().Perm() != 0700 {
+		t.Errorf("expected config dir tightened to 0700, got %o", fi.Mode().Perm())
+	}
+}
+
 
 
 

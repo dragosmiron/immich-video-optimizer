@@ -211,6 +211,96 @@ func NormalizeThresholdMode(mode string) string {
 	}
 }
 
+// Normalize clamps configuration fields to valid ranges and populates defaults.
+// It returns true if any field value was adjusted.
+func (c *Config) Normalize() bool {
+	if c == nil {
+		return false
+	}
+	changed := false
+	trimmedURL := strings.TrimSpace(c.URL)
+	if trimmedURL != c.URL {
+		c.URL = trimmedURL
+		changed = true
+	}
+	trimmedKey := strings.TrimSpace(c.APIKey)
+	if trimmedKey != c.APIKey {
+		c.APIKey = trimmedKey
+		changed = true
+	}
+	normThreshold := NormalizeThresholdMode(c.ThresholdMode)
+	if normThreshold != c.ThresholdMode {
+		c.ThresholdMode = normThreshold
+		changed = true
+	}
+	trimmedThreshold := strings.TrimSpace(c.SizeThreshold)
+	if trimmedThreshold == "" {
+		trimmedThreshold = "100"
+	}
+	if trimmedThreshold != c.SizeThreshold {
+		c.SizeThreshold = trimmedThreshold
+		changed = true
+	}
+	if c.Resolution == "" {
+		c.Resolution = "Original"
+		changed = true
+	}
+	if c.Preset == "" {
+		c.Preset = "Medium"
+		changed = true
+	}
+	if c.VideoQuality == 0 {
+		c.VideoQuality = 6
+		changed = true
+	} else if c.VideoQuality < 1 {
+		c.VideoQuality = 1
+		changed = true
+	} else if c.VideoQuality > 10 {
+		c.VideoQuality = 10
+		changed = true
+	}
+	if c.ConcurrentEncoders <= 0 {
+		c.ConcurrentEncoders = 1
+		changed = true
+	}
+	logLvl := strings.ToLower(strings.TrimSpace(c.LogLevel))
+	if logLvl != "debug" && logLvl != "info" {
+		logLvl = "info"
+	}
+	if logLvl != c.LogLevel {
+		c.LogLevel = logLvl
+		changed = true
+	}
+	if c.MaxRetries < 0 {
+		c.MaxRetries = 2
+		changed = true
+	}
+	if c.LogMaxSizeMB <= 0 {
+		c.LogMaxSizeMB = 10
+		changed = true
+	}
+	if c.LogMaxBackups < 0 {
+		c.LogMaxBackups = 5
+		changed = true
+	}
+	trimmedAfter := strings.TrimSpace(c.DateAfter)
+	if trimmedAfter != c.DateAfter {
+		c.DateAfter = trimmedAfter
+		changed = true
+	}
+	trimmedBefore := strings.TrimSpace(c.DateBefore)
+	if trimmedBefore != c.DateBefore {
+		c.DateBefore = trimmedBefore
+		changed = true
+	}
+	trimmedFlags := strings.TrimSpace(c.CustomFFmpegFlags)
+	if trimmedFlags != c.CustomFFmpegFlags {
+		c.CustomFFmpegFlags = trimmedFlags
+		changed = true
+	}
+	return changed
+}
+
 func LoadConfig() (*Config, error) {
 	v := viper.New()
 	v.SetConfigName("config")
@@ -258,55 +348,7 @@ func LoadConfig() (*Config, error) {
 		return DefaultConfig(), err
 	}
 
-	normThreshold := NormalizeThresholdMode(cfg.ThresholdMode)
-	if normThreshold != cfg.ThresholdMode {
-		cfg.ThresholdMode = normThreshold
-		needsSave = true
-	}
-	if cfg.Preset == "" {
-		cfg.Preset = "Medium"
-		needsSave = true
-	}
-	if cfg.Resolution == "" {
-		cfg.Resolution = "Original"
-		needsSave = true
-	}
-	if cfg.VideoQuality == 0 {
-		cfg.VideoQuality = 6
-		needsSave = true
-	} else if cfg.VideoQuality < 1 {
-		cfg.VideoQuality = 1
-		needsSave = true
-	} else if cfg.VideoQuality > 10 {
-		cfg.VideoQuality = 10
-		needsSave = true
-	}
-	if cfg.ConcurrentEncoders <= 0 {
-		cfg.ConcurrentEncoders = 1
-		needsSave = true
-	}
-	if cfg.SizeThreshold == "" {
-		cfg.SizeThreshold = "100"
-		needsSave = true
-	}
-	logLvl := strings.ToLower(strings.TrimSpace(cfg.LogLevel))
-	if logLvl != "debug" && logLvl != "info" {
-		cfg.LogLevel = "info"
-		needsSave = true
-	} else if logLvl != cfg.LogLevel {
-		cfg.LogLevel = logLvl
-		needsSave = true
-	}
-	if cfg.MaxRetries < 0 {
-		cfg.MaxRetries = 2
-		needsSave = true
-	}
-	if cfg.LogMaxSizeMB <= 0 {
-		cfg.LogMaxSizeMB = 10
-		needsSave = true
-	}
-	if cfg.LogMaxBackups < 0 {
-		cfg.LogMaxBackups = 5
+	if cfg.Normalize() {
 		needsSave = true
 	}
 
@@ -326,38 +368,7 @@ func SaveConfig(cfg *Config) error {
 
 // SaveConfigToPath saves the configuration to a specific target file path, or defaults to ~/.config/immich-video-optimizer/config.yaml if targetPath is empty.
 func SaveConfigToPath(cfg *Config, targetPath string) error {
-	cfg.URL = strings.TrimSpace(cfg.URL)
-	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
-	cfg.ThresholdMode = NormalizeThresholdMode(cfg.ThresholdMode)
-	cfg.SizeThreshold = strings.TrimSpace(cfg.SizeThreshold)
-	if cfg.Resolution == "" {
-		cfg.Resolution = "Original"
-	}
-	if cfg.Preset == "" {
-		cfg.Preset = "Medium"
-	}
-	if cfg.VideoQuality == 0 {
-		cfg.VideoQuality = 6
-	} else if cfg.VideoQuality < 1 {
-		cfg.VideoQuality = 1
-	} else if cfg.VideoQuality > 10 {
-		cfg.VideoQuality = 10
-	}
-	if cfg.ConcurrentEncoders <= 0 {
-		cfg.ConcurrentEncoders = 1
-	}
-	if cfg.LogLevel == "" {
-		cfg.LogLevel = "info"
-	}
-	if cfg.MaxRetries < 0 {
-		cfg.MaxRetries = 2
-	}
-	if cfg.LogMaxSizeMB <= 0 {
-		cfg.LogMaxSizeMB = 10
-	}
-	if cfg.LogMaxBackups < 0 {
-		cfg.LogMaxBackups = 5
-	}
+	cfg.Normalize()
 
 	v := viper.New()
 	v.SetConfigName("config")
@@ -376,30 +387,30 @@ func SaveConfigToPath(cfg *Config, targetPath string) error {
 	v.Set("log_level", strings.ToLower(cfg.LogLevel))
 	v.Set("max_retries", cfg.MaxRetries)
 	v.Set("exclude_optimized", cfg.ExcludeOptimized)
-	v.Set("date_after", strings.TrimSpace(cfg.DateAfter))
-	v.Set("date_before", strings.TrimSpace(cfg.DateBefore))
-	v.Set("custom_ffmpeg_flags", strings.TrimSpace(cfg.CustomFFmpegFlags))
+	v.Set("date_after", cfg.DateAfter)
+	v.Set("date_before", cfg.DateBefore)
+	v.Set("custom_ffmpeg_flags", cfg.CustomFFmpegFlags)
 	v.Set("log_max_size_mb", cfg.LogMaxSizeMB)
 	v.Set("log_max_backups", cfg.LogMaxBackups)
 	v.Set("log_compress", cfg.LogCompress)
 
-	if targetPath != "" {
-		if err := os.MkdirAll(filepath.Dir(targetPath), 0700); err != nil {
+	if targetPath == "" {
+		home, err := userHomeDir()
+		if err != nil {
 			return err
 		}
-		return v.WriteConfigAs(targetPath)
+		targetPath = filepath.Join(home, ".config", "immich-video-optimizer", "config.yaml")
 	}
 
-	home, err := userHomeDir()
-	if err != nil {
+	dir := filepath.Dir(targetPath)
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
+	_ = os.Chmod(dir, 0700)
 
-	configDir := filepath.Join(home, ".config", "immich-video-optimizer")
-	if err := os.MkdirAll(configDir, 0700); err != nil {
+	if err := v.WriteConfigAs(targetPath); err != nil {
 		return err
 	}
-
-	configPath := filepath.Join(configDir, "config.yaml")
-	return v.WriteConfigAs(configPath)
+	_ = os.Chmod(targetPath, 0600)
+	return nil
 }

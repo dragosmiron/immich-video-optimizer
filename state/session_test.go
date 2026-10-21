@@ -2,6 +2,9 @@ package state
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -52,6 +55,13 @@ func TestSessionSaveLoadClear(t *testing.T) {
 	err = SaveSession(newSession)
 	if err != nil {
 		t.Fatalf("Failed to save session: %v", err)
+	}
+
+	sessionPath, _ := GetSessionFilePath()
+	if fi, err := os.Stat(filepath.Dir(sessionPath)); err == nil && runtime.GOOS != "windows" {
+		if fi.Mode().Perm() != 0700 {
+			t.Errorf("expected session directory perm 0700, got %o", fi.Mode().Perm())
+		}
 	}
 
 	// Test LoadSession when file exists
@@ -163,4 +173,59 @@ func TestSessionTransitionsAndConcurrency(t *testing.T) {
 		t.Fatalf("expected at least 20 videos, got %v", loaded)
 	}
 }
+
+func TestSaveSession_TightensExistingDirPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping permission check on windows")
+	}
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+
+	sessionDir := filepath.Join(tempDir, ".config", "immich-video-optimizer")
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+	_ = os.Chmod(sessionDir, 0755)
+
+	sess := &Session{TotalVideos: 1}
+	if err := SaveSession(sess); err != nil {
+		t.Fatalf("SaveSession failed: %v", err)
+	}
+
+	fi, err := os.Stat(sessionDir)
+	if err != nil {
+		t.Fatalf("failed to stat dir: %v", err)
+	}
+	if fi.Mode().Perm() != 0700 {
+		t.Errorf("expected session dir tightened to 0700, got %o", fi.Mode().Perm())
+	}
+}
+
+func TestGetSessionFilePath_TightensExistingDirPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping permission check on windows")
+	}
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+
+	sessionDir := filepath.Join(tempDir, ".config", "immich-video-optimizer")
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+	_ = os.Chmod(sessionDir, 0755)
+
+	_, err := GetSessionFilePath()
+	if err != nil {
+		t.Fatalf("GetSessionFilePath failed: %v", err)
+	}
+
+	fi, err := os.Stat(sessionDir)
+	if err != nil {
+		t.Fatalf("failed to stat dir: %v", err)
+	}
+	if fi.Mode().Perm() != 0700 {
+		t.Errorf("expected session dir tightened to 0700 by GetSessionFilePath, got %o", fi.Mode().Perm())
+	}
+}
+
 

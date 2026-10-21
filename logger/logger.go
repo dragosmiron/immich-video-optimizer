@@ -112,7 +112,8 @@ func getLogPath(filename string) string {
 	dir := filepath.Join(home, ".config", "immich-video-optimizer")
 	dirMu.Lock()
 	if dir != lastEnsuredDir {
-		_ = os.MkdirAll(dir, 0755)
+		_ = os.MkdirAll(dir, 0700)
+		_ = os.Chmod(dir, 0700)
 		lastEnsuredDir = dir
 	}
 	dirMu.Unlock()
