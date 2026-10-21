@@ -20,7 +20,7 @@ type WorkItem struct {
 	Err            error
 	Fallback       FallbackInfo
 
-	cleanupOnce sync.Once
+	cleanupMu sync.Mutex
 }
 
 // NewWorkItem initializes a WorkItem for a given asset.
@@ -31,19 +31,19 @@ func NewWorkItem(asset immich.Asset, origPath string) *WorkItem {
 	}
 }
 
-// Cleanup ensures temporary files (orig_* and opt_*) are deleted exactly once.
+// Cleanup ensures temporary files (orig_* and opt_*) are deleted idempotently.
 func (w *WorkItem) Cleanup() {
 	if w == nil {
 		return
 	}
-	w.cleanupOnce.Do(func() {
-		if w.OrigPath != "" {
-			_ = os.Remove(w.OrigPath)
-			w.OrigPath = ""
-		}
-		if w.TranscodedPath != "" {
-			_ = os.Remove(w.TranscodedPath)
-			w.TranscodedPath = ""
-		}
-	})
+	w.cleanupMu.Lock()
+	defer w.cleanupMu.Unlock()
+	if w.OrigPath != "" {
+		_ = os.Remove(w.OrigPath)
+		w.OrigPath = ""
+	}
+	if w.TranscodedPath != "" {
+		_ = os.Remove(w.TranscodedPath)
+		w.TranscodedPath = ""
+	}
 }

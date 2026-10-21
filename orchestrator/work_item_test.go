@@ -45,3 +45,29 @@ func TestWorkItem_Cleanup(t *testing.T) {
 		t.Errorf("expected paths to be cleared on Cleanup")
 	}
 }
+
+func TestWorkItem_CleanupMultipleStages(t *testing.T) {
+	tempDir := t.TempDir()
+	origFile := filepath.Join(tempDir, "orig_stage.mp4")
+	optFile := filepath.Join(tempDir, "opt_stage.mp4")
+
+	if err := os.WriteFile(origFile, []byte("orig"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	item := NewWorkItem(immich.Asset{ID: "test-stage"}, origFile)
+	item.Cleanup()
+	if _, err := os.Stat(origFile); !os.IsNotExist(err) {
+		t.Fatalf("expected origFile to be removed on first cleanup")
+	}
+
+	if err := os.WriteFile(optFile, []byte("opt"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	item.TranscodedPath = optFile
+
+	item.Cleanup()
+	if _, err := os.Stat(optFile); !os.IsNotExist(err) {
+		t.Fatalf("expected optFile to be removed on second cleanup")
+	}
+}
