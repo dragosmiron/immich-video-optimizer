@@ -134,13 +134,21 @@ func IsHEVC(ctx context.Context, ffmpegPath string, inputPath string) (bool, err
 	return isHEVC, nil
 }
 
+// BuildProbeRemoteArgs constructs ffmpeg CLI arguments for remote probing.
+func BuildProbeRemoteArgs(assetURL string, apiKey string) []string {
+	var args []string
+	if apiKey != "" {
+		args = append(args, "-headers", fmt.Sprintf("x-api-key: %s\r\n", apiKey))
+	}
+	args = append(args, "-i", assetURL)
+	return args
+}
+
 // ProbeRemoteDetails queries remote video headers via HTTP range requests and extracts video details.
 func ProbeRemoteDetails(ctx context.Context, ffmpegPath string, assetURL string, apiKey string) (ProbeDetails, error) {
-	headers := fmt.Sprintf("x-api-key: %s\r\n", apiKey)
-	cmd := exec.CommandContext(ctx, ffmpegPath,
-		"-headers", headers,
-		"-i", assetURL,
-	)
+	// shortcut: ffmpeg requires -headers on argv for authenticated HTTP; process runs briefly (<4s) during initial scan
+	args := BuildProbeRemoteArgs(assetURL, apiKey)
+	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
 	out, err := cmd.CombinedOutput()
 	outStr := string(out)
 	details := ParseVideoDetails(outStr)

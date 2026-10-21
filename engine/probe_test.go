@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -119,4 +120,33 @@ func TestCheckAudioStream(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildProbeRemoteArgs(t *testing.T) {
+	t.Run("empty apiKey does not include -headers", func(t *testing.T) {
+		args := BuildProbeRemoteArgs("http://example.com/asset.mp4", "")
+		for _, arg := range args {
+			if arg == "-headers" {
+				t.Fatalf("expected probe args not to include -headers when apiKey is empty, got %v", args)
+			}
+		}
+		if len(args) != 2 || args[0] != "-i" || args[1] != "http://example.com/asset.mp4" {
+			t.Errorf("unexpected probe args: %v", args)
+		}
+	})
+
+	t.Run("non-empty apiKey includes -headers", func(t *testing.T) {
+		args := BuildProbeRemoteArgs("http://example.com/asset.mp4", "test-api-key")
+		foundHeaders := false
+		for i, arg := range args {
+			if arg == "-headers" && i+1 < len(args) && strings.Contains(args[i+1], "test-api-key") {
+				foundHeaders = true
+				break
+			}
+		}
+		if !foundHeaders {
+			t.Errorf("expected -headers with api key, got %v", args)
+		}
+	})
+}
+
 
