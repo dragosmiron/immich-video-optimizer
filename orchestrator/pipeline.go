@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 )
 
 type Pipeline struct {
+	cfgMu    sync.RWMutex
 	cfg      *config.Config
 	client   *immich.Client
 	binaries *engine.BinaryManager
@@ -35,8 +37,12 @@ func NewPipeline(cfg *config.Config) (*Pipeline, error) {
 
 // NewPipelineWithBinaries initializes Pipeline with custom BinaryManager (useful for testing or overrides).
 func NewPipelineWithBinaries(cfg *config.Config, binaries *engine.BinaryManager) (*Pipeline, error) {
-	client := immich.NewClient(cfg.URL, cfg.APIKey)
-	client.SetMaxRetries(cfg.MaxRetries)
+	if cfg == nil {
+		cfg = config.DefaultConfig()
+	}
+	copyCfg := *cfg
+	client := immich.NewClient(copyCfg.URL, copyCfg.APIKey)
+	client.SetMaxRetries(copyCfg.MaxRetries)
 	if binaries == nil {
 		var err error
 		binaries, err = engine.NewBinaryManager()
@@ -61,7 +67,7 @@ func NewPipelineWithBinaries(cfg *config.Config, binaries *engine.BinaryManager)
 		}
 	}
 	return &Pipeline{
-		cfg:      cfg,
+		cfg:      &copyCfg,
 		client:   client,
 		binaries: binaries,
 		encoder:  encoder,
@@ -71,13 +77,31 @@ func NewPipelineWithBinaries(cfg *config.Config, binaries *engine.BinaryManager)
 
 
 func (p *Pipeline) UpdateConfig(cfg *config.Config) {
-	p.cfg = cfg
-	p.client = immich.NewClient(cfg.URL, cfg.APIKey)
-	p.client.SetMaxRetries(cfg.MaxRetries)
+	if p == nil {
+		return
+	}
+	if cfg == nil {
+		cfg = config.DefaultConfig()
+	}
+	copyCfg := *cfg
+	p.cfgMu.Lock()
+	defer p.cfgMu.Unlock()
+	p.cfg = &copyCfg
+	p.client = immich.NewClient(copyCfg.URL, copyCfg.APIKey)
+	p.client.SetMaxRetries(copyCfg.MaxRetries)
 }
 
-func (p *Pipeline) QueryVideos(thresholdBytes int64) ([]immich.Asset, error) {
-	return p.client.QueryVideoAssets(thresholdBytes)
+func (p *Pipeline) Config() *config.Config {
+	if p == nil {
+		return nil
+	}
+	p.cfgMu.RLock()
+	defer p.cfgMu.RUnlock()
+	if p.cfg == nil {
+		return nil
+	}
+	copyCfg := *p.cfg
+	return &copyCfg
 }
 
 func (p *Pipeline) ScanVideos(mode string, threshold float64) (*immich.QueryResult, error) {
@@ -85,20 +109,40 @@ func (p *Pipeline) ScanVideos(mode string, threshold float64) (*immich.QueryResu
 }
 
 func (p *Pipeline) ScanVideosWithContext(ctx context.Context, mode string, threshold float64) (*immich.QueryResult, error) {
-	opts := immich.ScanOptions{}
-	if p.cfg != nil {
-		opts.ExcludeOptimized = p.cfg.ExcludeOptimized
-		opts.DateAfter = p.cfg.DateAfter
-		opts.DateBefore = p.cfg.DateBefore
+	if p == nil {
+		return nil, errors.New("pipeline is nil")
 	}
-	return p.client.ScanVideosWithOptions(ctx, mode, threshold, opts)
+	cfg := p.Config()
+	client := p.Client()
+	if client == nil {
+		return nil, errors.New("immich client is nil")
+	}
+	opts := immich.ScanOptions{}
+	if cfg != nil {
+		opts.ExcludeOptimized = cfg.ExcludeOptimized
+		opts.DateAfter = cfg.DateAfter
+		opts.DateBefore = cfg.DateBefore
+	}
+	return client.ScanVideosWithOptions(ctx, mode, threshold, opts)
 }
 
 func (p *Pipeline) ValidateConnection() error {
-	return p.client.ValidateConnection()
+	if p == nil {
+		return errors.New("pipeline is nil")
+	}
+	client := p.Client()
+	if client == nil {
+		return errors.New("immich client is nil")
+	}
+	return client.ValidateConnection()
 }
 
 func (p *Pipeline) Client() *immich.Client {
+	if p == nil {
+		return nil
+	}
+	p.cfgMu.RLock()
+	defer p.cfgMu.RUnlock()
 	return p.client
 }
 
@@ -112,20 +156,27 @@ func (p *Pipeline) Encoder() string {
 
 // CleanDryRunAlbum deletes any previously created dry-run tracking album in Immich.
 func (p *Pipeline) CleanDryRunAlbum() {
+	if p == nil {
+		return
+	}
 	p.dryRunMu.Lock()
 	albumID := p.dryRunAlbumID
 	p.dryRunAlbumID = ""
 	p.dryRunMu.Unlock()
 
-	if albumID != "" && p.client != nil {
+	client := p.Client()
+	if albumID != "" && client != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = p.client.DeleteAlbumWithContext(ctx, albumID)
+		_ = client.DeleteAlbumWithContext(ctx, albumID)
 	}
 }
 
 // SetDryRunAlbumID sets or updates the dry run album ID.
 func (p *Pipeline) SetDryRunAlbumID(albumID string) {
+	if p == nil {
+		return
+	}
 	p.dryRunMu.Lock()
 	p.dryRunAlbumID = albumID
 	p.dryRunMu.Unlock()
@@ -133,6 +184,9 @@ func (p *Pipeline) SetDryRunAlbumID(albumID string) {
 
 // DryRunAlbumID returns the current dry run album ID.
 func (p *Pipeline) DryRunAlbumID() string {
+	if p == nil {
+		return ""
+	}
 	p.dryRunMu.Lock()
 	defer p.dryRunMu.Unlock()
 	return p.dryRunAlbumID
@@ -140,6 +194,9 @@ func (p *Pipeline) DryRunAlbumID() string {
 
 func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- interface{}) {
 	defer close(ch)
+	if p == nil {
+		return
+	}
 
 	emit := func(msg interface{}) bool { return emitOnContext(ctx, ch, msg) }
 
@@ -176,18 +233,21 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		albumID = sess.TrackingAlbumID
 	}
 
+	client := p.Client()
+	cfg := p.Config()
+
 	if albumID == "" && dryRunAlbum != "" {
 		albumID = dryRunAlbum
 		timestamp := time.Now().Format("20060102-150405")
 		inProgressName := fmt.Sprintf("Immich-Optimizer-InProgress-%s", timestamp)
-		if p.client != nil {
-			if err := p.client.UpdateAlbumNameWithContext(ctx, albumID, inProgressName); err != nil {
+		if client != nil {
+			if err := client.UpdateAlbumNameWithContext(ctx, albumID, inProgressName); err != nil {
 				logger.Error("Failed to rename dry-run album %s to %s: %v", albumID, inProgressName, err)
 			}
 		}
 	} else if dryRunAlbum != "" && dryRunAlbum != albumID {
-		if p.client != nil {
-			_ = p.client.DeleteAlbumWithContext(ctx, dryRunAlbum)
+		if client != nil {
+			_ = client.DeleteAlbumWithContext(ctx, dryRunAlbum)
 		}
 	}
 
@@ -241,7 +301,7 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 	}
 
 	// Phase A: Parallel Codec Pre-Scanning (inspects small HTTP range headers in parallel)
-	if p.cfg.SkipHEVC {
+	if cfg != nil && cfg.SkipHEVC {
 		emit(PipelineStageMsg{Stage: "probing", VideoName: fmt.Sprintf("Scanning %d videos for HEVC format in parallel...", len(pendingVideos))})
 		pendingVideos = p.filterHEVCParallel(ctx, pendingVideos, sess, emit)
 	}
@@ -261,10 +321,10 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 	}
 
 	// Phase B: Assembly Line Pipelining (Prefetch Downloader -> Transcoder -> Background Uploader)
-	if albumID == "" && len(pendingVideos) > 0 {
+	if albumID == "" && len(pendingVideos) > 0 && client != nil {
 		timestamp := time.Now().Format("20060102-150405")
 		albumName := fmt.Sprintf("Immich-Optimizer-InProgress-%s", timestamp)
-		album, err := p.client.CreateTrackingAlbumWithContext(ctx, albumName)
+		album, err := client.CreateTrackingAlbumWithContext(ctx, albumName)
 		if err != nil {
 			logger.Error("Failed to create tracking album %s: %v", albumName, err)
 		} else if album != nil {
@@ -274,15 +334,20 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 		}
 	}
 
-	if albumID != "" && len(pendingVideos) > 0 {
+	if albumID != "" && len(pendingVideos) > 0 && client != nil {
 		var origIDs []string
 		for _, v := range pendingVideos {
 			origIDs = append(origIDs, v.ID)
 		}
-		_ = p.client.AddAssetsToAlbumWithContext(ctx, albumID, origIDs)
+		_ = client.AddAssetsToAlbumWithContext(ctx, albumID, origIDs)
 	}
 
-	numEncoders := p.cfg.ConcurrentEncoders
+	numEncoders := 1
+	enablePrefetch := true
+	if cfg != nil {
+		numEncoders = cfg.ConcurrentEncoders
+		enablePrefetch = cfg.EnablePrefetch
+	}
 	if numEncoders <= 0 {
 		numEncoders = 1
 	} else if numEncoders > 2 {
@@ -290,13 +355,13 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 	}
 
 	queueCap := numEncoders
-	if !p.cfg.EnablePrefetch {
+	if !enablePrefetch {
 		queueCap = 0 // unbuffered: synchronous handoff
 	}
 
 	transcodeQueue := make(chan *WorkItem, queueCap)
 	uploadCap := numEncoders + 2
-	if !p.cfg.EnablePrefetch {
+	if !enablePrefetch {
 		uploadCap = numEncoders
 	}
 	uploadQueue := make(chan *WorkItem, uploadCap)
@@ -315,8 +380,8 @@ func (p *Pipeline) Run(ctx context.Context, videos []immich.Asset, ch chan<- int
 	}()
 
 	var optimizerTagID string
-	if p.cfg != nil && p.cfg.ExcludeOptimized {
-		tag, err := p.client.GetOrCreateTagWithContext(ctx, "immich-optimizer")
+	if cfg != nil && cfg.ExcludeOptimized && client != nil {
+		tag, err := client.GetOrCreateTagWithContext(ctx, "immich-optimizer")
 		if err != nil {
 			logger.Error("Failed to get/create 'immich-optimizer' tag: %v (ensure Tags are enabled in Immich Account Settings)", err)
 		} else if tag != nil {

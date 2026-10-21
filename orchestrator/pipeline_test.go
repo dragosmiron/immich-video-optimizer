@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -122,7 +123,7 @@ func TestSizeGuard(t *testing.T) {
 		Transport: &testRoundTripper{handler: ts.Config.Handler},
 	})
 
-	videos, err := pipeline.QueryVideos(0)
+	videos, err := pipeline.Client().QueryVideoAssets(0)
 	if err != nil {
 		t.Fatalf("Failed to query videos: %v", err)
 	}
@@ -207,7 +208,7 @@ func TestPipeline_DownloadErrorShortCircuit(t *testing.T) {
 		Transport: &testRoundTripper{handler: ts.Config.Handler},
 	})
 
-	videos, err := pipeline.QueryVideos(0)
+	videos, err := pipeline.Client().QueryVideoAssets(0)
 	if err != nil {
 		t.Fatalf("Failed to query videos: %v", err)
 	}
@@ -479,7 +480,7 @@ func TestPipeline_DuplicateAssetGuard(t *testing.T) {
 		Transport: &testRoundTripper{handler: ts.Config.Handler},
 	})
 
-	videos, err := p.QueryVideos(0)
+	videos, err := p.Client().QueryVideoAssets(0)
 	if err != nil {
 		t.Fatalf("Failed to query videos: %v", err)
 	}
@@ -575,7 +576,7 @@ func TestPipeline_DeleteFailureHandling(t *testing.T) {
 		Transport: &testRoundTripper{handler: ts.Config.Handler},
 	})
 
-	videos, err := p.QueryVideos(0)
+	videos, err := p.Client().QueryVideoAssets(0)
 	if err != nil {
 		t.Fatalf("Failed to query videos: %v", err)
 	}
@@ -1415,7 +1416,7 @@ func TestPipeline_UnbufferedChannel(t *testing.T) {
 		Transport: &testRoundTripper{handler: ts.Config.Handler},
 	})
 
-	videos, err := p.QueryVideos(0)
+	videos, err := p.Client().QueryVideoAssets(0)
 	if err != nil {
 		t.Fatalf("Failed to query videos: %v", err)
 	}
@@ -2623,3 +2624,421 @@ func TestRunUploader_NilAlbumID(t *testing.T) {
 		t.Fatalf("expected 1 successful completion message, got: %+v", completedMsgs)
 	}
 }
+
+func TestPipeline_UpdateConfigConcurrent(t *testing.T) {
+	p, err := NewPipelineWithBinaries(&config.Config{
+		URL:        "http://localhost:8080",
+		APIKey:     "key-1",
+		MaxRetries: 2,
+	}, &engine.BinaryManager{FFmpegPath: "mock-ffmpeg", ExifToolPath: "mock-exiftool"})
+	if err != nil {
+		t.Fatalf("failed to init pipeline: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	// Reader goroutines
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					_ = p.Config()
+					_ = p.Client()
+				}
+			}
+		}()
+	}
+
+	// Writer goroutines updating config
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					p.UpdateConfig(&config.Config{
+						URL:        fmt.Sprintf("http://localhost:808%d", id),
+						APIKey:     fmt.Sprintf("key-%d", id),
+						MaxRetries: id,
+					})
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+}
+
+func TestPipeline_NilClientSafeguards(t *testing.T) {
+	p := &Pipeline{tempDir: t.TempDir()}
+
+	t.Run("ValidateConnection with nil client", func(t *testing.T) {
+		err := p.ValidateConnection()
+		if err == nil {
+			t.Errorf("expected error from ValidateConnection when client is nil, got nil")
+		}
+	})
+
+	t.Run("ScanVideosWithContext with nil client", func(t *testing.T) {
+		_, err := p.ScanVideosWithContext(context.Background(), "total-size", 100)
+		if err == nil {
+			t.Errorf("expected error from ScanVideosWithContext when client is nil, got nil")
+		}
+	})
+
+	t.Run("startDownloader with nil client", func(t *testing.T) {
+		ctx := context.Background()
+		pendingVideos := []immich.Asset{
+			{ID: "asset-nil-client-1", OriginalFileName: "test1.mp4"},
+			{ID: "asset-nil-client-2", OriginalFileName: "test2.mp4"},
+		}
+		transcodeQueue := make(chan *WorkItem, 10)
+		sess := &state.Session{Videos: make(map[string]*state.VideoState)}
+		for _, v := range pendingVideos {
+			sess.AddOrUpdateVideo(&state.VideoState{ID: v.ID, OriginalName: v.OriginalFileName, Status: state.StatusPending})
+		}
+
+		var messages []interface{}
+		var mu sync.Mutex
+		emit := func(msg interface{}) bool {
+			mu.Lock()
+			defer mu.Unlock()
+			messages = append(messages, msg)
+			return true
+		}
+
+		var wg sync.WaitGroup
+		p.startDownloader(ctx, pendingVideos, transcodeQueue, sess, emit, &wg)
+		wg.Wait()
+
+		// transcodeQueue should be empty
+		if len(transcodeQueue) != 0 {
+			t.Errorf("expected transcodeQueue to be empty, got len %d", len(transcodeQueue))
+		}
+
+		// Both assets should be marked failed in session
+		if sess.Videos["asset-nil-client-1"].Status != state.StatusFailed {
+			t.Errorf("expected asset 1 status to be failed, got %s", sess.Videos["asset-nil-client-1"].Status)
+		}
+		if sess.Videos["asset-nil-client-2"].Status != state.StatusFailed {
+			t.Errorf("expected asset 2 status to be failed, got %s", sess.Videos["asset-nil-client-2"].Status)
+		}
+
+		// Completion messages with error should be emitted
+		mu.Lock()
+		defer mu.Unlock()
+		completeMsgs := 0
+		for _, msg := range messages {
+			if cmsg, ok := msg.(PipelineVideoCompleteMsg); ok {
+				completeMsgs++
+				if cmsg.Err == nil {
+					t.Errorf("expected completeMsg to contain error for asset %s", cmsg.VideoID)
+				}
+			}
+		}
+		if completeMsgs != 2 {
+			t.Errorf("expected 2 PipelineVideoCompleteMsg messages, got %d", completeMsgs)
+		}
+	})
+
+	t.Run("nil pipeline receiver methods", func(t *testing.T) {
+		var nilPipe *Pipeline
+		if nilPipe.Config() != nil {
+			t.Errorf("expected nil from (*Pipeline)(nil).Config()")
+		}
+		if nilPipe.Client() != nil {
+			t.Errorf("expected nil from (*Pipeline)(nil).Client()")
+		}
+		if err := nilPipe.ValidateConnection(); err == nil {
+			t.Errorf("expected error from (*Pipeline)(nil).ValidateConnection()")
+		}
+		if _, err := nilPipe.ScanVideosWithContext(context.Background(), "total-size", 100); err == nil {
+			t.Errorf("expected error from (*Pipeline)(nil).ScanVideosWithContext()")
+		}
+	})
+
+	t.Run("runUploader with nil client", func(t *testing.T) {
+		ctx := context.Background()
+		uploadQueue := make(chan *WorkItem, 1)
+		item := &WorkItem{Asset: immich.Asset{ID: "asset-upload-nil", OriginalFileName: "nil_uploader.mp4"}}
+		uploadQueue <- item
+		close(uploadQueue)
+
+		sess := &state.Session{Videos: make(map[string]*state.VideoState)}
+		sess.AddOrUpdateVideo(&state.VideoState{ID: item.Asset.ID, OriginalName: item.Asset.OriginalFileName, Status: state.StatusPending})
+
+		var messages []interface{}
+		emit := func(msg interface{}) bool {
+			messages = append(messages, msg)
+			return true
+		}
+
+		p.runUploader(ctx, uploadQueue, nil, "", sess, emit)
+
+		if sess.Videos[item.Asset.ID].Status != state.StatusFailed {
+			t.Errorf("expected asset status failed, got %s", sess.Videos[item.Asset.ID].Status)
+		}
+		if len(messages) != 1 {
+			t.Fatalf("expected 1 completion message, got %d", len(messages))
+		}
+		cmsg, ok := messages[0].(PipelineVideoCompleteMsg)
+		if !ok || cmsg.Err == nil {
+			t.Errorf("expected completeMsg with error, got %+v", messages[0])
+		}
+	})
+}
+
+func TestPipeline_ConfigImmutabilityAndNilSafety(t *testing.T) {
+	initialCfg := &config.Config{
+		URL:          "http://localhost:8080",
+		APIKey:       "test-key",
+		VideoQuality: 5,
+		MaxRetries:   3,
+	}
+	p, err := NewPipelineWithBinaries(initialCfg, &engine.BinaryManager{FFmpegPath: "ffmpeg", ExifToolPath: "exiftool"})
+	if err != nil {
+		t.Fatalf("failed to init pipeline: %v", err)
+	}
+
+	// 1. Independent copy verification: modifying the returned config does not mutate internal pipeline config
+	c1 := p.Config()
+	if c1 == nil {
+		t.Fatalf("expected non-nil config")
+	}
+	c1.URL = "http://modified:9999"
+	c1.VideoQuality = 10
+
+	c2 := p.Config()
+	if c2.URL != "http://localhost:8080" {
+		t.Errorf("expected original URL to remain unchanged, got %s", c2.URL)
+	}
+	if c2.VideoQuality != 5 {
+		t.Errorf("expected original VideoQuality to remain unchanged, got %d", c2.VideoQuality)
+	}
+
+	// 2. UpdateConfig(nil) does not panic and falls back to DefaultConfig()
+	p.UpdateConfig(nil)
+	defCfg := config.DefaultConfig()
+	afterNilCfg := p.Config()
+	if afterNilCfg == nil {
+		t.Fatalf("expected non-nil config after UpdateConfig(nil)")
+	}
+	if afterNilCfg.ThresholdMode != defCfg.ThresholdMode {
+		t.Errorf("expected default ThresholdMode %s, got %s", defCfg.ThresholdMode, afterNilCfg.ThresholdMode)
+	}
+
+	// 3. (*Pipeline)(nil).UpdateConfig(nil) does not panic
+	var nilPipe *Pipeline
+	nilPipe.UpdateConfig(nil)
+
+	// 4. Config() when p.cfg is nil returns nil
+	emptyPipe := &Pipeline{}
+	if emptyPipe.Config() != nil {
+		t.Errorf("expected nil from emptyPipe.Config()")
+	}
+
+	// 5. NewPipelineWithBinaries(nil, binaries) falls back to DefaultConfig() safely
+	pDef, err := NewPipelineWithBinaries(nil, &engine.BinaryManager{FFmpegPath: "ffmpeg", ExifToolPath: "exiftool"})
+	if err != nil {
+		t.Fatalf("unexpected error from NewPipelineWithBinaries(nil, ...): %v", err)
+	}
+	if pDef.Config() == nil {
+		t.Errorf("expected default config in pDef, got nil")
+	}
+}
+
+func TestPipeline_NilClientExitAndDrainSemantics(t *testing.T) {
+	p := &Pipeline{tempDir: t.TempDir()}
+
+	// Test runUploader with emit returning false (simulating aborted context / channel closed)
+	// and verify remaining items in uploadQueue are drained and cleaned up.
+	t.Run("runUploader drains remaining items on emit failure", func(t *testing.T) {
+		uploadQueue := make(chan *WorkItem, 3)
+		tmp1 := filepath.Join(p.tempDir, "opt_drain_1.mp4")
+		tmp2 := filepath.Join(p.tempDir, "opt_drain_2.mp4")
+		_ = os.WriteFile(tmp1, []byte("data1"), 0644)
+		_ = os.WriteFile(tmp2, []byte("data2"), 0644)
+
+		item1 := &WorkItem{Asset: immich.Asset{ID: "asset-1", OriginalFileName: "1.mp4"}, TranscodedPath: tmp1}
+		item2 := &WorkItem{Asset: immich.Asset{ID: "asset-2", OriginalFileName: "2.mp4"}, TranscodedPath: tmp2}
+		uploadQueue <- item1
+		uploadQueue <- item2
+		close(uploadQueue)
+
+		emitCalls := 0
+		emit := func(msg interface{}) bool {
+			emitCalls++
+			return false // simulate emit failure
+		}
+
+		p.runUploader(context.Background(), uploadQueue, nil, "", nil, emit)
+
+		if emitCalls != 1 {
+			t.Errorf("expected emit to be called once before aborting, got %d", emitCalls)
+		}
+		if _, err := os.Stat(tmp1); !os.IsNotExist(err) {
+			t.Errorf("expected item1 file to be cleaned up, but it still exists")
+		}
+		if _, err := os.Stat(tmp2); !os.IsNotExist(err) {
+			t.Errorf("expected item2 file to be cleaned up during queue drain, but it still exists")
+		}
+	})
+
+	// Test startDownloader with nil session does not panic
+	t.Run("startDownloader nil session safety", func(t *testing.T) {
+		ctx := context.Background()
+		pendingVideos := []immich.Asset{{ID: "v1", OriginalFileName: "v1.mp4"}}
+		transcodeQueue := make(chan *WorkItem, 2)
+		var wg sync.WaitGroup
+		emit := func(msg interface{}) bool { return true }
+		p.startDownloader(ctx, pendingVideos, transcodeQueue, nil, emit, &wg)
+		wg.Wait()
+		if len(transcodeQueue) != 0 {
+			t.Errorf("expected empty transcodeQueue")
+		}
+	})
+
+	// Test runUploader with nil session and empty tracking album creation does not panic
+	t.Run("runUploader nil session tracking album assignment safety", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/api/albums") {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "album-created-123", "albumName": "Test"})
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer ts.Close()
+
+		pipe, err := NewPipelineWithBinaries(&config.Config{URL: ts.URL, APIKey: "key"}, &engine.BinaryManager{FFmpegPath: "ffmpeg", ExifToolPath: "exiftool"})
+		if err != nil {
+			t.Fatalf("failed to init pipeline: %v", err)
+		}
+
+		uploadQueue := make(chan *WorkItem, 1)
+		tmp := filepath.Join(pipe.tempDir, "opt_album_test.mp4")
+		_ = os.WriteFile(tmp, []byte("data"), 0644)
+		uploadQueue <- &WorkItem{Asset: immich.Asset{ID: "asset-album", OriginalFileName: "album.mp4"}, TranscodedPath: tmp}
+		close(uploadQueue)
+
+		albumID := ""
+		emit := func(msg interface{}) bool { return true }
+		// Pass sess == nil; must not panic
+		pipe.runUploader(context.Background(), uploadQueue, &albumID, "", nil, emit)
+	})
+}
+
+func TestPipeline_ConfigInputImmutabilityAndConcurrency(t *testing.T) {
+	inputCfg := &config.Config{
+		URL:          "http://original:8080",
+		VideoQuality: 4,
+	}
+	p, err := NewPipelineWithBinaries(inputCfg, &engine.BinaryManager{FFmpegPath: "ffmpeg", ExifToolPath: "exiftool"})
+	if err != nil {
+		t.Fatalf("failed to init pipeline: %v", err)
+	}
+
+	// Mutating inputCfg after NewPipelineWithBinaries must not affect p.Config()
+	inputCfg.VideoQuality = 9
+	if p.Config().VideoQuality != 4 {
+		t.Errorf("expected VideoQuality to remain 4 after mutating inputCfg, got %d", p.Config().VideoQuality)
+	}
+
+	// Mutating updateCfg after UpdateConfig must not affect p.Config()
+	updateCfg := &config.Config{
+		URL:          "http://updated:8080",
+		VideoQuality: 7,
+	}
+	p.UpdateConfig(updateCfg)
+	updateCfg.VideoQuality = 1
+	if p.Config().VideoQuality != 7 {
+		t.Errorf("expected VideoQuality to remain 7 after mutating updateCfg, got %d", p.Config().VideoQuality)
+	}
+
+	// Stress test concurrent readers and writers
+	var wg sync.WaitGroup
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				cfg := &config.Config{
+					URL:          fmt.Sprintf("http://host-%d:8080", id),
+					VideoQuality: (id % 10) + 1,
+				}
+				p.UpdateConfig(cfg)
+				time.Sleep(time.Millisecond)
+			}
+		}(i)
+	}
+
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				cfg := p.Config()
+				if cfg != nil {
+					_ = cfg.QualityCRF()
+					_ = cfg.QualityVideoToolbox()
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+
+func TestPipeline_NilReceiverSafety(t *testing.T) {
+	var p *Pipeline
+
+	// None of these should panic on a nil receiver
+	p.CleanDryRunAlbum()
+	p.SetDryRunAlbumID("album-1")
+	if p.DryRunAlbumID() != "" {
+		t.Errorf("expected empty string from nil p.DryRunAlbumID()")
+	}
+	if p.Config() != nil {
+		t.Errorf("expected nil config from nil pipeline")
+	}
+	if p.Client() != nil {
+		t.Errorf("expected nil client from nil pipeline")
+	}
+	if p.Encoder() == "" {
+		t.Errorf("expected non-empty default encoder from nil pipeline")
+	}
+	if err := p.ValidateConnection(); err == nil {
+		t.Errorf("expected error from nil pipeline ValidateConnection")
+	}
+	if _, err := p.ScanVideosWithContext(context.Background(), "MB/min", 100); err == nil {
+		t.Errorf("expected error from nil pipeline ScanVideosWithContext")
+	}
+
+	dryRunCh := make(chan interface{}, 1)
+	p.RunDryRun(context.Background(), []immich.Asset{{ID: "v1"}}, dryRunCh)
+	// channel should be closed without panic
+	for range dryRunCh {
+	}
+
+	runCh := make(chan interface{}, 1)
+	p.Run(context.Background(), []immich.Asset{{ID: "v1"}}, runCh)
+	// channel should be closed without panic
+	for range runCh {
+	}
+}
+
+

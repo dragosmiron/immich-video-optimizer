@@ -9,11 +9,36 @@ import (
 	"sync"
 	"time"
 
+	"immich-video-optimizer/config"
 	"immich-video-optimizer/engine"
 	"immich-video-optimizer/immich"
 	"immich-video-optimizer/logger"
 	"immich-video-optimizer/state"
 )
+
+func markSessionFailed(sess *state.Session, videoID string, errMsg string) {
+	if sess == nil {
+		return
+	}
+	sess.MarkFailed(videoID, errMsg)
+	_ = state.SaveSession(sess)
+}
+
+func markSessionSkipped(sess *state.Session, videoID string, reason string) {
+	if sess == nil {
+		return
+	}
+	sess.MarkSkipped(videoID, reason)
+	_ = state.SaveSession(sess)
+}
+
+func markSessionCompleted(sess *state.Session, videoID string, savedBytes int64) {
+	if sess == nil {
+		return
+	}
+	sess.MarkCompleted(videoID, savedBytes)
+	_ = state.SaveSession(sess)
+}
 
 // startDownloader launches a background worker that sequentially prefetches original video assets
 // from the Immich server to temporary local files and pushes them onto transcodeQueue.
@@ -29,31 +54,47 @@ func (p *Pipeline) startDownloader(ctx context.Context, pendingVideos []immich.A
 			default:
 			}
 
+			client := p.Client()
+			cfg := p.Config()
+
 			emit(PipelineStageMsg{Stage: "downloading", VideoName: v.OriginalFileName, VideoID: v.ID})
 			origPath := filepath.Join(p.tempDir, fmt.Sprintf("orig_%s.mp4", v.ID))
 			item := NewWorkItem(v, origPath)
 
-			if err := p.client.DownloadAssetWithContext(ctx, v.ID, origPath); err != nil {
+			if client == nil {
+				item.Cleanup()
+				emit(PipelineStageMsg{Stage: "download-idle", VideoID: v.ID})
+				err := errors.New("immich client is nil")
+				markSessionFailed(sess, v.ID, err.Error())
+				if !emit(PipelineVideoCompleteMsg{VideoID: v.ID, VideoName: v.OriginalFileName, Err: err}) {
+					return
+				}
+				continue
+			}
+
+			if err := client.DownloadAssetWithContext(ctx, v.ID, origPath); err != nil {
 				item.Cleanup()
 				emit(PipelineStageMsg{Stage: "download-idle", VideoID: v.ID})
 				if ctx.Err() != nil {
 					return
 				}
-				sess.MarkFailed(v.ID, err.Error())
-				_ = state.SaveSession(sess)
-				emit(PipelineVideoCompleteMsg{VideoID: v.ID, VideoName: v.OriginalFileName, Err: err})
+				markSessionFailed(sess, v.ID, err.Error())
+				if !emit(PipelineVideoCompleteMsg{VideoID: v.ID, VideoName: v.OriginalFileName, Err: err}) {
+					return
+				}
 				continue
 			}
 
 			// Local fallback check if SkipHEVC
-			if p.cfg.SkipHEVC {
+			if cfg != nil && cfg.SkipHEVC {
 				isHEVC, err := engine.IsHEVC(ctx, p.binaries.FFmpegPath, origPath)
 				if err == nil && isHEVC {
 					item.Cleanup()
 					emit(PipelineStageMsg{Stage: "download-idle", VideoID: v.ID})
-					sess.MarkSkipped(v.ID, "already HEVC")
-					_ = state.SaveSession(sess)
-					emit(PipelineVideoCompleteMsg{VideoID: v.ID, VideoName: v.OriginalFileName, OriginalSize: v.GetSize(), Skipped: true, SkipReason: "already HEVC"})
+					markSessionSkipped(sess, v.ID, "already HEVC")
+					if !emit(PipelineVideoCompleteMsg{VideoID: v.ID, VideoName: v.OriginalFileName, OriginalSize: v.GetSize(), Skipped: true, SkipReason: "already HEVC"}) {
+						return
+					}
 					continue
 				}
 			}
@@ -102,10 +143,19 @@ func (p *Pipeline) startTranscoders(ctx context.Context, numEncoders int, transc
 				transcodedPath := filepath.Join(p.tempDir, fmt.Sprintf("opt_%s.mp4", item.Asset.ID))
 				item.TranscodedPath = transcodedPath
 
-				preset := p.cfg.Preset
-				if preset == "" {
-					preset = "Medium"
+				cfg := p.Config()
+				if cfg == nil {
+					cfg = config.DefaultConfig()
 				}
+				preset := cfg.Preset
+				if preset == "" {
+					preset = config.DefaultConfig().Preset
+				}
+				crf := cfg.QualityCRF()
+				vtQuality := cfg.QualityVideoToolbox()
+				res := cfg.Resolution
+				customFlags := cfg.CustomFFmpegFlags
+				sizeGuard := cfg.SizeGuard
 				hasAudio, isAAC := engine.ProbeAudioStream(ctx, p.binaries.FFmpegPath, item.OrigPath)
 				opts := engine.TranscodeOptions{
 					Input:               item.OrigPath,
@@ -113,11 +163,11 @@ func (p *Pipeline) startTranscoders(ctx context.Context, numEncoders int, transc
 					Encoder:             p.encoder,
 					AudioCopy:           isAAC,
 					NoAudio:             !hasAudio,
-					CRF:                 p.cfg.QualityCRF(),
-					VideoToolboxQuality: p.cfg.QualityVideoToolbox(),
+					CRF:                 crf,
+					VideoToolboxQuality: vtQuality,
 					Preset:              preset,
-					Resolution:          p.cfg.Resolution,
-					CustomFlags:         p.cfg.CustomFFmpegFlags,
+					Resolution:          res,
+					CustomFlags:         customFlags,
 					OnFallback: func(failedEncoder string, err error) {
 						reason := ""
 						if err != nil {
@@ -156,8 +206,7 @@ func (p *Pipeline) startTranscoders(ctx context.Context, numEncoders int, transc
 						continue
 					}
 					logger.Error("Transcode failed for %s: %v", item.Asset.OriginalFileName, err)
-					sess.MarkFailed(item.Asset.ID, err.Error())
-					_ = state.SaveSession(sess)
+					markSessionFailed(sess, item.Asset.ID, err.Error())
 					emit(PipelineVideoCompleteMsg{
 						WorkerID:  wID,
 						VideoID:   item.Asset.ID,
@@ -181,8 +230,7 @@ func (p *Pipeline) startTranscoders(ctx context.Context, numEncoders int, transc
 						continue
 					}
 					logger.Error("Metadata copy failed for %s: %v", item.Asset.OriginalFileName, err)
-					sess.MarkFailed(item.Asset.ID, err.Error())
-					_ = state.SaveSession(sess)
+					markSessionFailed(sess, item.Asset.ID, err.Error())
 					emit(PipelineVideoCompleteMsg{
 						WorkerID:  wID,
 						VideoID:   item.Asset.ID,
@@ -203,8 +251,7 @@ func (p *Pipeline) startTranscoders(ctx context.Context, numEncoders int, transc
 				if err != nil {
 					item.Cleanup()
 					logger.Error("Failed to stat transcoded file for %s: %v", item.Asset.OriginalFileName, err)
-					sess.MarkFailed(item.Asset.ID, err.Error())
-					_ = state.SaveSession(sess)
+					markSessionFailed(sess, item.Asset.ID, err.Error())
 					emit(PipelineVideoCompleteMsg{
 						WorkerID:  wID,
 						VideoID:   item.Asset.ID,
@@ -214,11 +261,10 @@ func (p *Pipeline) startTranscoders(ctx context.Context, numEncoders int, transc
 					continue
 				}
 
-				if p.cfg.SizeGuard && optStat.Size() >= item.Asset.GetSize() {
+				if sizeGuard && optStat.Size() >= item.Asset.GetSize() {
 					item.Cleanup()
 					logger.Info("Size guard: skipped %s (transcoded %d >= original %d bytes)", item.Asset.OriginalFileName, optStat.Size(), item.Asset.GetSize())
-					sess.MarkSkipped(item.Asset.ID, "transcoded file larger")
-					_ = state.SaveSession(sess)
+					markSessionSkipped(sess, item.Asset.ID, "transcoded file larger")
 					emit(PipelineVideoCompleteMsg{
 						WorkerID:      wID,
 						VideoID:       item.Asset.ID,
@@ -260,30 +306,41 @@ func (p *Pipeline) runUploader(ctx context.Context, uploadQueue <-chan *WorkItem
 			item.Cleanup()
 			continue
 		}
+		client := p.Client()
+		if client == nil {
+			item.Cleanup()
+			err := errors.New("immich client is nil")
+			markSessionFailed(sess, item.Asset.ID, err.Error())
+			if !emit(PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: err}) {
+				for rem := range uploadQueue {
+					rem.Cleanup()
+				}
+				return
+			}
+			continue
+		}
 
 		// Query original asset's albums and favorite status before replacement/deletion
-		origAlbums, err := p.client.GetAssetAlbumsWithContext(ctx, item.Asset.ID)
+		origAlbums, err := client.GetAssetAlbumsWithContext(ctx, item.Asset.ID)
 		if err != nil {
 			item.Cleanup()
 			if ctx.Err() != nil {
 				continue
 			}
 			logger.Error("Failed to query albums for original asset %s (%s): %v", item.Asset.OriginalFileName, item.Asset.ID, err)
-			sess.MarkFailed(item.Asset.ID, fmt.Sprintf("failed to query albums: %v", err))
-			_ = state.SaveSession(sess)
+			markSessionFailed(sess, item.Asset.ID, fmt.Sprintf("failed to query albums: %v", err))
 			emit(PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: fmt.Errorf("failed to query albums: %w", err)})
 			continue
 		}
 
-		origAsset, err := p.client.GetAssetWithContext(ctx, item.Asset.ID)
+		origAsset, err := client.GetAssetWithContext(ctx, item.Asset.ID)
 		if err != nil || origAsset == nil {
 			item.Cleanup()
 			if ctx.Err() != nil {
 				continue
 			}
 			logger.Error("Failed to read details for original asset %s (%s): %v", item.Asset.OriginalFileName, item.Asset.ID, err)
-			sess.MarkFailed(item.Asset.ID, fmt.Sprintf("failed to read original asset details: %v", err))
-			_ = state.SaveSession(sess)
+			markSessionFailed(sess, item.Asset.ID, fmt.Sprintf("failed to read original asset details: %v", err))
 			emit(PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: fmt.Errorf("failed to read original asset details: %w", err)})
 			continue
 		}
@@ -291,7 +348,7 @@ func (p *Pipeline) runUploader(ctx context.Context, uploadQueue <-chan *WorkItem
 
 		emit(PipelineStageMsg{Stage: "uploading", VideoName: item.Asset.OriginalFileName, VideoID: item.Asset.ID})
 
-		newAsset, err := p.client.UploadReplacementAssetWithContext(ctx, item.TranscodedPath, item.Asset)
+		newAsset, err := client.UploadReplacementAssetWithContext(ctx, item.TranscodedPath, item.Asset)
 		if err != nil {
 			item.Cleanup()
 			if ctx.Err() != nil {
@@ -299,8 +356,7 @@ func (p *Pipeline) runUploader(ctx context.Context, uploadQueue <-chan *WorkItem
 				continue
 			}
 			logger.Error("Upload failed for %s: %v", item.Asset.OriginalFileName, err)
-			sess.MarkFailed(item.Asset.ID, fmt.Sprintf("upload failed: %v", err))
-			_ = state.SaveSession(sess)
+			markSessionFailed(sess, item.Asset.ID, fmt.Sprintf("upload failed: %v", err))
 			emit(PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: fmt.Errorf("upload failed: %w", err)})
 			continue
 		}
@@ -312,8 +368,7 @@ func (p *Pipeline) runUploader(ctx context.Context, uploadQueue <-chan *WorkItem
 				errMsg = fmt.Sprintf("upload returned identical asset ID %s (potential duplicate collision)", item.Asset.ID)
 			}
 			logger.Error("Safety guard triggered for %s: %s; aborting deletion of original", item.Asset.OriginalFileName, errMsg)
-			sess.MarkFailed(item.Asset.ID, errMsg)
-			_ = state.SaveSession(sess)
+			markSessionFailed(sess, item.Asset.ID, errMsg)
 			emit(PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: errors.New(errMsg)})
 			continue
 		}
@@ -321,13 +376,15 @@ func (p *Pipeline) runUploader(ctx context.Context, uploadQueue <-chan *WorkItem
 		if albumID != nil && *albumID == "" {
 			timestamp := time.Now().Format("20060102-150405")
 			albumName := fmt.Sprintf("Immich-Optimizer-InProgress-%s", timestamp)
-			album, err := p.client.CreateTrackingAlbumWithContext(ctx, albumName)
+			album, err := client.CreateTrackingAlbumWithContext(ctx, albumName)
 			if err != nil {
 				logger.Error("Failed to create tracking album %s: %v", albumName, err)
 			} else if album != nil {
 				*albumID = album.ID
-				sess.TrackingAlbumID = *albumID
-				_ = state.SaveSession(sess)
+				if sess != nil {
+					sess.TrackingAlbumID = *albumID
+					_ = state.SaveSession(sess)
+				}
 			}
 		}
 
@@ -336,7 +393,7 @@ func (p *Pipeline) runUploader(ctx context.Context, uploadQueue <-chan *WorkItem
 			currentAlbumID = *albumID
 		}
 		if currentAlbumID != "" {
-			_ = p.client.AddAssetsToAlbumWithContext(ctx, currentAlbumID, []string{newAsset.ID})
+			_ = client.AddAssetsToAlbumWithContext(ctx, currentAlbumID, []string{newAsset.ID})
 		}
 
 		// Transfer metadata (albums, favorite, description, tags, stack)
@@ -357,8 +414,7 @@ func (p *Pipeline) runUploader(ctx context.Context, uploadQueue <-chan *WorkItem
 				continue
 			}
 			logger.Error("Safety guard triggered for %s (%s): %v; aborting deletion of original", item.Asset.OriginalFileName, item.Asset.ID, transferErr)
-			sess.MarkFailed(item.Asset.ID, transferErr.Error())
-			_ = state.SaveSession(sess)
+			markSessionFailed(sess, item.Asset.ID, transferErr.Error())
 			emit(PipelineVideoCompleteMsg{
 				VideoID:   item.Asset.ID,
 				VideoName: item.Asset.OriginalFileName,
@@ -377,7 +433,7 @@ func (p *Pipeline) runUploader(ctx context.Context, uploadQueue <-chan *WorkItem
 			deleteCtx, deleteCancel = context.WithTimeout(context.Background(), 10*time.Second)
 		}
 
-		deleteErr := p.client.DeleteAssetWithContext(deleteCtx, item.Asset.ID)
+		deleteErr := client.DeleteAssetWithContext(deleteCtx, item.Asset.ID)
 		if deleteCancel != nil {
 			deleteCancel()
 		}
@@ -388,20 +444,18 @@ func (p *Pipeline) runUploader(ctx context.Context, uploadQueue <-chan *WorkItem
 				continue
 			}
 			logger.Error("Failed to delete original asset %s (%s): %v", item.Asset.OriginalFileName, item.Asset.ID, deleteErr)
-			sess.MarkFailed(item.Asset.ID, fmt.Sprintf("failed to delete original asset: %v", deleteErr))
-			_ = state.SaveSession(sess)
+			markSessionFailed(sess, item.Asset.ID, fmt.Sprintf("failed to delete original asset: %v", deleteErr))
 			emit(PipelineVideoCompleteMsg{VideoID: item.Asset.ID, VideoName: item.Asset.OriginalFileName, Err: fmt.Errorf("failed to delete original asset: %w", deleteErr)})
 			continue
 		}
 
 		item.Cleanup()
 
-		sess.MarkCompleted(item.Asset.ID, item.SavedBytes)
-		_ = state.SaveSession(sess)
+		markSessionCompleted(sess, item.Asset.ID, item.SavedBytes)
 
 		// Tag replacement asset with 'immich-optimizer' if enabled
 		if optimizerTagID != "" {
-			if err := p.client.TagAssetWithContext(ctx, optimizerTagID, newAsset.ID); err != nil {
+			if err := client.TagAssetWithContext(ctx, optimizerTagID, newAsset.ID); err != nil {
 				logger.Error("Failed to tag %s with 'immich-optimizer': %v", newAsset.ID, err)
 			} else {
 				logger.Info("Tagged %s with 'immich-optimizer'", item.Asset.OriginalFileName)

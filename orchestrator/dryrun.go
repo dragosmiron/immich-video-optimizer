@@ -38,6 +38,10 @@ func (p *Pipeline) probeRemotePool(ctx context.Context, videos []immich.Asset, p
 	if len(videos) < numWorkers {
 		numWorkers = len(videos)
 	}
+	baseURL := ""
+	if client := p.Client(); client != nil {
+		baseURL = client.BaseURL()
+	}
 	jobs := make(chan immich.Asset, len(videos))
 	// results is buffered to hold every job's output so a consumer that returns
 	// early on ctx cancel never blocks the worker goroutines on send.
@@ -52,7 +56,7 @@ func (p *Pipeline) probeRemotePool(ctx context.Context, videos []immich.Asset, p
 				default:
 				}
 
-				url := fmt.Sprintf("%s/api/assets/%s/original", p.client.BaseURL(), asset.ID)
+				url := fmt.Sprintf("%s/api/assets/%s/original", baseURL, asset.ID)
 				probeCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 				details, err := probe(probeCtx, url)
 				cancel()
@@ -75,6 +79,9 @@ func (p *Pipeline) probeRemotePool(ctx context.Context, videos []immich.Asset, p
 // The channel is closed when this function returns.
 func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan<- interface{}) {
 	defer close(ch)
+	if p == nil {
+		return
+	}
 
 	emit := func(msg interface{}) bool { return emitOnContext(ctx, ch, msg) }
 
@@ -86,8 +93,16 @@ func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan
 		return
 	}
 
+	client := p.Client()
+	cfg := p.Config()
+	apiKey := ""
+	if client != nil {
+		apiKey = client.APIKey()
+	}
+	skipHEVC := cfg != nil && cfg.SkipHEVC
+
 	results := p.probeRemotePool(ctx, videos, func(probeCtx context.Context, url string) (engine.ProbeDetails, error) {
-		return engine.ProbeRemoteDetails(probeCtx, p.binaries.FFmpegPath, url, p.client.APIKey())
+		return engine.ProbeRemoteDetails(probeCtx, p.binaries.FFmpegPath, url, apiKey)
 	})
 
 	var toProcess []immich.Asset
@@ -97,6 +112,9 @@ func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan
 	probed := 0
 
 	for i := 0; i < total; i++ {
+		if ctx.Err() != nil {
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -107,7 +125,7 @@ func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan
 			if res.err != nil {
 				logger.Debug("Dry run remote probe failed for %s (%s): %v", res.asset.OriginalFileName, res.asset.ID, res.err)
 				probeFailed = append(probeFailed, res.asset)
-			} else if p.cfg.SkipHEVC && res.details.IsHEVC {
+			} else if skipHEVC && res.details.IsHEVC {
 				hevcSkipped = append(hevcSkipped, res.asset)
 			} else {
 				toProcess = append(toProcess, res.asset)
@@ -125,12 +143,16 @@ func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan
 		}
 	}
 
+	if ctx.Err() != nil {
+		return
+	}
+
 	var albumName string
 	var albumID string
-	if len(toProcess) > 0 {
+	if len(toProcess) > 0 && client != nil {
 		timestamp := time.Now().Format("20060102-150405")
 		albumName = fmt.Sprintf("Immich-Optimizer-DryRun-%s", timestamp)
-		album, err := p.client.CreateTrackingAlbumWithContext(ctx, albumName)
+		album, err := client.CreateTrackingAlbumWithContext(ctx, albumName)
 		if err != nil {
 			logger.Error("Failed to create dry-run album %s: %v", albumName, err)
 		} else if album != nil {
@@ -143,7 +165,7 @@ func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan
 			for _, a := range toProcess {
 				ids = append(ids, a.ID)
 			}
-			_ = p.client.AddAssetsToAlbumWithContext(ctx, albumID, ids)
+			_ = client.AddAssetsToAlbumWithContext(ctx, albumID, ids)
 		}
 	}
 
@@ -158,8 +180,12 @@ func (p *Pipeline) RunDryRun(ctx context.Context, videos []immich.Asset, ch chan
 }
 
 func (p *Pipeline) filterHEVCParallel(ctx context.Context, videos []immich.Asset, sess *state.Session, emit func(interface{}) bool) []immich.Asset {
+	apiKey := ""
+	if client := p.Client(); client != nil {
+		apiKey = client.APIKey()
+	}
 	results := p.probeRemotePool(ctx, videos, func(probeCtx context.Context, url string) (engine.ProbeDetails, error) {
-		isHEVC, err := engine.ProbeRemoteHEVC(probeCtx, p.binaries.FFmpegPath, url, p.client.APIKey())
+		isHEVC, err := engine.ProbeRemoteHEVC(probeCtx, p.binaries.FFmpegPath, url, apiKey)
 		return engine.ProbeDetails{IsHEVC: isHEVC}, err
 	})
 
@@ -170,7 +196,9 @@ func (p *Pipeline) filterHEVCParallel(ctx context.Context, videos []immich.Asset
 			return toProcess
 		case res := <-results:
 			if res.err == nil && res.details.IsHEVC {
-				sess.MarkSkipped(res.asset.ID, "already HEVC")
+				if sess != nil {
+					sess.MarkSkipped(res.asset.ID, "already HEVC")
+				}
 				if !emit(PipelineVideoCompleteMsg{
 					VideoID:      res.asset.ID,
 					VideoName:    res.asset.OriginalFileName,
@@ -185,6 +213,8 @@ func (p *Pipeline) filterHEVCParallel(ctx context.Context, videos []immich.Asset
 			}
 		}
 	}
-	_ = state.SaveSession(sess)
+	if sess != nil {
+		_ = state.SaveSession(sess)
+	}
 	return toProcess
 }

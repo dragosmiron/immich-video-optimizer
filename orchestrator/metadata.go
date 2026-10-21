@@ -11,25 +11,27 @@ import (
 )
 
 func (p *Pipeline) renameAlbumToCompleted(albumID string) {
-	if albumID == "" || p.client == nil {
+	client := p.Client()
+	if albumID == "" || client == nil {
 		return
 	}
 	timestamp := time.Now().Format("20060102-150405")
 	completedName := fmt.Sprintf("Immich-Optimizer-Completed-%s", timestamp)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := p.client.UpdateAlbumNameWithContext(ctx, albumID, completedName); err != nil {
+	if err := client.UpdateAlbumNameWithContext(ctx, albumID, completedName); err != nil {
 		logger.Error("Failed to rename tracking album %s to completed %s: %v", albumID, completedName, err)
 	}
 }
 
 func (p *Pipeline) rollbackAsset(assetID string) {
-	if assetID == "" || p.client == nil {
+	client := p.Client()
+	if assetID == "" || client == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := p.client.DeleteAssetWithContext(ctx, assetID); err != nil {
+	if err := client.DeleteAssetWithContext(ctx, assetID); err != nil {
 		logger.Error("Rollback failed for asset %s: %v", assetID, err)
 	} else {
 		logger.Info("Rollback: deleted orphaned asset %s", assetID)
@@ -39,6 +41,10 @@ func (p *Pipeline) rollbackAsset(assetID string) {
 // transferAssetMetadata transfers album memberships, favorite flag, description, tags, and stack
 // membership from the original asset to the newly uploaded replacement asset.
 func (p *Pipeline) transferAssetMetadata(ctx context.Context, origAsset *immich.Asset, newAssetID string, origAlbums []immich.Album, isFavorite bool, trackingAlbumID string) error {
+	client := p.Client()
+	if client == nil {
+		return fmt.Errorf("client unavailable")
+	}
 	var albumTransferErr error
 	seenAlbums := make(map[string]bool)
 	for _, alb := range origAlbums {
@@ -46,7 +52,7 @@ func (p *Pipeline) transferAssetMetadata(ctx context.Context, origAsset *immich.
 			continue
 		}
 		seenAlbums[alb.ID] = true
-		if err := p.client.AddAssetsToAlbumWithContext(ctx, alb.ID, []string{newAssetID}); err != nil {
+		if err := client.AddAssetsToAlbumWithContext(ctx, alb.ID, []string{newAssetID}); err != nil {
 			logger.Error("Failed to add new asset %s to original album %s (%s): %v", newAssetID, alb.AlbumName, alb.ID, err)
 			albumTransferErr = err
 			break
@@ -56,7 +62,7 @@ func (p *Pipeline) transferAssetMetadata(ctx context.Context, origAsset *immich.
 	// Transfer favorite status if original was favorited
 	var favTransferErr error
 	if albumTransferErr == nil && isFavorite {
-		if err := p.client.SetAssetFavoriteWithContext(ctx, newAssetID, true); err != nil {
+		if err := client.SetAssetFavoriteWithContext(ctx, newAssetID, true); err != nil {
 			logger.Error("Failed to transfer favorite status to new asset %s: %v", newAssetID, err)
 			favTransferErr = err
 		}
@@ -65,7 +71,7 @@ func (p *Pipeline) transferAssetMetadata(ctx context.Context, origAsset *immich.
 	// Transfer description if original had one
 	var descTransferErr error
 	if albumTransferErr == nil && favTransferErr == nil && origAsset.Description != "" {
-		if err := p.client.UpdateAssetDescriptionWithContext(ctx, newAssetID, origAsset.Description); err != nil {
+		if err := client.UpdateAssetDescriptionWithContext(ctx, newAssetID, origAsset.Description); err != nil {
 			logger.Error("Failed to transfer description to new asset %s: %v", newAssetID, err)
 			descTransferErr = err
 		}
@@ -75,7 +81,7 @@ func (p *Pipeline) transferAssetMetadata(ctx context.Context, origAsset *immich.
 	var tagsTransferErr error
 	if albumTransferErr == nil && favTransferErr == nil && descTransferErr == nil {
 		for _, tag := range origAsset.Tags {
-			if err := p.client.TagAssetWithContext(ctx, tag.ID, newAssetID); err != nil {
+			if err := client.TagAssetWithContext(ctx, tag.ID, newAssetID); err != nil {
 				tagsTransferErr = err
 				break
 			}
@@ -85,9 +91,9 @@ func (p *Pipeline) transferAssetMetadata(ctx context.Context, origAsset *immich.
 	// Transfer stack membership
 	var stackTransferErr error
 	if albumTransferErr == nil && favTransferErr == nil && descTransferErr == nil && tagsTransferErr == nil && origAsset.Stack != nil {
-		stackTransferErr = p.client.CopyAssetStackWithContext(ctx, origAsset.ID, newAssetID)
+		stackTransferErr = client.CopyAssetStackWithContext(ctx, origAsset.ID, newAssetID)
 		if stackTransferErr == nil && origAsset.Stack.PrimaryAssetID == origAsset.ID && origAsset.Stack.ID != "" {
-			stackTransferErr = p.client.UpdateStackPrimaryAssetWithContext(ctx, origAsset.Stack.ID, newAssetID)
+			stackTransferErr = client.UpdateStackPrimaryAssetWithContext(ctx, origAsset.Stack.ID, newAssetID)
 		}
 	}
 

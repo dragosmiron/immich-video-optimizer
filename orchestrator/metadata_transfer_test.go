@@ -437,3 +437,59 @@ func TestPipelineNonPrimaryStackMemberDoesNotUpdatePrimary(t *testing.T) {
 		t.Error("expected original asset to be deleted")
 	}
 }
+
+func TestTransferAssetMetadata_Direct(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var calls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/api/albums/alb-1/assets"):
+			calls = append(calls, "album")
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/assets/new-asset":
+			var body map[string]interface{}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if _, ok := body["isFavorite"]; ok {
+				calls = append(calls, "favorite")
+			}
+			if _, ok := body["description"]; ok {
+				calls = append(calls, "description")
+			}
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/api/tags/tag-1/assets"):
+			calls = append(calls, "tag")
+			_, _ = w.Write([]byte(`[{"id":"new-asset","success":true}]`))
+		case r.Method == http.MethodPut && r.URL.Path == "/api/assets/copy":
+			calls = append(calls, "stack-copy")
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/stacks/stk-1":
+			calls = append(calls, "stack-primary")
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	p := newMetadataTransferTestPipeline(t, server)
+	origAsset := &immich.Asset{
+		ID:          "orig-asset",
+		Description: "Holiday",
+		Tags:        []immich.Tag{{ID: "tag-1", Name: "Vacation"}},
+		Stack:       &immich.AssetStack{ID: "stk-1", PrimaryAssetID: "orig-asset"},
+	}
+	origAlbums := []immich.Album{
+		{ID: "alb-1", AlbumName: "Trips"},
+		{ID: "tracking-id", AlbumName: "Immich-Optimizer-InProgress"}, // should be skipped
+	}
+
+	err := p.transferAssetMetadata(context.Background(), origAsset, "new-asset", origAlbums, true, "tracking-id")
+	if err != nil {
+		t.Fatalf("unexpected error in transferAssetMetadata: %v", err)
+	}
+
+	expectedCalls := "album,favorite,description,tag,stack-copy,stack-primary"
+	if strings.Join(calls, ",") != expectedCalls {
+		t.Fatalf("expected call sequence %q, got %q", expectedCalls, strings.Join(calls, ","))
+	}
+}
