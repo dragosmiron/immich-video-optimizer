@@ -16,6 +16,9 @@ temp_home/
 .vscode/
 .idea/
 
+# Agent Memory
+.agent/
+
 # Local Config & Runtime Session Data
 config.yaml
 config.yml
