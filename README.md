@@ -46,6 +46,8 @@ A terminal client for [Immich](https://immich.app/) that drastically reduces sto
   - [Tracking Albums & Verification](#tracking-albums--verification)
   - [Note for Mobile Users: "Free Up Space"](#note-for-mobile-users-free-up-space)
 - [Development & Testing](#development--testing)
+- [Reporting Issues](#reporting-issues)
+- [Contributing](#contributing)
 - [License](#license)
 
 ---
@@ -132,7 +134,7 @@ go build -o immich-video-optimizer .
 
 ## 🚀 Usage & Workflow
 
-Launch `./immich-video-optimizer`. The application runs an interactive Terminal User Interface (TUI) with keyboard navigation shown at the bottom of the screen.
+Launch `./immich-video-optimizer`. The application opens an interactive terminal interface with on-screen keyboard controls displayed at the bottom.
 
 ### Step 1: Connect to Immich
 On first launch, enter your connection details:
@@ -338,6 +340,40 @@ go vet ./...
 # Build binary
 go build -o immich-video-optimizer .
 ```
+
+---
+
+## 🐛 Reporting Issues
+
+If you encounter a bug, crash, or unexpected behavior:
+
+1. **Search existing issues:** Check [GitHub Issues](https://github.com/dragosmiron/immich-video-optimizer/issues) to see if the issue has already been reported.
+2. **Open a new issue with details:**
+   - **Environment:** OS, CPU architecture (`x86_64` / `arm64`), and Immich server version.
+   - **Hardware & Drivers:** GPU/CPU model and active hardware encoder (e.g., Apple VideoToolbox, NVIDIA NVENC, Intel VAAPI, or CPU `libx265`).
+   - **Logs:** Check `~/.config/immich-video-optimizer/failures.log` or `optimizer.log`. Failed transcoding steps automatically record the full FFmpeg command and stderr output in these logs.
+   - **Verbose Debugging (optional):** Set `log_level: "debug"` in `~/.config/immich-video-optimizer/config.yaml` or press `[s]` in the app to open the Settings menu and switch **Logging Level** to `debug`.
+   - **Media Info:** If an issue occurs on specific files, include the output of `ffprobe <file>` (feel free to redact private metadata).
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Whether fixing bugs, adding support for new hardware encoders, optimizing performance, or improving documentation, your help is appreciated.
+
+### Workflow
+
+1. **Discuss first:** For significant features or breaking changes, please [open an issue](https://github.com/dragosmiron/immich-video-optimizer/issues) to discuss the plan before writing code.
+2. **Fork and branch:** Create a descriptive branch from `main`:
+   ```bash
+   git checkout -b feature/my-new-feature
+   ```
+3. **Verify tests & hygiene:** Ensure your changes pass tests and lint checks:
+   ```bash
+   go test -v -race ./...
+   go vet ./...
+   ```
+4. **Submit a Pull Request:** Open a PR against `main` describing what changed, why, and how you verified it.
 
 ---
 
