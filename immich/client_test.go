@@ -57,6 +57,11 @@ func TestQueryVideoAssets(t *testing.T) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
+		if r.URL.Path == "/api/users/me" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "user-test"}`))
+			return
+		}
 		if r.URL.Path != "/api/search/metadata" {
 			t.Errorf("Expected path /api/search/metadata, got %s", r.URL.Path)
 		}
@@ -637,6 +642,11 @@ func TestAsset_MBPerMin(t *testing.T) {
 
 func TestScanVideos_MBPerMinFilter(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/users/me" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "user-test"}`))
+			return
+		}
 		if r.URL.Path != "/api/search/metadata" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -1679,3 +1689,354 @@ func TestGetOptimizerTaggedAssetIDs(t *testing.T) {
 		t.Errorf("expected 3 IDs (v-1, v-2, v-3), got %+v", ids)
 	}
 }
+
+func TestAsset_GetOwnerID(t *testing.T) {
+	a1 := Asset{OwnerID: "user-1"}
+	if a1.GetOwnerID() != "user-1" {
+		t.Errorf("expected user-1, got %s", a1.GetOwnerID())
+	}
+
+	a2 := Asset{Owner: &AssetOwner{ID: "user-2"}}
+	if a2.GetOwnerID() != "user-2" {
+		t.Errorf("expected user-2, got %s", a2.GetOwnerID())
+	}
+
+	a3 := Asset{}
+	if a3.GetOwnerID() != "" {
+		t.Errorf("expected empty, got %s", a3.GetOwnerID())
+	}
+
+	var nilAsset *Asset
+	if nilAsset.GetOwnerID() != "" {
+		t.Errorf("expected empty for nil asset, got %s", nilAsset.GetOwnerID())
+	}
+}
+
+func TestValidateConnection_SetsCurrentUserID(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/users/me" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "my-user-uuid", "email": "me@example.com"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	client := NewClient(ts.URL, "dummy")
+	if err := client.ValidateConnection(); err != nil {
+		t.Fatalf("ValidateConnection failed: %v", err)
+	}
+	if client.CurrentUserID() != "my-user-uuid" {
+		t.Errorf("expected my-user-uuid, got %s", client.CurrentUserID())
+	}
+}
+
+func TestScanVideos_PartnerSharedExcluded(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/search/metadata" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"assets": {
+					"items": [
+						{"id": "v-mine", "type": "VIDEO", "ownerId": "user-me", "size": 104857600},
+						{"id": "v-partner", "type": "VIDEO", "ownerId": "user-partner", "size": 104857600},
+						{"id": "v-mine-obj", "type": "VIDEO", "owner": {"id": "user-me"}, "size": 104857600}
+					]
+				}
+			}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	client := newTestClient(ts, "dummy")
+	client.SetCurrentUserID("user-me")
+	res, err := client.ScanVideosWithOptions(context.Background(), "disabled", 0, ScanOptions{})
+	if err != nil {
+		t.Fatalf("ScanVideosWithOptions failed: %v", err)
+	}
+	if res.SkippedNotOwned != 1 {
+		t.Errorf("expected 1 video skipped as partner shared, got %d", res.SkippedNotOwned)
+	}
+	if len(res.Videos) != 2 {
+		t.Fatalf("expected 2 videos, got %d", len(res.Videos))
+	}
+	if res.Videos[0].ID != "v-mine" || res.Videos[1].ID != "v-mine-obj" {
+		t.Errorf("expected [v-mine, v-mine-obj], got %+v", res.Videos)
+	}
+}
+
+func TestAsset_IsNotOwnedBy(t *testing.T) {
+	// 1. Asset has owner and matches userID -> false
+	a1 := &Asset{OwnerID: "user-1"}
+	if a1.IsNotOwnedBy("user-1") {
+		t.Errorf("expected false when owner matches userID")
+	}
+
+	// 2. Asset has owner and does NOT match userID -> true
+	if !a1.IsNotOwnedBy("user-2") {
+		t.Errorf("expected true when owner does not match userID")
+	}
+
+	// 3. Asset has owner but userID is empty -> false (cannot determine mismatch)
+	if a1.IsNotOwnedBy("") {
+		t.Errorf("expected false when userID is empty")
+	}
+
+	// 4. Asset has no owner and userID is provided -> false (backward compatibility)
+	a2 := &Asset{}
+	if a2.IsNotOwnedBy("user-1") {
+		t.Errorf("expected false when asset has no owner ID")
+	}
+
+	// 5. Nested Owner struct matches userID -> false
+	a3 := &Asset{Owner: &AssetOwner{ID: "user-3"}}
+	if a3.IsNotOwnedBy("user-3") {
+		t.Errorf("expected false when nested Owner ID matches")
+	}
+	if !a3.IsNotOwnedBy("user-4") {
+		t.Errorf("expected true when nested Owner ID differs")
+	}
+
+	// 6. Nil asset -> false
+	var nilAsset *Asset
+	if nilAsset.IsNotOwnedBy("user-1") {
+		t.Errorf("expected false for nil asset")
+	}
+}
+
+func TestGetMyUser(t *testing.T) {
+	t.Run("successful retrieval", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/users/me" && r.Method == http.MethodGet {
+				if r.Header.Get("x-api-key") != "valid-key" {
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"id": "usr-123", "email": "alice@example.com", "name": "Alice"}`))
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer ts.Close()
+
+		client := newTestClient(ts, "valid-key")
+		user, err := client.GetMyUser()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if user == nil {
+			t.Fatal("expected non-nil user")
+		}
+		if user.ID != "usr-123" {
+			t.Errorf("expected ID usr-123, got %s", user.ID)
+		}
+		if user.Email != "alice@example.com" {
+			t.Errorf("expected email alice@example.com, got %s", user.Email)
+		}
+		if user.Name != "Alice" {
+			t.Errorf("expected name Alice, got %s", user.Name)
+		}
+		if client.CurrentUserID() != "usr-123" {
+			t.Errorf("expected cached CurrentUserID to be usr-123, got %s", client.CurrentUserID())
+		}
+	})
+
+	t.Run("API error", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"message": "Unauthorized"}`))
+		}))
+		defer ts.Close()
+
+		client := newTestClient(ts, "bad-key")
+		user, err := client.GetMyUserWithContext(context.Background())
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if user != nil {
+			t.Errorf("expected nil user on error, got %+v", user)
+		}
+	})
+
+	t.Run("invalid json response", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`not-json`))
+		}))
+		defer ts.Close()
+
+		client := newTestClient(ts, "valid-key")
+		_, err := client.GetMyUser()
+		if err == nil {
+			t.Fatal("expected JSON decode error, got nil")
+		}
+	})
+
+	t.Run("missing user ID in response", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"email": "anon@example.com", "name": "Anonymous"}`))
+		}))
+		defer ts.Close()
+
+		client := newTestClient(ts, "valid-key")
+		user, err := client.GetMyUser()
+		if err == nil {
+			t.Fatal("expected error due to missing user ID, got nil")
+		}
+		if user != nil {
+			t.Errorf("expected nil user when missing ID, got %+v", user)
+		}
+	})
+
+	t.Run("nil client receiver safety", func(t *testing.T) {
+		var nilClient *Client
+		if _, err := nilClient.GetMyUser(); err == nil {
+			t.Error("expected error calling GetMyUser on nil client")
+		}
+		if _, err := nilClient.GetMyUserWithContext(context.Background()); err == nil {
+			t.Error("expected error calling GetMyUserWithContext on nil client")
+		}
+		if err := nilClient.ValidateConnection(); err == nil {
+			t.Error("expected error calling ValidateConnection on nil client")
+		}
+		if id := nilClient.CurrentUserID(); id != "" {
+			t.Errorf("expected empty string from nil client CurrentUserID, got %s", id)
+		}
+		// SetCurrentUserID should not panic on nil receiver
+		nilClient.SetCurrentUserID("dummy")
+	})
+}
+
+func TestScanVideos_EmptyOwnerIdIncluded(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/search/metadata" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"assets": {
+					"items": [
+						{"id": "v-mine", "type": "VIDEO", "ownerId": "user-me", "size": 104857600},
+						{"id": "v-partner", "type": "VIDEO", "ownerId": "user-partner", "size": 104857600},
+						{"id": "v-legacy", "type": "VIDEO", "size": 104857600},
+						{"id": "v-empty-owner", "type": "VIDEO", "ownerId": "", "size": 104857600}
+					]
+				}
+			}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	client := newTestClient(ts, "dummy")
+	client.SetCurrentUserID("user-me")
+	res, err := client.ScanVideosWithOptions(context.Background(), "disabled", 0, ScanOptions{})
+	if err != nil {
+		t.Fatalf("ScanVideosWithOptions failed: %v", err)
+	}
+	if res.SkippedNotOwned != 1 {
+		t.Errorf("expected 1 partner video skipped, got %d", res.SkippedNotOwned)
+	}
+	if len(res.Videos) != 3 {
+		t.Fatalf("expected 3 videos (v-mine, legacy v-legacy, and v-empty-owner), got %d", len(res.Videos))
+	}
+	ids := map[string]bool{res.Videos[0].ID: true, res.Videos[1].ID: true, res.Videos[2].ID: true}
+	if !ids["v-mine"] || !ids["v-legacy"] || !ids["v-empty-owner"] {
+		t.Errorf("expected v-mine, v-legacy, and v-empty-owner to be included, got %+v", res.Videos)
+	}
+}
+
+func TestScanVideos_LazyFetchCurrentUserID(t *testing.T) {
+	meCalls := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/users/me" {
+			meCalls++
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "user-lazy", "email": "lazy@example.com"}`))
+			return
+		}
+		if r.URL.Path == "/api/search/metadata" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"assets": {
+					"items": [
+						{"id": "v-mine", "type": "VIDEO", "ownerId": "user-lazy", "size": 104857600},
+						{"id": "v-partner", "type": "VIDEO", "ownerId": "user-other", "size": 104857600}
+					]
+				}
+			}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	client := newTestClient(ts, "dummy")
+	// Note: client.CurrentUserID() is intentionally empty before scan
+	res, err := client.ScanVideosWithOptions(context.Background(), "disabled", 0, ScanOptions{})
+	if err != nil {
+		t.Fatalf("ScanVideosWithOptions failed: %v", err)
+	}
+	if meCalls != 1 {
+		t.Errorf("expected 1 call to /api/users/me, got %d", meCalls)
+	}
+	if client.CurrentUserID() != "user-lazy" {
+		t.Errorf("expected client CurrentUserID to be user-lazy, got %s", client.CurrentUserID())
+	}
+	if res.SkippedNotOwned != 1 {
+		t.Errorf("expected 1 partner video skipped, got %d", res.SkippedNotOwned)
+	}
+	if len(res.Videos) != 1 || res.Videos[0].ID != "v-mine" {
+		t.Errorf("expected only v-mine in videos, got %+v", res.Videos)
+	}
+}
+
+func TestScanVideos_LazyFetchCurrentUserID_ErrorGraceful(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/users/me" {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"message": "internal error"}`))
+			return
+		}
+		if r.URL.Path == "/api/search/metadata" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"assets": {
+					"items": [
+						{"id": "v-1", "type": "VIDEO", "ownerId": "user-a", "size": 104857600},
+						{"id": "v-2", "type": "VIDEO", "ownerId": "user-b", "size": 104857600}
+					]
+				}
+			}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	client := newTestClient(ts, "dummy")
+	// When lazy fetch fails, scan should still succeed and include assets without filtering
+	res, err := client.ScanVideosWithOptions(context.Background(), "disabled", 0, ScanOptions{})
+	if err != nil {
+		t.Fatalf("ScanVideosWithOptions should succeed even if /api/users/me fails: %v", err)
+	}
+	if res.SkippedNotOwned != 0 {
+		t.Errorf("expected 0 skipped since user ID unknown, got %d", res.SkippedNotOwned)
+	}
+	if len(res.Videos) != 2 {
+		t.Errorf("expected 2 videos included as fallback, got %d", len(res.Videos))
+	}
+}
+
+func TestScanVideos_NilClient(t *testing.T) {
+	var nilClient *Client
+	_, err := nilClient.ScanVideosWithOptions(context.Background(), "disabled", 0, ScanOptions{})
+	if err == nil {
+		t.Error("expected error calling ScanVideosWithOptions on nil client")
+	}
+}
+

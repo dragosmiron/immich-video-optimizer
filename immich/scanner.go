@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -28,6 +29,9 @@ func (c *Client) ScanVideosWithContext(ctx context.Context, mode string, thresho
 
 // ScanVideosWithOptions returns videos filtered by threshold, mode, exclude tag, and date constraints
 func (c *Client) ScanVideosWithOptions(ctx context.Context, mode string, threshold float64, opts ScanOptions) (*QueryResult, error) {
+	if c == nil {
+		return nil, errors.New("immich client is nil")
+	}
 	res := &QueryResult{}
 	page := 1
 	size := 1000
@@ -53,6 +57,15 @@ func (c *Client) ScanVideosWithOptions(ctx context.Context, mode string, thresho
 			taggedIDs = ids
 		} else {
 			logger.Debug("Could not fetch tags for exclusion: %v", err)
+		}
+	}
+
+	currentUserID := c.CurrentUserID()
+	if currentUserID == "" {
+		if me, err := c.GetMyUserWithContext(ctx); err == nil && me != nil {
+			currentUserID = me.ID
+		} else {
+			logger.Debug("Could not fetch current user for ownership check: %v", err)
 		}
 	}
 
@@ -107,6 +120,11 @@ func (c *Client) ScanVideosWithOptions(ctx context.Context, mode string, thresho
 		for _, a := range searchResp.Assets.Items {
 			if a.Type != "VIDEO" {
 				res.SkippedNonVideo++
+				continue
+			}
+
+			if a.IsNotOwnedBy(currentUserID) {
+				res.SkippedNotOwned++
 				continue
 			}
 

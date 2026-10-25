@@ -3041,4 +3041,80 @@ func TestPipeline_NilReceiverSafety(t *testing.T) {
 	}
 }
 
+func TestPipeline_PartnerSharedSkippedByWorker(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	downloadCalled := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/users/me" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "user-me", "email": "me@test.local"}`))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/original") {
+			downloadCalled = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/api/albums" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"id": "album-1"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	fakeFFmpeg := filepath.Join(tempHome, "fake_ffmpeg")
+	_ = os.WriteFile(fakeFFmpeg, []byte("#!/bin/sh\nexit 0\n"), 0755)
+	fakeExifTool := filepath.Join(tempHome, "fake_exiftool")
+	_ = os.WriteFile(fakeExifTool, []byte("#!/bin/sh\nexit 0\n"), 0755)
+
+	cfg := &config.Config{
+		URL:           ts.URL,
+		APIKey:        "test-key",
+		SizeThreshold: "0",
+	}
+
+	binaries := &engine.BinaryManager{
+		FFmpegPath:   fakeFFmpeg,
+		ExifToolPath: fakeExifTool,
+	}
+
+	p, err := NewPipelineWithBinaries(cfg, binaries)
+	if err != nil {
+		t.Fatalf("NewPipelineWithBinaries failed: %v", err)
+	}
+	p.Client().SetCurrentUserID("user-me")
+
+	unownedAsset := immich.Asset{
+		ID:               "partner-video-1",
+		OriginalFileName: "partner.mp4",
+		Type:             "VIDEO",
+		OwnerID:          "user-partner",
+	}
+
+	ch := make(chan interface{}, 10)
+	p.Run(context.Background(), []immich.Asset{unownedAsset}, ch)
+
+	var completedMsg PipelineVideoCompleteMsg
+	for msg := range ch {
+		if cmsg, ok := msg.(PipelineVideoCompleteMsg); ok {
+			completedMsg = cmsg
+		}
+	}
+
+	if downloadCalled {
+		t.Errorf("expected download NOT to be called for partner shared asset")
+	}
+	if !completedMsg.Skipped {
+		t.Errorf("expected asset to be marked as skipped, got %+v", completedMsg)
+	}
+	if completedMsg.SkipReason != "partner shared (not owned)" {
+		t.Errorf("expected skip reason 'partner shared (not owned)', got %s", completedMsg.SkipReason)
+	}
+}
+
+
 

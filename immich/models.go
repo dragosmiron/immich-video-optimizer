@@ -26,6 +26,7 @@ type QueryResult struct {
 	SkippedAlreadyOptimized int
 	SkippedExternal         int
 	SkippedDateFilter       int
+	SkippedNotOwned         int
 }
 
 // ScanOptions defines filtering options when scanning assets
@@ -54,9 +55,23 @@ type ExifInfo struct {
 	Duration        json.RawMessage `json:"duration,omitempty"`
 }
 
+// AssetOwner represents an asset owner
+type AssetOwner struct {
+	ID string `json:"id"`
+}
+
+// User represents an Immich user
+type User struct {
+	ID    string `json:"id"`
+	Email string `json:"email"`
+	Name  string `json:"name"`
+}
+
 // Asset represents an Immich asset
 type Asset struct {
 	ID               string          `json:"id"`
+	OwnerID          string          `json:"ownerId,omitempty"`
+	Owner            *AssetOwner     `json:"owner,omitempty"`
 	Type             string          `json:"type"`
 	Size             int64           `json:"size"`
 	Duration         json.RawMessage `json:"duration,omitempty"`
@@ -76,6 +91,30 @@ type Asset struct {
 	ExifInfo         ExifInfo        `json:"exifInfo,omitempty"`
 	Tags             []Tag           `json:"tags,omitempty"`
 	Stack            *AssetStack     `json:"stack,omitempty"`
+}
+
+// GetOwnerID returns the asset's owner ID from OwnerID or Owner.ID.
+func (a *Asset) GetOwnerID() string {
+	if a == nil {
+		return ""
+	}
+	if a.OwnerID != "" {
+		return a.OwnerID
+	}
+	if a.Owner != nil && a.Owner.ID != "" {
+		return a.Owner.ID
+	}
+	return ""
+}
+
+// IsNotOwnedBy returns true if the asset has a known owner ID, userID is non-empty,
+// and they do not match (i.e. the asset is partner-shared and not owned by userID).
+func (a *Asset) IsNotOwnedBy(userID string) bool {
+	if a == nil {
+		return false
+	}
+	ownerID := a.GetOwnerID()
+	return ownerID != "" && userID != "" && ownerID != userID
 }
 
 // IsLivePhoto returns true if the asset is a Live Photo still image or its hidden motion video component.

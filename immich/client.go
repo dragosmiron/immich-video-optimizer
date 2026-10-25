@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"immich-video-optimizer/logger"
@@ -28,10 +29,12 @@ var retryBackoff = func(attempt int) time.Duration {
 
 // Client is a REST client for the Immich API
 type Client struct {
-	baseURL    string
-	apiKey     string
-	httpClient *http.Client
-	maxRetries int
+	baseURL         string
+	apiKey          string
+	httpClient      *http.Client
+	maxRetries      int
+	currentUserID   string
+	currentUserIDMu sync.RWMutex
 }
 
 // NewClient creates a new Immich client
@@ -80,27 +83,77 @@ func (c *Client) APIKey() string {
 	return c.apiKey
 }
 
+// GetMyUser retrieves the authenticated user's details from Immich using context.Background.
+func (c *Client) GetMyUser() (*User, error) {
+	return c.GetMyUserWithContext(context.Background())
+}
+
+// GetMyUserWithContext retrieves the authenticated user's details from Immich,
+// caches the user ID, and returns the user model.
+func (c *Client) GetMyUserWithContext(ctx context.Context) (*User, error) {
+	if c == nil {
+		return nil, errors.New("immich client is nil")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/users/me", nil)
+	if err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
+	}
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var user User
+	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+		return nil, fmt.Errorf("failed to decode user: %w", err)
+	}
+
+	if strings.TrimSpace(user.ID) == "" {
+		return nil, fmt.Errorf("invalid user response from server: missing user ID")
+	}
+
+	c.currentUserIDMu.Lock()
+	c.currentUserID = user.ID
+	c.currentUserIDMu.Unlock()
+
+	return &user, nil
+}
+
 // ValidateConnection checks if the server is reachable and API key is valid.
 // Uses a short 8-second timeout so the user gets a quick error on bad URLs.
 func (c *Client) ValidateConnection() error {
-	req, err := http.NewRequest(http.MethodGet, c.baseURL+"/api/users/me", nil)
-	if err != nil {
-		return fmt.Errorf("invalid URL: %w", err)
+	if c == nil {
+		return errors.New("immich client is nil")
 	}
-	// Use a dedicated short-timeout client so the UI stays responsive.
-	probeClient := &http.Client{Timeout: 8 * time.Second}
-	req.Header.Set("x-api-key", c.apiKey)
-	req.Header.Set("Accept", "application/json")
-	resp, err := probeClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("could not reach server: %w", err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	_, err := c.GetMyUserWithContext(ctx)
+	return err
+}
+
+// CurrentUserID returns the cached authenticated user ID.
+func (c *Client) CurrentUserID() string {
+	if c == nil {
+		return ""
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return &APIError{StatusCode: resp.StatusCode, Message: string(body)}
+	c.currentUserIDMu.RLock()
+	defer c.currentUserIDMu.RUnlock()
+	return c.currentUserID
+}
+
+// SetCurrentUserID explicitly sets the cached authenticated user ID (useful in tests).
+func (c *Client) SetCurrentUserID(id string) {
+	if c == nil {
+		return
 	}
-	return nil
+	c.currentUserIDMu.Lock()
+	defer c.currentUserIDMu.Unlock()
+	c.currentUserID = id
 }
 
 func (c *Client) doRequest(req *http.Request) (*http.Response, error) {

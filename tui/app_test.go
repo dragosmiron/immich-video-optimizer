@@ -1535,6 +1535,84 @@ func TestAppModel_RenderScanSummary_ExternalLibrary(t *testing.T) {
 	}
 }
 
+func TestAppModel_RenderScanSummary_PartnerShared(t *testing.T) {
+	cfg := &config.Config{
+		URL:           "http://localhost:2283",
+		APIKey:        "test-key",
+		ThresholdMode: config.ThresholdModeMBPerMin,
+		SizeThreshold: "100",
+	}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.scanResult = &immich.QueryResult{
+		TotalAssetsScanned: 30,
+		SkippedNonVideo:    5,
+		SkippedNotOwned:    7,
+		SkippedBelowSize:   2,
+	}
+	m.videos = []immich.Asset{
+		{ID: "v1", Type: "VIDEO", Size: 500000000, OriginalFileName: "clip.mp4"},
+	}
+	m.state = ViewBrowser
+	summary := m.renderScanSummary()
+	if !strings.Contains(summary, "Partner-shared videos skipped:     7 (not owned)") {
+		t.Errorf("expected partner-shared skipped count in summary, got: %s", summary)
+	}
+}
+
+func TestAppModel_DryRunPartnerSharedSkipped(t *testing.T) {
+	cfg := &config.Config{
+		URL:           "http://localhost:2283",
+		APIKey:        "test-key",
+		ThresholdMode: config.ThresholdModeMBPerMin,
+		SizeThreshold: "100",
+	}
+	pipeline, _ := orchestrator.NewPipeline(cfg)
+	m := NewAppModel(cfg, pipeline)
+	m.scanResult = &immich.QueryResult{
+		TotalAssetsScanned: 30,
+		SkippedNonVideo:    5,
+		SkippedNotOwned:    7,
+		SkippedBelowSize:   2,
+	}
+	m.dryRunVideos = []immich.Asset{
+		{ID: "v1", Type: "VIDEO", Size: 500000000, OriginalFileName: "clip.mp4"},
+	}
+	m.dryRunToProcess = m.dryRunVideos
+	m.dryRunDetails = map[string]engine.ProbeDetails{
+		"v1": {Codec: "H.264", Resolution: "1080p"},
+	}
+	m.dryRunDone = true
+	m.state = ViewDryRun
+
+	rendered := m.viewDryRun()
+	if !strings.Contains(rendered, "Skipped at scan (partner shared):") {
+		t.Errorf("expected dry run view to contain partner shared skipped row, got: %s", rendered)
+	}
+	if !strings.Contains(rendered, "7") {
+		t.Errorf("expected dry run view to contain count '7', got: %s", rendered)
+	}
+}
+
+func TestSkipReasonLabel(t *testing.T) {
+	tests := []struct {
+		reason   string
+		expected string
+	}{
+		{"transcoded file larger", "Size Guard: transcoded > original, original kept"},
+		{"already HEVC", "Already HEVC/H.265, re-encoding skipped"},
+		{"partner shared (not owned)", "Partner-shared asset (not owned)"},
+		{"custom reason", "custom reason"},
+	}
+
+	for _, tt := range tests {
+		got := skipReasonLabel(tt.reason)
+		if got != tt.expected {
+			t.Errorf("skipReasonLabel(%q) = %q, expected %q", tt.reason, got, tt.expected)
+		}
+	}
+}
+
 func TestAppModel_ElapsedTimeSubsecondTruncated(t *testing.T) {
 	cfg := &config.Config{
 		URL:    "http://localhost:2283",

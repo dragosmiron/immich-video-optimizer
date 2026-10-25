@@ -117,6 +117,9 @@ func (m *AppModel) renderScanSummary() string {
 	if r.SkippedDateFilter > 0 {
 		b.WriteString(fmt.Sprintf("  • Outside date filter range:         %d (skipped)\n", r.SkippedDateFilter))
 	}
+	if r.SkippedNotOwned > 0 {
+		b.WriteString(fmt.Sprintf("  • Partner-shared videos skipped:     %d (not owned)\n", r.SkippedNotOwned))
+	}
 	var skippedLabel string
 	switch m.cfg.ThresholdMode {
 	case config.ThresholdModeDisabled:

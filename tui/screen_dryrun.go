@@ -93,6 +93,12 @@ func (m *AppModel) viewDryRun() string {
 		b.WriteString(belowText)
 	}
 
+	// Row: partner-shared (filtered at scan time — not in the selection)
+	if m.scanResult != nil && m.scanResult.SkippedNotOwned > 0 {
+		b.WriteString(fmt.Sprintf("  • Skipped at scan (partner shared):  %s  (never shown in browser)\n",
+			styles.WarningText.Render(fmt.Sprintf("%d", m.scanResult.SkippedNotOwned))))
+	}
+
 	// Row: already HEVC — skipped by probe
 	if m.cfg.SkipHEVC {
 		hevcLabel := styles.WarningText.Render(fmt.Sprintf("%d", hevcCount))

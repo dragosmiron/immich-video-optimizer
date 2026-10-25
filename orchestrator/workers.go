@@ -47,6 +47,13 @@ func (p *Pipeline) startDownloader(ctx context.Context, pendingVideos []immich.A
 	go func() {
 		defer wg.Done()
 		defer close(transcodeQueue)
+
+		if client := p.Client(); client != nil && client.CurrentUserID() == "" {
+			if me, err := client.GetMyUserWithContext(ctx); err == nil && me != nil {
+				logger.Debug("Downloader resolved current user: %s", me.ID)
+			}
+		}
+
 		for _, v := range pendingVideos {
 			select {
 			case <-ctx.Done():
@@ -56,6 +63,20 @@ func (p *Pipeline) startDownloader(ctx context.Context, pendingVideos []immich.A
 
 			client := p.Client()
 			cfg := p.Config()
+
+			if client != nil && v.IsNotOwnedBy(client.CurrentUserID()) {
+				markSessionSkipped(sess, v.ID, "partner shared (not owned)")
+				if !emit(PipelineVideoCompleteMsg{
+					VideoID:      v.ID,
+					VideoName:    v.OriginalFileName,
+					OriginalSize: v.GetSize(),
+					Skipped:      true,
+					SkipReason:   "partner shared (not owned)",
+				}) {
+					return
+				}
+				continue
+			}
 
 			emit(PipelineStageMsg{Stage: "downloading", VideoName: v.OriginalFileName, VideoID: v.ID})
 			origPath := filepath.Join(p.tempDir, fmt.Sprintf("orig_%s.mp4", v.ID))

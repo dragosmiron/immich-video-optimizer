@@ -195,6 +195,8 @@ func skipReasonLabel(reason string) string {
 		return "Size Guard: transcoded > original, original kept"
 	case "already HEVC":
 		return "Already HEVC/H.265, re-encoding skipped"
+	case "partner shared (not owned)":
+		return "Partner-shared asset (not owned)"
 	default:
 		return reason
 	}
